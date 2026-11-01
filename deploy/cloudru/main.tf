@@ -24,6 +24,22 @@ variable "flavor" { type = string }
 variable "ssh_public_key" { type = string }
 variable "ssh_cidr" { type = string }
 variable "bucket" { type = string }
+variable "dns_servers" {
+  type    = list(string)
+  default = ["77.88.8.8", "77.88.8.1"]
+  validation {
+    condition     = length(var.dns_servers) > 0 && alltrue([for ip in var.dns_servers : can(cidrnetmask("${ip}/32"))])
+    error_message = "Provide at least one IPv4 DNS resolver."
+  }
+}
+variable "storage_class" {
+  type    = string
+  default = "STANDARD"
+  validation {
+    condition     = contains(["STANDARD", "COLD", "ICE", "SINGLE"], var.storage_class)
+    error_message = "Select a supported Cloud.ru storage class."
+  }
+}
 variable "disk_gb" {
   type    = number
   default = 40
@@ -45,6 +61,8 @@ resource "cloudru_evolution_compute_subnet" "memory" {
   subnet_address = "10.77.0.0/24"
   routed_network = true
   default        = false
+  # The API returns DNS addresses in sorted order; the provider models them as a list.
+  dns_servers = { value = sort(var.dns_servers) }
 }
 resource "cloudru_evolution_compute_security_group" "memory" {
   project_id = var.project_id
@@ -127,8 +145,14 @@ resource "cloudru_evolution_compute_vm" "memory" {
   lifecycle { prevent_destroy = true }
 }
 resource "cloudru_evolution_obs_bucket" "backups" {
-  bucket     = var.bucket
-  versioning = true
+  bucket        = var.bucket
+  versioning    = true
+  storage_class = var.storage_class
+  # Provider 2.1.6 sends quota fields with storage_class updates, even when omitted.
+  # Zero disables the size cap; valid enum values are still required by the API.
+  quota      = 0
+  quota_unit = "GB"
+  quota_type = "BUCKET_SIZE"
   # No public ACL or Allow policy. No automatic expiry of the user's archives.
   lifecycle { prevent_destroy = true }
 }

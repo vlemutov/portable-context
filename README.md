@@ -24,8 +24,9 @@ Linux servers use the same installer without Terraform. Each owner runs and pays
 
 `bootstrap` verifies pinned Terraform/provider downloads. `install` verifies backup restoration
 (including an S3 upload/download when configured), and `check` verifies the MCP workspace identity.
-Credentials, state and personal data must remain outside this repository. Cloud.ru API provisioning
-still needs a real-account acceptance run; schema validation and the Linux SSH test do not substitute for it.
+Credentials, state and personal data must remain outside this repository. A real Cloud.ru pilot
+has verified provisioning, Windows-to-Linux MCP access, S3 upload/download/restore, and daily cron setup.
+This is one tested account/configuration, not coverage of every region, image or client.
 Automatic setup targets Ubuntu 24.04 / Linux with Python 3.11+, OpenSSH and cron.
 
 ## Architecture

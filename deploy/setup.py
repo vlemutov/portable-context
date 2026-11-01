@@ -146,7 +146,8 @@ def terraform(state, args, *, credentials=True, folder=None, capture=False):
         raise ValueError('Terraform 1.9+ required; install it or set PC_TERRAFORM to its executable path')
     try:
         return checked([binary, '-chdir=' + str(folder or state / 'terraform'), *args],
-                       env=command_env(state, credentials), capture_output=capture, text=True)
+                       env=command_env(state, credentials), capture_output=capture, text=True,
+                       encoding='utf-8')
     except subprocess.CalledProcessError as exc:
         if capture:
             log = state / 'last-error.log'
@@ -191,6 +192,13 @@ def validate_config(config):
             raise ValueError('Invalid S3 bucket name')
         if int(config['disk_gb']) < 20:
             raise ValueError('Use at least 20 GB')
+        if config.get('storage_class', 'STANDARD') not in ('STANDARD', 'COLD', 'ICE', 'SINGLE'):
+            raise ValueError('Unsupported Cloud.ru storage class')
+        dns = config.get('dns_servers', ['77.88.8.8', '77.88.8.1'])
+        if not isinstance(dns, list) or not dns:
+            raise ValueError('Provide at least one IPv4 DNS resolver')
+        for address in dns:
+            ipaddress.IPv4Address(address)
 
 
 def ensure_key(state):
@@ -211,6 +219,8 @@ def render(state, config):
     values = {k: config[k] for k in ('project_id', 'tenant_id', 'name', 'zone', 'image_id',
                                     'flavor', 'ssh_cidr', 'bucket', 'disk_gb')}
     values['ssh_public_key'] = key.with_suffix('.pub').read_text().strip()
+    values['storage_class'] = config.get('storage_class', 'STANDARD')
+    values['dns_servers'] = config.get('dns_servers', ['77.88.8.8', '77.88.8.1'])
     save(folder / 'deployment.auto.tfvars.json', values)
 
 
@@ -284,6 +294,37 @@ def catalog(state, project_id):
     return result
 
 
+def discover(state, project_id):
+    """Read the S3 tenant without requiring a first bucket or browser session.
+
+    The console endpoint is not a versioned public API contract; fail explicitly
+    on schema changes and keep manual tenant configuration available.
+    """
+    project_id = str(uuid.UUID(project_id))
+    env = command_env(state)
+    request = urllib.request.Request(
+        'https://iam.api.cloud.ru/api/v1/auth/token',
+        data=json.dumps({'keyId': env['AUTH_KEY_ID'], 'secret': env['AUTH_SECRET']}).encode('utf-8'),
+        headers={'Content-Type': 'application/json'})
+    with urllib.request.urlopen(request, timeout=30) as response:
+        token = json.load(response).get('access_token')
+    if not isinstance(token, str) or not token:
+        raise ValueError('Cloud.ru authentication returned no access token')
+    request = urllib.request.Request(
+        'https://console.cloud.ru/u-api/s3e-controller/v2/projects/' + project_id,
+        headers={'Authorization': 'Bearer ' + token, 'Accept': 'application/json'})
+    with urllib.request.urlopen(request, timeout=30) as response:
+        project = json.load(response)
+    if project.get('id') != project_id:
+        raise ValueError('Cloud.ru returned an unexpected project; no discovery result saved')
+    tenant = project.get('tenant') or {}
+    if tenant.get('status') != 'ACTIVE' or not tenant.get('id'):
+        raise ValueError('Object Storage tenant is not active; check service activation in the console')
+    result = {'project_id': project_id, 'tenant_id': str(uuid.UUID(tenant['id']))}
+    save(state / 'discovery.json', result)
+    return result
+
+
 def bundle():
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as archive:
@@ -303,14 +344,44 @@ def ssh_args(state, config):
     key = Path(config.get('identity_file', state / 'id_ed25519')).expanduser().resolve()
     if not key.is_file():
         raise ValueError('SSH private key does not exist')
-    known_hosts = (state / 'known_hosts').as_posix()
-    if any(c in known_hosts for c in ('"', '\n', '\r')):
+    known_hosts = (state / 'known_hosts').resolve().as_posix()
+    if any(c in known_hosts + key.as_posix() for c in ('"', '\n', '\r')):
         raise ValueError('Unsupported deployment directory name for OpenSSH')
-    # TOFU for a new deployment; changed host keys are rejected. No StrictHostKeyChecking=no.
-    return ['ssh', '-T', '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes', '-o', 'ConnectTimeout=15',
-            '-o', 'ServerAliveInterval=30', '-o', 'StrictHostKeyChecking=accept-new',
-            '-o', 'UserKnownHostsFile="' + known_hosts + '"', '-i', str(key),
-            '-p', str(config.get('ssh_port', 22)), config['ssh_user'] + '@' + config['host']]
+    executable = config.get('ssh_command') or shutil.which('ssh')
+    if os.name == 'nt' and not config.get('ssh_command'):
+        # Windows inbox OpenSSH may close stdin with async named pipes used by MCP clients.
+        git_ssh = Path(os.environ.get('ProgramFiles', 'C:/Program Files')) / 'Git/usr/bin/ssh.exe'
+        if git_ssh.is_file():
+            executable = str(git_ssh)
+    if not executable or not shutil.which(executable):
+        raise ValueError('SSH executable not found; install OpenSSH or configure ssh_command')
+    # A config file avoids embedding quotes in argv across Windows/MSYS and MCP launchers.
+    # TOFU for a new deployment; changed host keys are rejected.
+    ssh_config = state / 'ssh-config'
+    ssh_config.write_text('\n'.join([
+        'Host portable-context', '  HostName ' + config['host'],
+        '  User ' + config['ssh_user'], '  Port ' + str(config.get('ssh_port', 22)),
+        '  IdentityFile "' + key.as_posix() + '"',
+        '  UserKnownHostsFile "' + known_hosts + '"',
+        '  BatchMode yes', '  IdentitiesOnly yes', '  ConnectTimeout 15',
+        '  ServerAliveInterval 30', '  StrictHostKeyChecking accept-new', '']), encoding='utf-8')
+    ssh_config.chmod(0o600)
+    return [executable, '-T', '-F', str(ssh_config.resolve()), 'portable-context']
+
+
+def wait_cloud_init(ssh):
+    completed = subprocess.run(ssh + ['sudo cloud-init status --wait --format json'],
+                               capture_output=True, text=True, encoding='utf-8')
+    try:
+        status = json.loads(completed.stdout)
+    except (ValueError, TypeError):
+        raise ValueError('Cannot read cloud-init status; inspect the server before retrying install') from None
+    # Exit 2 means completed with recoverable warnings, not a fatal initialization failure.
+    # Do not bypass real errors (e.g. failed package installation after a DNS failure).
+    if completed.returncode not in (0, 2) or status.get('status') != 'done' or status.get('errors'):
+        raise ValueError('Cloud-init failed. Inspect sudo cloud-init status --long and /var/log/cloud-init-output.log; repair the same server, then retry install.')
+    if status.get('recoverable_errors'):
+        print('Cloud-init completed with recoverable warnings; server dependencies will be checked during install.', file=sys.stderr)
 
 
 def install(state):
@@ -326,7 +397,7 @@ def install(state):
                 raise ValueError('SSH not ready. Check host, allowed CIDR and cloud-init; rerun install using the same state.')
             print('Waiting for SSH readiness...', file=sys.stderr, flush=True)
             time.sleep(10)
-        checked(ssh + ['sudo cloud-init status --wait'], stdout=sys.stderr)
+        wait_cloud_init(ssh)
     payload = bundle()
     backup_file = state / 'backup-config.json'
     if config['mode'] == 'cloudru' and not backup_file.exists():
@@ -343,7 +414,7 @@ def install(state):
     save(state / 'installed.json', result)
     command = shlex.quote(result['root'] + '/bin/mcp')
     args = ssh[1:] + [command]
-    client = {'mcpServers': {'portable-context': {'command': 'ssh', 'args': args}}}
+    client = {'mcpServers': {'portable-context': {'command': ssh[0], 'args': args}}}
     save(state / 'client-config.json', client)
     return {'installed': True, 'workspace_id': result['memory']['workspace_id'], 'backup': result['backup'],
             'client_config': str(state / 'client-config.json'), 'next': 'check, then merge client configuration into your agent'}
@@ -384,6 +455,8 @@ def main(argv=None):
     sub.add_parser('doctor')
     p = sub.add_parser('catalog')
     p.add_argument('--project-id', required=True)
+    p = sub.add_parser('discover', help='Read Object Storage tenant ID without creating a bucket')
+    p.add_argument('--project-id', required=True)
     sub.add_parser('plan')
     p = sub.add_parser('apply')
     p.add_argument('--approve-plan', required=True, help='Exact SHA-256 of reviewed paid infrastructure plan')
@@ -409,7 +482,8 @@ def main(argv=None):
         config = read(state / 'deployment.json')
         values = read(args.file)
         allowed = {'project_id', 'tenant_id', 'zone', 'image_id', 'flavor', 'ssh_cidr', 'bucket', 'disk_gb',
-                   'ssh_user', 'ssh_port', 'host', 'identity_file', 'schedule_backup'}
+                   'ssh_user', 'ssh_port', 'host', 'identity_file', 'schedule_backup', 'storage_class', 'dns_servers',
+                   'ssh_command'}
         if set(values) - allowed:
             raise ValueError('Unknown or secret configuration fields: ' + ', '.join(set(values) - allowed))
         config.update(values)
@@ -427,6 +501,8 @@ def main(argv=None):
                   'state': str(state)}
     elif args.command == 'catalog':
         result = catalog(state, args.project_id)
+    elif args.command == 'discover':
+        result = discover(state, args.project_id)
     elif args.command == 'plan':
         result = plan(state)
     elif args.command == 'apply':

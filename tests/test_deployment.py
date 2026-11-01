@@ -1,8 +1,10 @@
 import importlib.util
+import io
 from contextlib import closing
 import json
 from pathlib import Path
 import sqlite3
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -34,6 +36,33 @@ class DeploymentTests(unittest.TestCase):
         ws.refresh()
         return store, ws
 
+    def test_discovery_reads_only_selected_project_and_does_not_store_secrets(self):
+        project = '11111111-1111-4111-8111-111111111111'
+        tenant = '22222222-2222-4222-8222-222222222222'
+        replies = [io.BytesIO(json.dumps(v).encode()) for v in
+                   [{'access_token': 'SECRET_TOKEN'},
+                    {'id': project, 'tenant': {'id': tenant, 'status': 'ACTIVE'}}]]
+        with patch.object(setup, 'command_env', return_value={'AUTH_KEY_ID': 'KEY', 'AUTH_SECRET': 'SECRET'}), \
+                patch.object(setup.urllib.request, 'urlopen', side_effect=replies) as request:
+            result = setup.discover(self.root, project)
+        self.assertEqual(result, {'project_id': project, 'tenant_id': tenant})
+        self.assertEqual(request.call_args_list[1].args[0].get_method(), 'GET')
+        self.assertTrue(request.call_args_list[1].args[0].full_url.endswith('/projects/' + project))
+        self.assertNotIn('SECRET', (self.root / 'discovery.json').read_text())
+
+    def test_discovery_rejects_wrong_project_and_inactive_tenant(self):
+        project = '11111111-1111-4111-8111-111111111111'
+        for response in [{'id': 'another-project'},
+                         {'id': project, 'tenant': {'id': project, 'status': 'SUSPEND'}}]:
+            with self.subTest(response=response):
+                replies = [io.BytesIO(json.dumps(v).encode()) for v in
+                           [{'access_token': 'TOKEN'}, response]]
+                with patch.object(setup, 'command_env', return_value={'AUTH_KEY_ID': 'KEY', 'AUTH_SECRET': 'SECRET'}), \
+                        patch.object(setup.urllib.request, 'urlopen', side_effect=replies), \
+                        self.assertRaises(ValueError):
+                    setup.discover(self.root, project)
+                self.assertFalse((self.root / 'discovery.json').exists())
+
     def test_snapshot_restore_keeps_identity_originals_and_manual_edits(self):
         store, ws = self.memory()
         (store.root / 'vault/manual.md').write_text('Uncommitted manual note')
@@ -47,6 +76,24 @@ class DeploymentTests(unittest.TestCase):
         self.assertFalse((self.root / 'restored/vault/manual.md').exists())
         with self.assertRaises(ValueError):
             backup.restore(saved['path'], self.root / 'restored')
+
+    def test_cloud_init_accepts_completed_warnings_but_rejects_failures(self):
+        cases = [
+            (0, {'status': 'done', 'errors': []}, True),
+            (2, {'status': 'done', 'errors': [], 'recoverable_errors': {'DEPRECATED': ['old module']}}, True),
+            (1, {'status': 'error', 'errors': ['package installation failed']}, False),
+            (2, {'status': 'done', 'errors': ['failed']}, False),
+            (0, {'status': 'running', 'errors': []}, False),
+            (255, {}, False),
+        ]
+        for code, status, accepted in cases:
+            with self.subTest(code=code, status=status), patch.object(setup.subprocess, 'run',
+                    return_value=subprocess.CompletedProcess([], code, json.dumps(status))):
+                if accepted:
+                    setup.wait_cloud_init(['ssh'])
+                else:
+                    with self.assertRaises(ValueError):
+                        setup.wait_cloud_init(['ssh'])
 
     def test_backup_does_not_copy_live_sqlite_or_uncommitted_transaction(self):
         store, _ = self.memory()
@@ -130,6 +177,21 @@ class DeploymentTests(unittest.TestCase):
         for host in ('-oProxyCommand=bad', 'example.org; touch /tmp/bad', 'user@host'):
             with self.assertRaises(ValueError):
                 setup.validate_config(dict(config, host=host))
+
+    def test_ssh_config_keeps_paths_with_spaces_out_of_option_arguments(self):
+        folder = self.root / 'private state'
+        folder.mkdir()
+        key = folder / 'my key'
+        key.write_text('TEST ONLY')
+        config = setup.prepare(folder, 'server')
+        config.update(host='192.0.2.1', identity_file=str(key), ssh_command='ssh')
+        with patch.object(setup.shutil, 'which', return_value='/usr/bin/ssh'):
+            args = setup.ssh_args(folder, config)
+        self.assertEqual(args, ['ssh', '-T', '-F', str((folder / 'ssh-config').resolve()), 'portable-context'])
+        text = (folder / 'ssh-config').read_text()
+        self.assertIn('IdentityFile "' + key.as_posix() + '"', text)
+        self.assertIn('StrictHostKeyChecking accept-new', text)
+        self.assertIn('BatchMode yes', text)
 
     def test_bundle_is_repeatable_and_excludes_private_state(self):
         import base64
