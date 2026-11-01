@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -20,6 +21,15 @@ spec.loader.exec_module(setup)
 
 
 class DeploymentTests(unittest.TestCase):
+    def test_large_installer_and_quoted_payload_travel_via_stdin(self):
+        script = '# padding\n' * 12000 + 'import json,sys; print(json.dumps(json.load(sys.stdin)))'
+        payload = {'literal': 'quotes \' " ` $(not-a-command)', 'lines': 'one\ntwo'}
+        result = subprocess.run([sys.executable, '-c', setup.INSTALL_BOOTSTRAP],
+                                input=json.dumps({'script': script, 'payload': payload}),
+                                text=True, capture_output=True, check=True)
+        self.assertEqual(json.loads(result.stdout), payload)
+        self.assertLess(len(setup.INSTALL_BOOTSTRAP), 500)
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)

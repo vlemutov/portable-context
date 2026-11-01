@@ -384,6 +384,9 @@ def wait_cloud_init(ssh):
         print('Cloud-init completed with recoverable warnings; server dependencies will be checked during install.', file=sys.stderr)
 
 
+INSTALL_BOOTSTRAP = 'import io,json,sys; p=json.load(sys.stdin); sys.stdin=io.StringIO(json.dumps(p["payload"])); exec(p["script"])'
+
+
 def install(state):
     config = read(state / 'deployment.json')
     ssh = ssh_args(state, config)
@@ -407,9 +410,11 @@ def install(state):
     if backup_file.exists():
         payload['backup'] = read(backup_file)
     payload['schedule_backup'] = config.get('schedule_backup', True)
-    script = base64.b64encode((ROOT / 'deploy/remote_install.py').read_bytes()).decode()
-    remote = 'python3 -c ' + shlex.quote('import base64; exec(base64.b64decode(' + repr(script) + '))')
-    completed = checked(ssh + [remote], input=json.dumps(payload), text=True, stdout=subprocess.PIPE)
+    # Keep the command short: Windows SSH/shell combinations may truncate large -c arguments.
+    # The trusted installer and private payload travel over encrypted stdin, never command arguments.
+    envelope = {'script': (ROOT / 'deploy/remote_install.py').read_text(encoding='utf-8'), 'payload': payload}
+    remote = 'python3 -c ' + shlex.quote(INSTALL_BOOTSTRAP)
+    completed = checked(ssh + [remote], input=json.dumps(envelope), text=True, stdout=subprocess.PIPE)
     result = json.loads(completed.stdout)
     save(state / 'installed.json', result)
     command = shlex.quote(result['root'] + '/bin/mcp')
