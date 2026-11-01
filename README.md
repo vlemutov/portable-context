@@ -11,6 +11,14 @@ hidden, inaccessible, or unexported context. See [coverage and gaps](docs/connec
 [Start with the user journey](docs/user-journey.md) · [Русское введение](docs/README.ru.md) · [Connector coverage](docs/connectors.md)
 · [Data contract](docs/data-contract.md) · [Agent skill](skills/portable-context/SKILL.md)
 
+## Start with your assistant
+
+Send your assistant this repository link and say: **“Help me start using Portable Context.”**
+The assistant should read the [skill](skills/portable-context/SKILL.md), help you connect an
+existing memory or create a new one, and guide you one step at a time. It can also help if you
+are unsure whether you already have a memory. Automated installation needs terminal and file
+access; otherwise the assistant can guide the manual steps. Each user connects their own storage.
+
 ## Deploy your own memory
 
 Ask an agent with terminal access: **“Install this skill and deploy my memory in my Cloud.ru

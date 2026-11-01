@@ -11,6 +11,45 @@ what was actually saved. Full source access and successful reasoning are separat
 
 ## Start with the user's experience
 
+### First contact: connect or create
+
+When the user shares this repository to get started, or asks to install/configure the skill,
+guide them through setup conversationally. Reuse decisions already made in the conversation.
+If memory tools are available, inspect `memory_status` first: an empty connected memory is still
+an existing memory. Do not restart onboarding during ordinary recall, import or enrichment work.
+
+If the choice is unknown, ask in the user's language, using this friendly opening:
+
+> Вы уже пользовались Portable Context и у вас есть настроенная память, или нужно создать новую с нуля?
+> Можно ответить: «Подключить существующую», «Создать новую» или «Не уверен — помоги разобраться».
+
+For a newcomer, explain briefly: “Память хранит выбранные вами диалоги и файлы, чтобы с ними
+можно было продолжать работу в разных ассистентах.” Ask one question at a time. Keep technical
+identifiers and infrastructure terms out of the opening; introduce them only when needed.
+
+- **Existing memory:** ask where they used it (another assistant, computer or server), unless
+  already known. Inspect relevant authorized local configuration or private deployment state;
+  guide connection to that same memory. Never ask them to paste secret keys into the chat.
+  A connection error is a troubleshooting task, not a reason to create a second memory.
+- **New memory:** reuse any known storage preference. Otherwise explain the choices simply:
+  their own Cloud.ru account, their existing/home server, or a private local folder for a local
+  start. Use the storage and deployment guides below. Explain costs before paid resources are
+  created; request account registration, payment setup or sign-in only at the step requiring it.
+- **Unsure:** offer a read-only check of available connections and relevant local configuration.
+  If nothing is found, ask whether they previously used it on another computer or assistant;
+  absence of a local configuration does not prove that no memory exists.
+
+Use available terminal/file tools to do the authorized work, and give only the next necessary
+manual step. If this client cannot perform installation, explain the specific missing capability
+and guide the user to a terminal-capable assistant or through manual setup. Do not promise that
+reading this skill alone installs or connects MCP.
+
+Finish by verifying the actual connection and expected workspace identity, then summarize what
+is already there in plain language. Continue with the user's chosen first import, or ask what
+they want to save first. Setup by itself does not authorize exporting all conversation history.
+
+### Setup and connection details
+
 When asked to deploy, install on Cloud.ru, or set up an existing/home server, read
 [references/deployment.md](references/deployment.md). Use the reproducible owner-operated installer;
 there is no hosted service or shared developer backend. Finish planning and review actual costs before
