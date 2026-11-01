@@ -107,7 +107,7 @@ resource "cloudru_evolution_compute_vm" "memory" {
   flavor             = { name = var.flavor }
   network_interfaces = [{ id = cloudru_evolution_compute_interface.memory.id }]
   disks              = [{ id = cloudru_evolution_compute_disk.memory.id }]
-  cloud_init_userdata = join("\n", ["#cloud-config", yamlencode({
+  cloud_init_userdata = base64encode(join("\n", ["#cloud-config", yamlencode({
     users = [{
       name                = "pcadmin"
       groups              = "sudo"
@@ -120,7 +120,7 @@ resource "cloudru_evolution_compute_vm" "memory" {
     disable_root   = true
     package_update = true
     packages       = ["python3", "python3-venv", "python3-pip", "cron"]
-  })])
+  })]))
   depends_on = [cloudru_evolution_compute_external_ip.memory,
     cloudru_evolution_compute_security_group_rule.outbound_tcp,
   cloudru_evolution_compute_security_group_rule.outbound_udp]

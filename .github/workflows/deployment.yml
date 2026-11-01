@@ -16,9 +16,11 @@ jobs:
           python deploy/setup.py --state "$RUNNER_TEMP/pc-tf" bootstrap
           mkdir -p "$RUNNER_TEMP/pc-tf/terraform"
           cp deploy/cloudru/main.tf "$RUNNER_TEMP/pc-tf/terraform/main.tf"
+          cp deploy/cloudru/deployment.tftest.hcl "$RUNNER_TEMP/pc-tf/terraform/deployment.tftest.hcl"
           export TF_CLI_CONFIG_FILE="$RUNNER_TEMP/pc-tf/terraform.rc"
           "$RUNNER_TEMP/pc-tf/tools/terraform" -chdir="$RUNNER_TEMP/pc-tf/terraform" init -backend=false -input=false
           "$RUNNER_TEMP/pc-tf/tools/terraform" -chdir="$RUNNER_TEMP/pc-tf/terraform" validate -no-color
+          "$RUNNER_TEMP/pc-tf/tools/terraform" -chdir="$RUNNER_TEMP/pc-tf/terraform" test -no-color
   ssh-install:
     runs-on: ubuntu-24.04
     steps:

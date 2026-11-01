@@ -303,10 +303,13 @@ def ssh_args(state, config):
     key = Path(config.get('identity_file', state / 'id_ed25519')).expanduser().resolve()
     if not key.is_file():
         raise ValueError('SSH private key does not exist')
+    known_hosts = (state / 'known_hosts').as_posix()
+    if any(c in known_hosts for c in ('"', '\n', '\r')):
+        raise ValueError('Unsupported deployment directory name for OpenSSH')
     # TOFU for a new deployment; changed host keys are rejected. No StrictHostKeyChecking=no.
     return ['ssh', '-T', '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes', '-o', 'ConnectTimeout=15',
             '-o', 'ServerAliveInterval=30', '-o', 'StrictHostKeyChecking=accept-new',
-            '-o', 'UserKnownHostsFile=' + str(state / 'known_hosts'), '-i', str(key),
+            '-o', 'UserKnownHostsFile="' + known_hosts + '"', '-i', str(key),
             '-p', str(config.get('ssh_port', 22)), config['ssh_user'] + '@' + config['host']]
 
 
