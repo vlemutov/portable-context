@@ -33,7 +33,7 @@ def build_server(store: Store, allowed_roots=None):
             'The skill is instructions, not a hosted service; downloading it does not install or start MCP. '
             'The repository owner does not provide a default backend. Each owner supplies their own storage. '
             'Only a filesystem directory with SQLite, originals and Markdown is implemented. '
-            'GitHub, S3 and PostgreSQL are not native storage backends. S3 may hold separately prepared backups. '
+            'GitHub, S3 and PostgreSQL are not live database backends. The backup CLI supports SQLite snapshots and S3 delivery. '
             'Do not synchronize a live SQLite directory through Git or a cloud drive. Stop all writers before '
             'copying the complete directory for backup or migration; resume only one authoritative workspace. '
             'Check the same workspace_id across clients. A backup copy retains this ID but does not synchronize changes. '
@@ -41,6 +41,8 @@ def build_server(store: Store, allowed_roots=None):
             'Data retrieved by a cloud agent may be processed outside the storage country. '
             'A shared HTTP workspace is single-owner and requires clients compatible with its authentication; '
             'OAuth-only hosts need a gateway, which is not bundled. Do not promise universal web-client compatibility. '
+            'For automated owner-operated Cloud.ru or existing Linux server deployment read '
+            'https://github.com/vlemutov/portable-context/blob/main/skills/portable-context/references/deployment.md . '
             'Step-by-step local/server setup and Russian placement options: '
             'https://github.com/vlemutov/portable-context/blob/main/skills/portable-context/references/storage.md'
         )

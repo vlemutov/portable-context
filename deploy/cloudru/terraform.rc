@@ -1,0 +1,9 @@
+provider_installation {
+  network_mirror {
+    url     = "https://evo-tf-provider-generic.ar.cloud.ru/"
+    include = ["registry.terraform.io/cloudru/*"]
+  }
+  direct {
+    exclude = ["registry.terraform.io/cloudru/*"]
+  }
+}

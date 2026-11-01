@@ -1,0 +1,45 @@
+name: deployment
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  terraform:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Bootstrap pinned tools and validate provider schema
+        run: |
+          python deploy/setup.py --state "$RUNNER_TEMP/pc-tf" init --mode cloudru
+          python deploy/setup.py --state "$RUNNER_TEMP/pc-tf" bootstrap
+          mkdir -p "$RUNNER_TEMP/pc-tf/terraform"
+          cp deploy/cloudru/main.tf "$RUNNER_TEMP/pc-tf/terraform/main.tf"
+          export TF_CLI_CONFIG_FILE="$RUNNER_TEMP/pc-tf/terraform.rc"
+          "$RUNNER_TEMP/pc-tf/tools/terraform" -chdir="$RUNNER_TEMP/pc-tf/terraform" init -backend=false -input=false
+          "$RUNNER_TEMP/pc-tf/tools/terraform" -chdir="$RUNNER_TEMP/pc-tf/terraform" validate -no-color
+  ssh-install:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Prepare disposable SSH target
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y openssh-server python3-venv cron
+          sudo useradd -m -s /bin/bash pcsmoke
+          ssh-keygen -q -t ed25519 -N '' -f "$RUNNER_TEMP/pc-smoke-key"
+          sudo install -d -m 700 -o pcsmoke -g pcsmoke /home/pcsmoke/.ssh
+          sudo install -m 600 -o pcsmoke -g pcsmoke "$RUNNER_TEMP/pc-smoke-key.pub" /home/pcsmoke/.ssh/authorized_keys
+          sudo service ssh start
+          sudo service cron start
+          python -m pip install -e '.[mcp]'
+      - name: Install, exercise MCP over SSH, reinstall and restore
+        env:
+          PC_SMOKE_USER: pcsmoke
+        run: |
+          export PC_SMOKE_KEY="$RUNNER_TEMP/pc-smoke-key"
+          python deploy/smoke_ssh.py

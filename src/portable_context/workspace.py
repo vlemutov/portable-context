@@ -9,6 +9,7 @@ import time
 import uuid
 
 from .core import Store, canonical, digest, key, now, validate
+from . import __version__
 from .sources import GUIDES, catalog, conversation_key, scan_source, select_records
 from .importers import FORMATS, parse
 
@@ -77,11 +78,13 @@ class Workspace:
             dirty = sum(processed.get(cid) != fp for cid, fp in fingerprints(con).items())
             pages = con.execute('SELECT count(*) FROM wiki_pages').fetchone()[0]
             jobs = [dict(r) for r in con.execute("SELECT id,kind,status FROM jobs WHERE status!='completed' ORDER BY created_at LIMIT 50")]
-        return {'workspace_id': workspace_id, 'version': '0.2.0', 'stats': self.store.stats(),
+        return {'workspace_id': workspace_id, 'version': __version__, 'stats': self.store.stats(),
                 'storage': {'backend': 'filesystem_sqlite', 'server_directory': str(self.store.root),
                             'placement': 'On the machine running this MCP process; not necessarily the client.',
                             'country': None, 'country_detection': 'Not available; verify the deployment region with the owner.',
                             'managed_hosting': False, 'native_remote_backends': [],
+                            'backup': 'SQLite snapshot + verified ZIP restore; optional S3 delivery via backup CLI.',
+                            'deployment_guide': 'https://github.com/vlemutov/portable-context/blob/main/skills/portable-context/references/deployment.md',
                             'setup_guide': 'https://github.com/vlemutov/portable-context/blob/main/skills/portable-context/references/storage.md'},
                 'wiki_pages': pages, 'conversations_needing_enrichment': dirty, 'unfinished_jobs': jobs,
                 'sources': self.list_sources(), 'adapters': GUIDES,

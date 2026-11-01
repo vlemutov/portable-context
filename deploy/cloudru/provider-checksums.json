@@ -1,0 +1,13 @@
+{
+  "version": "2.1.6",
+  "source": "https://api.github.com/repos/cloud-ru/evo-terraform/releases/tags/v2.1.6",
+  "sha256": {
+    "darwin_amd64": "56afa52f8e2b80dc2999ecf8c9f8bccc230ac0d588c4d32ab7167663bfe9b6be",
+    "darwin_arm64": "a15bbfca02108140e5bc2b4063427c52a10703b52a4d7948fe3f09507626a307",
+    "linux_386": "e2de2edbd6cd5549465df189f1be8993d3b8b59e754104a7fa10f629ac972674",
+    "linux_amd64": "e006068f7f54654c6e521ffd9d065d17ff65e563960b717d0eec9d2ea51aca13",
+    "linux_arm": "4ba727be010fc178ee75a7b869a520a658b5040adbc4580394cd34b4c7e19935",
+    "windows_386": "b87067321cebeeb3a37232193a94a5d0dd936252f76a9fe94b3d153966f40105",
+    "windows_amd64": "6783fd7a6bcbaf0104918cfc5e8b73effdb36c1fdfb540c2a4ac546314c4f1d4"
+  }
+}

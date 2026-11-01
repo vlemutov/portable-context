@@ -1,6 +1,6 @@
 ---
 name: portable-context
-description: Move selected or all accessible conversation history into a shared Portable Context memory, preserve source relationships, and build or update its knowledge wiki through MCP. Use to explain setup, import history, resume another agent's work, recall earlier discussions, or enrich the shared graph on the user's request.
+description: Deploy a personal Portable Context memory on Cloud.ru or an existing server, import selected or all accessible conversation history, preserve source relationships, and build or update its knowledge wiki through MCP. Use for setup, migration, recall, shared graph enrichment, or resuming another agent's work.
 ---
 
 # Portable Context
@@ -10,6 +10,11 @@ file formats or database commands. Translate their scope into a concrete selecti
 what was actually saved. Full source access and successful reasoning are separate from persistence.
 
 ## Start with the user's experience
+
+When asked to deploy, install on Cloud.ru, or set up an existing/home server, read
+[references/deployment.md](references/deployment.md). Use the reproducible owner-operated installer;
+there is no hosted service or shared developer backend. Finish planning and review actual costs before
+creating paid resources; reuse existing authorization and the same deployment state on retries.
 
 For first-time setup, storage choice or migration, read [references/storage.md](references/storage.md).
 Reuse the user's existing placement decision. If none exists, help them choose a private local folder

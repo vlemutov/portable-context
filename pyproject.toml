@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "portable-context"
-version = "0.2.0"
+version = "0.3.0"
 description = "Agent-driven conversation import, provenance graphs, and shared Markdown knowledge via MCP"
 requires-python = ">=3.11"
 license = "MIT"
@@ -13,6 +13,7 @@ dependencies = []
 
 [project.optional-dependencies]
 mcp = ["mcp>=2,<3"]
+backup = ["boto3>=1.35,<2"]
 
 [project.scripts]
 portable-context = "portable_context.cli:main"

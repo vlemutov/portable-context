@@ -11,3 +11,10 @@ vault/
 archives/
 *.sqlite*
 *.zip
+.terraform/
+*.tfstate*
+*.tfplan
+*.tfvars*
+deployment.json
+client-config.json
+backup-config.json

@@ -3,12 +3,30 @@
 A shared memory operated through your agent: import selected conversations, preserve native
 relationships, build an evidence-linked Markdown wiki, and continue the work from another client.
 
-**Status: 0.2, with a tested two-client MCP workflow and synthetic fixtures.** No personal account exports
+**Status: 0.3, with owner-operated deployment and recoverable backups.** No personal account exports
 or native agent installations have been tested yet. This is not a promise to recover deleted,
 hidden, inaccessible, or unexported context. See [coverage and gaps](docs/connectors.md).
 
 [Start with the user journey](docs/user-journey.md) · [Русское введение](docs/README.ru.md) · [Connector coverage](docs/connectors.md)
 · [Data contract](docs/data-contract.md) · [Agent skill](skills/portable-context/SKILL.md)
+
+## Deploy your own memory
+
+Ask an agent with terminal access: **“Install this skill and deploy my memory in my Cloud.ru
+account”** or **“Set it up on my existing server.”** Follow the
+[agent deployment guide](skills/portable-context/references/deployment.md) (Russian).
+
+The installer in `deploy/setup.py` provisions a VM, persistent disk, restricted SSH access,
+private S3 bucket and bucket-scoped backup credentials. It separates a reviewed paid Terraform
+plan from apply, keeps state on the owner's computer, and resumes failed server installation.
+The desktop agent connects over SSH/stdio; no domain or public HTTP MCP is required. Existing
+Linux servers use the same installer without Terraform. Each owner runs and pays for their own instance.
+
+`bootstrap` verifies pinned Terraform/provider downloads. `install` verifies backup restoration
+(including an S3 upload/download when configured), and `check` verifies the MCP workspace identity.
+Credentials, state and personal data must remain outside this repository. Cloud.ru API provisioning
+still needs a real-account acceptance run; schema validation and the Linux SSH test do not substitute for it.
+Automatic setup targets Ubuntu 24.04 / Linux with Python 3.11+, OpenSSH and cron.
 
 ## Architecture
 
@@ -209,8 +227,11 @@ portable-context --home /private/memory export /private/all-revisions.jsonl --re
 
 The JSONL contract preserves roles, IDs, branches, timestamps, attachment references, and raw
 message fields. A complete backup is the whole memory directory: SQLite, originals and vault.
-Stop writers before a filesystem copy, or use SQLite's backup API and separately back up originals
-and Markdown. JSONL alone does not include originals, wiki/semantic graph history, jobs or import audit metadata.
+Stop writers before a whole-directory filesystem copy. Alternatively, `python -m portable_context.backup`
+creates a consistent SQLite snapshot, copies referenced originals, and keeps Markdown in a separate
+recovery folder; `restore` validates checksums and regenerates the canonical wiki in a new directory.
+Optional `.[backup]` dependencies enable S3 delivery. JSONL alone does not include originals,
+wiki/semantic graph history, jobs or import audit metadata.
 There is no account-wide sync, encryption, retention/deletion UI or multi-user isolation yet.
 
 Upgrading from 0.1 adds tables and backfills structural links from current records. Legacy notes
