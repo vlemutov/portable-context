@@ -1,0 +1,2 @@
+{"schema_version":1,"source":"demo","instance":"synthetic","conversation_id":"project","message_id":"1","role":"user","text":"For this project I prefer Python and local storage.","timestamp":"2026-01-01T10:00:00Z","title":"Synthetic project discussion"}
+{"schema_version":1,"source":"demo","instance":"synthetic","conversation_id":"project","message_id":"2","role":"assistant","text":"I will use a local SQLite store and Markdown notes.","timestamp":"2026-01-01T10:00:05Z","title":"Synthetic project discussion","parent_id":"1"}
