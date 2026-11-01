@@ -15,6 +15,10 @@ When asked to deploy, install on Cloud.ru, or set up an existing/home server, re
 [references/deployment.md](references/deployment.md). Use the reproducible owner-operated installer;
 there is no hosted service or shared developer backend. Finish planning and review actual costs before
 creating paid resources; reuse existing authorization and the same deployment state on retries.
+For VPN-related access failures, route diagnostics, or access lost after a reboot/network change,
+read [references/network.md](references/network.md). The same helper supports Windows, macOS and
+Linux; inspect first and use the current gateway. Route changes require OS elevation; a background
+repair service is not installed. Check real MCP access after applying routes.
 
 For first-time setup, storage choice or migration, read [references/storage.md](references/storage.md).
 Reuse the user's existing placement decision. If none exists, help them choose a private local folder

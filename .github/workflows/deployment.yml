@@ -4,25 +4,30 @@ permissions:
   contents: read
 jobs:
   terraform:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest, macos-latest, macos-15-intel]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - name: Bootstrap pinned tools and validate provider schema
-        run: |
-          python deploy/setup.py --state "$RUNNER_TEMP/pc-tf" init --mode cloudru
-          python deploy/setup.py --state "$RUNNER_TEMP/pc-tf" bootstrap
-          mkdir -p "$RUNNER_TEMP/pc-tf/terraform"
-          cp deploy/cloudru/main.tf "$RUNNER_TEMP/pc-tf/terraform/main.tf"
-          cp deploy/cloudru/deployment.tftest.hcl "$RUNNER_TEMP/pc-tf/terraform/deployment.tftest.hcl"
-          export TF_CLI_CONFIG_FILE="$RUNNER_TEMP/pc-tf/terraform.rc"
-          "$RUNNER_TEMP/pc-tf/tools/terraform" -chdir="$RUNNER_TEMP/pc-tf/terraform" init -backend=false -input=false
-          "$RUNNER_TEMP/pc-tf/tools/terraform" -chdir="$RUNNER_TEMP/pc-tf/terraform" validate -no-color
-          "$RUNNER_TEMP/pc-tf/tools/terraform" -chdir="$RUNNER_TEMP/pc-tf/terraform" test -no-color
+        run: python deploy/validate_client.py
+      - name: Exercise actual host route lifecycle (Windows)
+        if: runner.os == 'Windows'
+        run: python deploy/smoke_network.py
+      - name: Exercise actual host route lifecycle (macOS and Linux)
+        if: runner.os != 'Windows'
+        run: sudo env CI=true "$(command -v python)" deploy/smoke_network.py
   ssh-install:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

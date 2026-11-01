@@ -29,6 +29,17 @@ has verified provisioning, Windows-to-Linux MCP access, S3 upload/download/resto
 This is one tested account/configuration, not coverage of every region, image or client.
 Automatic setup targets Ubuntu 24.04 / Linux with Python 3.11+, OpenSSH and cron.
 
+Client setup, local imports, memory and MCP support Windows, macOS and Linux. The CI matrix
+covers macOS on Intel and Apple Silicon, Windows x64, and Linux x64; core tests also run on
+Linux ARM64. Cloud.ru provider 2.1.6 has no native Linux ARM64 binary, so provision from a
+supported client or use the existing-server SSH path. The managed server installer targets Linux.
+
+For VPN access, `deploy/network.py` provides `inspect`, `plan`, `apply`, `repair` and `remove`
+on all three client OSes. It uses exact IPv4 host routes, records ownership, preserves unrelated
+routes, and refuses stale plans. Changes require OS administrator/root privileges. After reboot
+or a network change, run a fresh repair plan; no privileged background service is installed.
+See the [network guide](skills/portable-context/references/network.md).
+
 ## Architecture
 
 ```mermaid
