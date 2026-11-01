@@ -11,6 +11,13 @@ what was actually saved. Full source access and successful reasoning are separat
 
 ## Start with the user's experience
 
+For first-time setup, storage choice or migration, read [references/storage.md](references/storage.md).
+Reuse the user's existing placement decision. If none exists, help them choose a private local folder
+or their own server before importing personal data. A skill is instructions, not a hosted MCP service.
+Explain the actual server directory from `memory_status.storage`; do not infer its country from a path.
+The MCP-only equivalent is `portable-context://setup`. Do not create a second empty memory when the
+user means to connect an existing workspace. Restored copies share an ID but do not synchronize changes.
+
 Call `memory_status` to identify this workspace, connected sources, unfinished jobs and unprocessed
 conversations. Explain capabilities in the user's language. Every client must use the **same
 workspace_id** to share memory; installing the skill independently does not connect separate stores.

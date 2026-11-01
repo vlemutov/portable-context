@@ -36,6 +36,11 @@ separate capability; an MCP connection does not grant an application's full acco
 
 ## Install
 
+First choose where memory and MCP will live: [storage and setup guide](skills/portable-context/references/storage.md)
+(Russian, with runnable local/server examples). Each user runs their own instance; this repository
+does not provide hosted storage. Only filesystem/SQLite storage is implemented; S3 can hold external
+backups, not the live database. MCP-only clients can read `portable-context://setup`.
+
 Python 3.11+ with SQLite FTS5. From this repository:
 
 ```sh

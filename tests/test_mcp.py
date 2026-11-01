@@ -44,6 +44,10 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
                     await agent_a.initialize()
                     status = await self.call(agent_a, 'memory_status')
                     workspace_id = status['workspace_id']
+                    self.assertEqual(Path(status['storage']['server_directory']), (root / 'memory').resolve())
+                    self.assertIsNone(status['storage']['country'])
+                    setup = await agent_a.read_resource('portable-context://setup')
+                    self.assertIn('storage', str(setup))
                     resource = await agent_a.read_resource('portable-context://guide')
                     self.assertIn('start_import', str(resource))
                     await self.call(agent_a, 'connect_source', {'source_id': 'archive', 'label': 'Selected archive',

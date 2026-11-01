@@ -15,14 +15,42 @@ def build_server(store: Store, allowed_roots=None):
         "Distinguish user statements, assistant statements, and inferences. "
         "MCP does not automatically see or record the host conversation. "
         "Start with memory_status to identify the shared workspace and actual source access. "
+        "Before first import explain its storage location and execution model; read portable-context://setup. "
         "Use resumable import and enrichment jobs. Semantic analysis is your job, not an automatic server action. "
         "For a workflow guide read portable-context://guide."))
+
+    @server.resource('portable-context://setup')
+    def setup_guide() -> str:
+        """Storage and hosting onboarding, also available without an installed skill."""
+        return (
+            'Call memory_status and explain storage.server_directory on the MCP machine. '
+            'If an existing workspace is intended, use its endpoint or local directory, not a new empty store. '
+            'For a new workspace whose placement is undecided, help the user choose a local private folder '
+            'or their own server before importing personal data. Reuse choices already made. '
+            'Install the Python package with its mcp extra on that machine; init creates the chosen --home directory. '
+            'A stdio host launches the local process. Shared remote use requires the owner to run the HTTP service '
+            'and arrange HTTPS or an SSH tunnel, authentication, and restart after reboot. '
+            'The skill is instructions, not a hosted service; downloading it does not install or start MCP. '
+            'The repository owner does not provide a default backend. Each owner supplies their own storage. '
+            'Only a filesystem directory with SQLite, originals and Markdown is implemented. '
+            'GitHub, S3 and PostgreSQL are not native storage backends. S3 may hold separately prepared backups. '
+            'Do not synchronize a live SQLite directory through Git or a cloud drive. Stop all writers before '
+            'copying the complete directory for backup or migration; resume only one authoritative workspace. '
+            'Check the same workspace_id across clients. A backup copy retains this ID but does not synchronize changes. '
+            'Country cannot be inferred from the directory: verify server and backup regions with their owner. '
+            'Data retrieved by a cloud agent may be processed outside the storage country. '
+            'A shared HTTP workspace is single-owner and requires clients compatible with its authentication; '
+            'OAuth-only hosts need a gateway, which is not bundled. Do not promise universal web-client compatibility. '
+            'Step-by-step local/server setup and Russian placement options: '
+            'https://github.com/vlemutov/portable-context/blob/main/skills/portable-context/references/storage.md'
+        )
 
     @server.resource('portable-context://guide')
     def workflow_guide() -> str:
         """Common workflow for hosts that cannot install a SKILL.md file."""
         return (
             'Start with memory_status. Explain supported sources and gaps in the user language. '
+            'For storage/hosting setup read portable-context://setup before the first import. '
             'Connect the same workspace_id from every client. Register a local source only when its path is '
             'on the memory server and explicitly allowed; otherwise register a host source and use the host history tools. '
             'Preview source conversations, then select exact conversation keys or all available records. '
