@@ -1,37 +1,38 @@
 # Portable Context
 
-A local-first archive and editable memory layer across AI products. Import exports,
-keep originals, search messages, link notes in Obsidian, and let agents read/write via MCP.
+A shared memory operated through your agent: import selected conversations, preserve native
+relationships, build an evidence-linked Markdown wiki, and continue the work from another client.
 
-**Status: working 0.1 prototype, tested with synthetic fixtures.** No personal account exports
+**Status: 0.2, with a tested two-client MCP workflow and synthetic fixtures.** No personal account exports
 or native agent installations have been tested yet. This is not a promise to recover deleted,
 hidden, inaccessible, or unexported context. See [coverage and gaps](docs/connectors.md).
 
-[Русское введение](docs/README.ru.md) · [Connectors and continuous capture](docs/connectors.md)
+[Start with the user journey](docs/user-journey.md) · [Русское введение](docs/README.ru.md) · [Connector coverage](docs/connectors.md)
 · [Data contract](docs/data-contract.md) · [Agent skill](skills/portable-context/SKILL.md)
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    A[Claude / ChatGPT / Gemini exports] --> I[Import adapters]
-    T[Telegram JSON / Codex JSONL] --> I
-    P[Agent persisted messages] --> Q[Durable local outbox]
-    Q --> H[Authenticated ingest over tunnel]
-    I --> S[SQLite messages + revisions + FTS]
-    I --> O[Unmodified original exports]
-    H --> S
-    S --> V[Obsidian transcripts]
-    S <--> M[MCP tools]
-    N[Editable Markdown memory + source links] <--> M
-    N --> V
-    M <--> C[Codex / Hermes / OpenClaw / other clients]
+    U[User request] --> A[Agent + skill]
+    A <--> M[MCP workspace]
+    X[Local exports / host history tools] --> J[Selected import jobs]
+    M --> J
+    P[Optional collector outbox] --> J
+    J --> S[Messages + revisions + structural graph]
+    S --> E[Resumable enrichment tasks]
+    A <--> E
+    E --> W[Wiki + semantic graph + citations]
+    W --> O[Obsidian]
+    S --> O
 ```
 
 MCP receives only what the client sends. **Connecting MCP alone does not record conversations.**
 Continuous capture requires a collector, persisted-message hook, or periodic export.
 Original transcripts, manually curated memory, and model inferences stay distinguishable.
 No external model, embedding service, telemetry, or API key is required by the core.
+The connected agent performs semantic analysis using its own model. Native history access is a
+separate capability; an MCP connection does not grant an application's full account history.
 
 ## Install
 
@@ -51,7 +52,40 @@ The core also runs without dependencies: `python -m pip install -e .`.
 Keep the memory directory **outside this public repository**. It contains private originals,
 messages, media inside ZIPs, and notes. `.gitignore` is a backup precaution, not a privacy boundary.
 
-## Import and inspect
+## Ask your connected agent
+
+> Explain how to use this memory and what history you can access.
+>
+> Import the Atlas conversations and their forks.
+>
+> Build a wiki of the decisions, then connect related topics.
+>
+> Resume the work from the other agent and add new discussions.
+
+`memory_status` identifies the shared workspace and actual source access. `preview_source` lets
+the agent select conversations. Import and enrichment are separate resumable jobs. The agent can
+read complete source revisions, update existing pages with conflict checks, and commit typed links.
+Read the [complete user journey](docs/user-journey.md) before configuring individual adapters.
+
+## Register a source once
+
+For a server-local file, explicitly register it with the local CLI:
+
+```sh
+portable-context --home /private/memory connect claude-personal --format claude --instance claude-personal --location /private/exports/claude.zip
+portable-context --home /private/memory preview claude-personal
+```
+
+Alternatively, allow an export folder using repeatable `mcp --source-root /private/exports` or
+`PC_SOURCE_ROOTS` (OS path-list separator); the connected agent can then register files inside it.
+MCP local paths refer to the **server**, not the remote client's disk. Hosts with their own history
+tools register a host source without a path, then send selected records through `stage_records`.
+
+Selection-aware jobs retain selected normalized records and raw message fields only. They never
+copy a mixed source ZIP containing unselected chats. Small text exports can use `stage_export`;
+larger exports should be registered server-locally or sent as selected record batches by a host bridge.
+
+## Legacy full-archive import and inspection
 
 An instance is a stable, non-secret account/device/server name. Reuse it on later imports;
 give distinct instances distinct names. Do not use a new random name for each run.
@@ -67,8 +101,9 @@ portable-context --home /private/memory stats
 portable-context --home /private/memory vault
 ```
 
-Open `/private/memory/vault` as an Obsidian vault. `INDEX.md` links conversations and memory.
-`memory/*.md` is editable and immediately searchable through MCP; no re-index is needed.
+Open `/private/memory/vault` as an Obsidian vault. `INDEX.md` links conversations, the graph and wiki.
+`wiki/*.md` contains agent-maintained knowledge with source revisions; `memory/*.md` preserves
+legacy 0.1 notes. Manual edits are immediately visible through the corresponding MCP read tools.
 Generated transcript edits are preserved: subsequent projections write `.incoming.md` and
 report conflicts. Merge them manually if wanted. No Obsidian plugin is required.
 
@@ -103,19 +138,30 @@ command = "/absolute/repo/.venv/bin/portable-context"
 args = ["--home", "/absolute/private/memory", "mcp"]
 ```
 
-Tools: `search_messages`, `read_message`, `list_conversations`, `read_conversation`,
-`append_messages`, `search_memory`, `read_memory`, `write_memory`, `refresh_vault`.
+Main workflow tools: `memory_status`, `connect_source`, `preview_source`, `start_import`,
+`stage_records`, `run_import`, `get_job`, `start_enrichment`, `claim_enrichment`,
+`read_source_revision`, `search_wiki`, `read_wiki`, `commit_enrichment`, `inspect_graph`,
+`check_memory`, `refresh_vault`. The 0.1 message and note tools remain compatible.
+Call schemas and examples are in the [skill protocol reference](skills/portable-context/references/protocol.md).
 
 Install/copy [the skill](skills/portable-context/SKILL.md) into your agent's supported skills
 directory, or use its instructions directly. It describes citation and memory-writing practice;
 it is **not** a substitute for a collector or a native plugin for every host.
 
-For a server shared by your agents, use `mcp --transport streamable-http --port 8766`.
-It binds **127.0.0.1 only**, with no built-in HTTP authentication for MCP. Use an SSH tunnel
-on trusted machines, or deploy an authenticated gateway. Do not expose the raw endpoint to
-the internet. Single-owner service: source filters are convenience filters, not access control.
+For a server shared by your agents, set `PC_MCP_TOKEN` to a random secret (at least 24 characters)
+and use `mcp --transport streamable-http --port 8766`. Clients send `Authorization: Bearer <token>`.
+It binds **127.0.0.1 only**: use an SSH tunnel or HTTPS gateway for remote clients. This is bearer
+authentication for clients that support custom headers; OAuth-only web clients need a compatible
+gateway. No OAuth issuer is bundled. `--allow-unauthenticated-local` explicitly opts out on trusted
+loopback setups. This is a single-owner workspace; sources and filters are not per-user ACLs.
 
-## Keep memory alive
+## Optional continuous capture
+
+The primary workflow is on demand. Existing source integrations can use `enqueue_batch` and
+`/v1/batches` to feed exactly the same resumable import jobs as interactive clients. Register the
+producer as a host source first. Automatic capture and automatic semantic reasoning are separate:
+new data becomes pending work, and a connected agent can enrich it later. No background model
+worker or native capture hook is installed by default.
 
 For local JSONL sessions (not Codex's newer paginated storage):
 
@@ -146,7 +192,7 @@ Completed batches become `.sent`; failed batches remain `.json`. Stable message 
 retries idempotent. Run one delivery worker per outbox. A service manager must restart workers
 after crashes/reboots; this package does not silently install background services.
 
-The producer adapter is functional, but wiring it into a particular Ouroboros/Hermes/OpenClaw
+The producer adapter and shared-job delivery are functional, but wiring them into a particular Ouroboros/Hermes/OpenClaw
 version is a deployment task. No native integration is claimed tested in this release.
 
 ## Portability and recovery
@@ -156,11 +202,16 @@ portable-context --home /private/memory export /private/current-events.jsonl
 portable-context --home /private/memory export /private/all-revisions.jsonl --revisions
 ```
 
-The JSONL contract preserves roles, IDs, branches, timestamps, attachments references, and raw
+The JSONL contract preserves roles, IDs, branches, timestamps, attachment references, and raw
 message fields. A complete backup is the whole memory directory: SQLite, originals and vault.
 Stop writers before a filesystem copy, or use SQLite's backup API and separately back up originals
-and Markdown. JSONL alone does not include originals, note history, or import audit metadata.
+and Markdown. JSONL alone does not include originals, wiki/semantic graph history, jobs or import audit metadata.
 There is no account-wide sync, encryption, retention/deletion UI or multi-user isolation yet.
+
+Upgrading from 0.1 adds tables and backfills structural links from current records. Legacy notes
+and originals are preserved. Back up the complete memory directory before upgrading; do not run
+an older writer against an upgraded memory. Wiki database commits are authoritative and Markdown
+projection can be repaired with `vault` after a crash. Manual file edits require reconciliation.
 
 ## Development
 
@@ -171,7 +222,14 @@ python -m unittest discover -s tests -v
 
 Tests use generated synthetic records only. They exercise replay, revisions, transaction rollback,
 parallel writers, branch preservation, Unicode search, manual edits, original ZIP retention,
-watcher recovery, authenticated delivery and an MCP subprocess round trip.
+watcher recovery, authenticated delivery, two-client handoff, selective-import privacy,
+leases, wiki/graph transaction rollback, stale source detection and authenticated HTTP MCP.
+
+```sh
+python examples/agent_workflow_demo.py --home /new/private/demo-directory
+```
+
+The demo is scripted synthetic content; it does not make model calls or access real accounts.
 
 MIT licensed. Contributions should include anonymized minimal fixtures for schema differences;
 never attach real conversation archives to public issues. Read [CONTRIBUTING.md](CONTRIBUTING.md).

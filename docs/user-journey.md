@@ -1,0 +1,109 @@
+# Use your agent as the interface
+
+Portable Context 0.2 implements the shared workflow. An agent reasons and operates tools; the
+server preserves data, jobs, typed links and wiki revisions. The included skill teaches this flow.
+
+## 1. Connect the memory once
+
+Choose one private memory directory or server. Point every agent at this same workspace.
+Install `skills/portable-context` in hosts that support skills, or ask the host to read the MCP
+resource `portable-context://guide`. Ask:
+
+> Explain how to use this memory and which sources you can actually access.
+
+The agent checks `memory_status`. Compare the workspace ID across clients: two installations
+with different data directories are separate memories. The server does not log in to AI accounts.
+
+## 2. Ask for an initial import
+
+> Save my conversations about Project Atlas, including their forks.
+
+The agent checks available sources. There are two access routes:
+
+- **Server-local export:** the owner allows a directory once; the agent registers an export,
+  previews conversations, selects exact IDs and starts an import job.
+- **Host-provided history:** the host uses its own list/read/export tools, then supplies selected
+  source records through MCP. A small text export can be parsed directly by `stage_export`.
+
+If the host cannot access account history, the agent guides you to an official export. It must not
+claim that a visible prompt, a summary or one open chat is the full account history. Native history
+readers for every product are not bundled. See [connector coverage](connectors.md).
+
+Local selective jobs store only selected normalized records with their raw message fields.
+They do not copy the original mixed ZIP, unselected conversations or unrelated media. Exact
+whole-file retention remains available through the legacy `import` CLI when that is your intent.
+
+The agent reports what was saved, what was already present, what changed and what was unavailable.
+Known replies, forks, projects and attachment references immediately create structural links.
+An interrupted job can be resumed by the same or a different connected agent.
+
+## 3. Ask for a knowledge graph
+
+> Read the imported discussions, build a wiki about Atlas and connect related decisions.
+
+The agent receives manageable chunks of source revisions. It reads evidence and existing wiki
+pages, then submits updates with citations and semantic links. The server commits page changes,
+history, links and task progress together. It rejects stale writes and invented source IDs.
+It does not independently verify the truth of the agent's interpretation.
+
+The resulting vault contains:
+
+```text
+vault/
+  INDEX.md                  entry point
+  GRAPH.md                  typed relationship overview
+  conversations/            generated source transcripts
+  revisions/                exact cited source revisions, including older edits
+  entities/                 projects and attachment references
+  wiki/
+    INDEX.md                knowledge pages
+    LOG.md                  chronological operations
+    SCHEMA.md               shared maintenance rules
+    atlas.md                example knowledge page
+  memory/                   legacy 0.1 notes, if present
+```
+
+Open the vault in Obsidian, or read the same wiki through any connected agent. Forks and replies
+are structural evidence; `related_to`, `supports`, `contradicts` and `supersedes` are agent-authored
+semantic relationships. Every semantic edge has cited revisions and an author label.
+
+## 4. Continue elsewhere
+
+> Add the new discussions and update our decisions.
+
+The next agent connects to the same workspace, imports new records and processes changed
+conversations. Unchanged source records are deduplicated. New messages arriving during analysis
+remain pending for another pass. If a worker disappears, its task becomes available after the lease
+expires. An outdated worker cannot overwrite a task reclaimed by another agent.
+
+Manual wiki edits are visible to agents. They must reread and merge before updating an edited
+page. Projection conflicts produce `.incoming.md` without deleting the user's file. Since an
+external editor does not share database locks, avoid editing the same file at the exact instant
+of a projection; keep backups/version history for the whole memory directory.
+
+## Optional continuous capture
+
+Initial delivery and collector delivery use the same import jobs. The producer example writes
+durable batches with source IDs and request IDs; `/v1/batches` resumes a partially processed
+delivery and acknowledges only after import completion. Retrying a delivered batch creates no
+duplicate job or messages. The legacy `/v1/events` remains supported for 0.1 clients.
+
+Nothing starts in the background merely because you installed the skill. The current release
+does not install native capture hooks or an autonomous model worker. A configured collector can
+accumulate messages while semantic enrichment remains on demand. A later model worker can claim
+the same enrichment tasks; it does not require a different graph or storage format.
+
+## What has been demonstrated
+
+The automated acceptance test uses **two actual MCP client subprocess connections**, synthetic
+history and scripted page content: client A starts a selected import and disconnects; client B
+resumes, creates a wiki and later updates it after another message. It tests the protocol and
+persistence, not a model's reasoning quality or a particular provider's account access.
+
+To inspect a scripted demo locally after installation:
+
+```sh
+python examples/agent_workflow_demo.py --home /new/private/demo-directory
+```
+
+The directory must not already exist. All content in that demonstration is synthetic.

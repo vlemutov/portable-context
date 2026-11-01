@@ -34,6 +34,17 @@ def enqueue(directory: Path, records: list[dict]):
     return str(path)
 
 
+def enqueue_batch(directory: Path, source_id: str, records: list[dict]):
+    """Collector adapter for the SAME resumable import jobs used by an interactive agent."""
+    request_id = str(uuid.uuid4())
+    body = canonical({'source_id': source_id, 'request_id': request_id, 'records': check_batch(records)})
+    if len(body.encode('utf-8')) > MAX_BODY:
+        raise ValueError('Batch exceeds 8 MiB')
+    path = directory / (f'{time.time_ns():020d}-' + request_id + '.json')
+    atomic_write(path, body)
+    return str(path)
+
+
 def flush(directory: Path, endpoint: str, token: str):
     parsed = urlparse(endpoint)
     if parsed.scheme != "https" and not (parsed.scheme == "http" and parsed.hostname in ("127.0.0.1", "localhost", "::1")):
@@ -46,8 +57,10 @@ def flush(directory: Path, endpoint: str, token: str):
             if path.stat().st_size > MAX_BODY:
                 raise ValueError("Queued batch exceeds 8 MiB")
             body = path.read_bytes()
-            check_batch(json.loads(body))
-            request = Request(endpoint.rstrip("/") + "/v1/events", data=body,
+            payload = json.loads(body)
+            check_batch(payload['records'] if isinstance(payload, dict) else payload)
+            route = '/v1/batches' if isinstance(payload, dict) else '/v1/events'
+            request = Request(endpoint.rstrip("/") + route, data=body,
                               headers={"Content-Type": "application/json", "Authorization": "Bearer " + token})
             class NoRedirect(HTTPRedirectHandler):
                 def redirect_request(self, req, fp, code, msg, headers, newurl):
@@ -69,6 +82,8 @@ def flush(directory: Path, endpoint: str, token: str):
 def make_server(store: Store, token: str, port: int = 8765):
     if len(token) < 24:
         raise ValueError("PC_INGEST_TOKEN must have at least 24 characters")
+    from .workspace import Workspace
+    workspace = Workspace(store)
 
     class Handler(BaseHTTPRequestHandler):
         def setup(self):
@@ -87,10 +102,10 @@ def make_server(store: Store, token: str, port: int = 8765):
             self.wfile.write(body)
 
         def do_POST(self):
-            if not hmac.compare_digest(self.headers.get("Authorization", ""), "Bearer " + token):
+            if not hmac.compare_digest(self.headers.get("Authorization", "").encode(), ("Bearer " + token).encode()):
                 self.reply(401, {"ok": False, "error": "Unauthorized"})
                 return
-            if self.path != "/v1/events":
+            if self.path not in ("/v1/events", "/v1/batches"):
                 self.reply(404, {"ok": False})
                 return
             try:
@@ -98,10 +113,19 @@ def make_server(store: Store, token: str, port: int = 8765):
                 if size <= 0 or size > MAX_BODY:
                     self.reply(413, {"ok": False, "error": "Body must be 1 byte..8 MiB"})
                     return
-                records = check_batch(json.loads(self.rfile.read(size)))
-                report = store.ingest(records, "live-http")
+                payload = json.loads(self.rfile.read(size))
+                if self.path == '/v1/batches':
+                    if not isinstance(payload, dict):
+                        raise ValueError('Expected source_id, request_id and records envelope')
+                    job = workspace.stage_records(payload['source_id'], check_batch(payload['records']), payload['request_id'])
+                    while job['status'] != 'completed':
+                        job = workspace.run_import(job['id'])
+                    report = {'job_id': job['id'], **job['import_counts']}
+                else:
+                    records = check_batch(payload)
+                    report = store.ingest(records, "live-http")
                 self.reply(200, {"ok": True, **report})
-            except (ValueError, TypeError) as exc:
+            except (ValueError, TypeError, KeyError) as exc:
                 self.reply(400, {"ok": False, "error": str(exc)})
             except Exception:
                 self.reply(500, {"ok": False, "error": "Commit failed; retry batch"})

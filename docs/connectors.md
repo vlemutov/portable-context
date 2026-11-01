@@ -1,6 +1,8 @@
 # Connector coverage and setup
 
-These are implemented format adapters, not certifications against every account export.
+Version 0.2 adds agent-driven preview/selection, resumable imports, structural/semantic graphs,
+and wiki maintenance. Sources are either server-local files or host-provided records. These are
+implemented format adapters, not certifications against every account export.
 Tests are synthetic. Check the import report and compare counts/content with your original.
 
 | Source | This release | Continuous collection | Gaps |
@@ -10,8 +12,8 @@ Tests are synthetic. Check the import report and compare counts/content with you
 | Codex | session_meta + response_item JSONL, directory imports | File watcher with checkpoints | Paginated app-server history exporter not implemented; JSONL presence is not proof of complete account history |
 | Gemini web | Takeout My Activity JSON; outer-cell HTML activity extraction | Repeat Takeout exports | Activity may omit responses/grouping; HTML timestamps unparsed; Gems aren't chat history |
 | Telegram | Single-chat or chats.list JSON, rich text, replies, media references | New exports or native agent hook | Roles remain participants; no Telegram login/client scraping |
-| Ouroboros | Generic normalized-event producer and durable HTTP outbox | Wire producer at persisted-message boundary | Native storage parsers/hooks for specific versions not yet packaged |
-| Hermes / OpenClaw | MCP read/write + portable skill | Generic producer integration possible | Native provider/plugin installation not yet implemented or tested |
+| Ouroboros | Host-source records, shared import jobs and durable HTTP outbox | Wire producer at persisted-message boundary | Native storage parsers/hooks for specific versions not yet packaged |
+| Hermes / OpenClaw | Shared MCP workflow + portable skill, host-source records | Generic producer integration possible | Native provider/plugin installation not yet implemented or tested |
 
 ## Getting source exports
 
@@ -32,7 +34,8 @@ Tests are synthetic. Check the import report and compare counts/content with you
 
 1. Install Portable Context in each server's Python environment, or call the CLI from a separate one.
 2. Pick instance IDs such as `ouroboros-vps-a` and `ouroboros-home-b`.
-3. Use the example producer after persistence of incoming and outgoing messages. Preserve native
+3. Register each producer's source_id as a host source through MCP or local `connect`, then use
+   the example producer after persistence of incoming and outgoing messages. Preserve native
    message IDs, timestamps, participants and delivery state. Capture tool events if desired.
 4. Keep each outbox on durable local storage, separate from the public checkout.
 5. Run a delivery worker through an SSH tunnel to the central ingest receiver; configure restart
@@ -64,5 +67,8 @@ is a fallback, not a claim that cloud-managed sessions are covered.
 Inspect oldest/newest messages, one edited message, one branched chat, one tool call, and one
 attachment. Compare source counts where available. Check import errors and role uncertainty.
 Archive provenance preserves what arrived; it cannot establish that a provider exported everything.
-Full-text search is implemented; embeddings, automatic entity extraction and a semantic graph are
-future features. Obsidian currently shows explicit note/conversation links you or an agent create.
+Full-text search and a typed graph are implemented. Native replies/forks/projects/attachments
+produce structural links when the normalized input contains them. Semantic links and wiki pages
+are submitted by a connected agent through enrichment tasks. There is no built-in autonomous
+model, embeddings service, or guarantee of semantic quality. Native cross-conversation fork and
+project extraction beyond the explicit record fields is provider-dependent and may need adapter work.

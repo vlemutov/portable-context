@@ -67,6 +67,15 @@ def validate(record: dict) -> dict:
         raise ValueError("timestamp must be a string or null")
     if r["parent_id"] is not None and not isinstance(r["parent_id"], str):
         raise ValueError("parent_id must be a string or null")
+    if r.get('fork_of') is not None:
+        fork = r['fork_of']
+        if not isinstance(fork, dict) or not isinstance(fork.get('conversation_id'), str) or not fork['conversation_id']:
+            raise ValueError('fork_of needs a nonempty conversation_id string')
+        if fork.get('message_id') is not None and not isinstance(fork['message_id'], str):
+            raise ValueError('fork_of.message_id must be a string')
+    if r.get('project') is not None:
+        if not isinstance(r['project'], dict) or not isinstance(r['project'].get('id'), str) or not r['project']['id']:
+            raise ValueError('project needs a nonempty id string')
     r["schema_version"] = 1
     return r
 
@@ -104,6 +113,8 @@ class Store:
                 );
                 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(id UNINDEXED,text,title);
             """)
+            from .graph import initialize
+            initialize(con)
 
     @contextlib.contextmanager
     def connect(self):
@@ -142,29 +153,35 @@ class Store:
                 os.unlink(temp)
 
     def ingest(self, records: Iterable[dict], origin: str | None = None) -> dict:
-        report = {"inserted": 0, "revised": 0, "unchanged": 0}
         with self.connect() as con:
             con.execute("BEGIN IMMEDIATE")
-            seq = con.execute("SELECT coalesce(max(seq),0) FROM messages").fetchone()[0]
-            for record in records:
-                r = validate(record)
-                mid = key(r["source"], r["instance"], r["conversation_id"], r["message_id"])
-                cid = key(r["source"], r["instance"], r["conversation_id"])
-                blob = canonical(r)
-                rev = digest(blob)
-                if con.execute("SELECT 1 FROM revisions WHERE id=? AND hash=?", (mid, rev)).fetchone():
-                    report["unchanged"] += 1
-                    continue  # Replaying an old version must not roll back an edit.
-                old = con.execute("SELECT seq FROM messages WHERE id=?", (mid,)).fetchone()
-                if not old:
-                    seq += 1
-                con.execute("INSERT INTO revisions VALUES (?,?,?,?,?)", (mid, rev, blob, now(), origin))
-                con.execute("""INSERT OR REPLACE INTO messages VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-                            (mid, cid, r["source"], r["instance"], r["message_id"], r["title"],
-                             r["role"], r["text"], r["timestamp"], rev, blob, old[0] if old else seq))
-                con.execute("DELETE FROM messages_fts WHERE id=?", (mid,))
-                con.execute("INSERT INTO messages_fts VALUES (?,?,?)", (mid, r["text"], r["title"]))
-                report["revised" if old else "inserted"] += 1
+            return self._ingest(con, records, origin)
+
+    def _ingest(self, con, records, origin=None):
+        """Internal transaction-aware ingestion shared by manual and collector jobs."""
+        from .graph import index_record
+        report = {"inserted": 0, "revised": 0, "unchanged": 0}
+        seq = con.execute("SELECT coalesce(max(seq),0) FROM messages").fetchone()[0]
+        for record in records:
+            r = validate(record)
+            mid = key(r["source"], r["instance"], r["conversation_id"], r["message_id"])
+            cid = key(r["source"], r["instance"], r["conversation_id"])
+            blob = canonical(r)
+            rev = digest(blob)
+            if con.execute("SELECT 1 FROM revisions WHERE id=? AND hash=?", (mid, rev)).fetchone():
+                report["unchanged"] += 1
+                continue
+            old = con.execute("SELECT seq FROM messages WHERE id=?", (mid,)).fetchone()
+            if not old:
+                seq += 1
+            con.execute("INSERT INTO revisions VALUES (?,?,?,?,?)", (mid, rev, blob, now(), origin))
+            con.execute("INSERT OR REPLACE INTO messages VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (mid, cid, r["source"], r["instance"], r["message_id"], r["title"],
+                         r["role"], r["text"], r["timestamp"], rev, blob, old[0] if old else seq))
+            con.execute("DELETE FROM messages_fts WHERE id=?", (mid,))
+            con.execute("INSERT INTO messages_fts VALUES (?,?,?)", (mid, r["text"], r["title"]))
+            index_record(con, r, mid, cid, rev)
+            report["revised" if old else "inserted"] += 1
         return report
 
     def search(self, query: str, limit: int = 10, source: str | None = None,
@@ -283,7 +300,7 @@ class Store:
         with self.connect() as con:
             con.execute("BEGIN IMMEDIATE")
             chats = con.execute("SELECT DISTINCT conversation FROM messages ORDER BY conversation").fetchall()
-            index = ["# Portable Context", "", "## Editable memory", ""]
+            index = ["# Portable Context", "", "[[GRAPH|Relationship graph]] · [[wiki/INDEX|Knowledge wiki]]", "", "## Editable memory", ""]
             for note in sorted((self.root / "vault" / "memory").glob("*.md")):
                 index.append(f"- [[memory/{note.stem}]]")
             index.extend(["", "## Conversations", ""])
@@ -299,11 +316,17 @@ class Store:
                     body.extend([f"## {row['role']} · {row['timestamp'] or 'undated'}", "",
                                  f"Source message: `{r['message_id']}`; parent: `{r['parent_id']}`", "",
                                  row["text"], "", f"^m-{row['id']}", ""])
+                    from .graph import wiki_link
+                    for relation in con.execute("SELECT * FROM graph_edges WHERE owner=? AND predicate!='part_of'",
+                                                ('message:' + row['id'],)):
+                        body.extend([relation['predicate'] + ': ' + wiki_link(con, relation['object']), ''])
                     if r["attachments"]:
                         body.extend(["Attachments (references; original export retained):", "",
                                      "```json", json.dumps(r["attachments"], ensure_ascii=False, indent=2), "```", ""])
                 self._project_file(con, f"conversations/{cid}.md", "\n".join(body), report)
             self._project_file(con, "INDEX.md", "\n".join(index) + "\n", report)
+            from .graph import project_graph
+            project_graph(self, con, report)
         return report
 
     def _project_file(self, con, relative, body, report):

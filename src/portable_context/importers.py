@@ -70,10 +70,20 @@ def chatgpt(data, instance, warnings):
             if m is None:
                 continue
             content = m.get("content", {})
+            parent_id = node.get('parent')
+            visited = set()
+            while parent_id in mapping and mapping[parent_id].get('message') is None:
+                if parent_id in visited:
+                    raise ValueError('ChatGPT mapping contains a parent cycle')
+                visited.add(parent_id)
+                parent_id = mapping[parent_id].get('parent')
+            parent_message = mapping.get(parent_id, {}).get('message')
+            if parent_message:
+                parent_id = parent_message.get('id', parent_id)
             yield event("chatgpt", instance, chat.get("id", chat.get("conversation_id")),
                         m.get("id", node_id), m.get("author", {}).get("role", "unknown"),
                         content.get("parts", content), {"node": node, "current_node": chat.get("current_node")},
-                        chat.get("title"), m.get("create_time"), node.get("parent"),
+                        chat.get("title"), m.get("create_time"), parent_id,
                         m.get("metadata", {}).get("attachments", []))
 
 
