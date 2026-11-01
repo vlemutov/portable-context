@@ -189,7 +189,7 @@ class DeploymentTests(unittest.TestCase):
             args = setup.ssh_args(folder, config)
         self.assertEqual(args, ['ssh', '-T', '-F', str((folder / 'ssh-config').resolve()), 'portable-context'])
         text = (folder / 'ssh-config').read_text()
-        self.assertIn('IdentityFile "' + key.as_posix() + '"', text)
+        self.assertIn('IdentityFile "' + key.resolve().as_posix() + '"', text)
         self.assertIn('StrictHostKeyChecking accept-new', text)
         self.assertIn('BatchMode yes', text)
 
