@@ -76,7 +76,9 @@ def install(payload):
     new.replace(current)
     bin_dir = root / 'bin'
     cmd = [str(current / 'venv/bin/python'), '-m', 'portable_context', '--home', str(memory)]
-    write(bin_dir / 'mcp', '#!/bin/sh\nexec ' + shlex.join(cmd + ['mcp', '--source-root', str(imports)]) + '\n', 0o700)
+    attachment_env = ('export PC_ATTACHMENT_S3_CONFIG=' + shlex.quote(str(root / 'backup-config.json')) + '\n'
+                      if (root / 'backup-config.json').exists() else '')
+    write(bin_dir / 'mcp', '#!/bin/sh\n' + attachment_env + 'exec ' + shlex.join(cmd + ['mcp', '--source-root', str(imports)]) + '\n', 0o700)
     write(bin_dir / 'status', '#!/bin/sh\nexec ' + shlex.join(cmd + ['status']) + '\n', 0o700)
     # One backup at a time; log contains status/errors, never S3 credentials.
     backup_cmd = [str(current / 'venv/bin/python'), '-m', 'portable_context.backup', 'create',

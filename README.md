@@ -3,8 +3,9 @@
 A shared memory operated through your agent: import selected conversations, preserve native
 relationships, build an evidence-linked Markdown wiki, and continue the work from another client.
 
-**Status: 0.3, with owner-operated deployment and recoverable backups.** No personal account exports
-or native agent installations have been tested yet. This is not a promise to recover deleted,
+**Status: 0.4, with export-time file passports, project entry pages and recoverable originals.**
+A real Codex conversation has been imported into the owner-operated Cloud.ru pilot. Broader provider
+adapters still depend on available exports and fixtures. This is not a promise to recover deleted,
 hidden, inaccessible, or unexported context. See [coverage and gaps](docs/connectors.md).
 
 [Start with the user journey](docs/user-journey.md) · [Русское введение](docs/README.ru.md) · [Connector coverage](docs/connectors.md)
@@ -68,8 +69,8 @@ separate capability; an MCP connection does not grant an application's full acco
 
 First choose where memory and MCP will live: [storage and setup guide](skills/portable-context/references/storage.md)
 (Russian, with runnable local/server examples). Each user runs their own instance; this repository
-does not provide hosted storage. Only filesystem/SQLite storage is implemented; S3 can hold external
-backups, not the live database. MCP-only clients can read `portable-context://setup`.
+does not provide hosted storage. SQLite runs on the server filesystem; optional S3 holds verified
+attachment objects and backup archives. MCP-only clients can read `portable-context://setup`.
 
 Python 3.11+ with SQLite FTS5. From this repository:
 
@@ -101,6 +102,35 @@ messages, media inside ZIPs, and notes. `.gitignore` is a backup precaution, not
 the agent select conversations. Import and enrichment are separate resumable jobs. The agent can
 read complete source revisions, update existing pages with conflict checks, and commit typed links.
 Read the [complete user journey](docs/user-journey.md) before configuring individual adapters.
+
+## Capture files while their context is available
+
+The exporter preserves project identity, file purpose/role/status and exact source-message revisions
+**before** losing source access. Every imported attachment gets a passport, including missing files;
+every conversation gets a project entry (explicitly unclassified if no project is known).
+Use `memory_project` for user selection or agent inference; native `project` remains source evidence.
+
+`python -m portable_context.capture create --records selected.json --destination private-capture --source-root /authorized/files`
+freezes selected normalized records, referenced local files, project pages and file passports into a
+portable directory. It does not crawl the workspace. Transfer the directory to the memory server and
+call `import_file_capture`, or stage records and use `store_attachment` for each selected original.
+See the [file capture and retrieval guide](skills/portable-context/references/files.md) for exact shapes,
+cross-platform commands, limits and S3 configuration.
+
+Byte-identical files share one SHA256-addressed original; filenames never prove identity or finality.
+Each original is included in backups. The owner-operated installer also enables private S3 objects at
+`attachments/<sha256>` using the existing bucket; successful transfer verifies downloaded bytes.
+Record-job completion, original transfer, S3 delivery, text extraction and wiki enrichment are separate
+states. Import reports expose missing originals rather than silently treating references as uploads.
+
+Recall starts with `list_projects` / `read_project`, then `list_files` / `read_file`, bounded text search
+and excerpts, and original bytes only when needed. UTF-8 text files <=2 MiB have automatic extraction;
+PDF/Office/images/audio require an external extractor or agent through `add_file_excerpts`, with a
+page/sheet/frame locator and method attribution. No bundled universal OCR is claimed.
+
+Backups currently contain full copies of registered originals. Deduplication within the live store
+does not deduplicate successive ZIPs. The installer retains seven local archives; remote retention
+remains owner-configured. Bulk multi-gigabyte imports should account for this storage multiplier.
 
 ## Register a source once
 

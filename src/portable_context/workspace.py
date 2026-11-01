@@ -72,6 +72,7 @@ class Workspace:
                     (now(), action, actor, canonical(details)))
 
     def describe(self):
+        from .catalog import summary as catalog_summary
         with self.store.connect() as con:
             workspace_id = con.execute("SELECT value FROM metadata WHERE key='workspace_id'").fetchone()[0]
             processed = {r[0]: r[1] for r in con.execute('SELECT * FROM coverage')}
@@ -79,6 +80,7 @@ class Workspace:
             pages = con.execute('SELECT count(*) FROM wiki_pages').fetchone()[0]
             jobs = [dict(r) for r in con.execute("SELECT id,kind,status FROM jobs WHERE status!='completed' ORDER BY created_at LIMIT 50")]
         return {'workspace_id': workspace_id, 'version': __version__, 'stats': self.store.stats(),
+                'catalog': catalog_summary(self.store),
                 'storage': {'backend': 'filesystem_sqlite', 'server_directory': str(self.store.root),
                             'placement': 'On the machine running this MCP process; not necessarily the client.',
                             'country': None, 'country_detection': 'Not available; verify the deployment region with the owner.',
@@ -261,7 +263,12 @@ class Workspace:
             if job['status'] != 'completed' and status == 'completed':
                 con.execute("UPDATE sources SET status='ready',last_error=NULL,updated_at=? WHERE id=?", (now(), job['source_id']))
                 self.activity(con, 'import_completed', 'system', {'job_id': job_id})
-        return self.job(job_id)
+        from .catalog import project_catalog, summary as catalog_summary
+        result = self.job(job_id)
+        result['catalog_projection'] = project_catalog(self.store)
+        result['workspace_catalog'] = catalog_summary(self.store)
+        result['completion_scope'] = 'Source records and file passports. Check missing_originals separately; this does not transfer client files.'
+        return result
 
     def start_enrichment(self, conversation_keys=None, chunk_size=20, request_id=None):
         spec = {'operation': 'enrichment', 'conversation_keys': sorted(conversation_keys) if conversation_keys is not None else None,

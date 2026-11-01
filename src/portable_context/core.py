@@ -76,6 +76,16 @@ def validate(record: dict) -> dict:
     if r.get('project') is not None:
         if not isinstance(r['project'], dict) or not isinstance(r['project'].get('id'), str) or not r['project']['id']:
             raise ValueError('project needs a nonempty id string')
+        if r['project'].get('name') is not None and not isinstance(r['project']['name'], str):
+            raise ValueError('project.name must be a string')
+    if r.get('memory_project') is not None:
+        p = r['memory_project']
+        if not isinstance(p, dict) or any(not isinstance(p.get(k), str) or not p[k].strip() for k in ('id', 'name', 'basis')):
+            raise ValueError('memory_project needs id, name and basis strings')
+        if p['basis'] not in ('user_selection', 'agent_inference'):
+            raise ValueError('memory_project.basis must be user_selection or agent_inference; native facts use project')
+        if not isinstance(p.get('summary', ''), str) or len(p.get('summary', '')) > 16000:
+            raise ValueError('memory_project.summary must be a string <=16000 chars')
     r["schema_version"] = 1
     return r
 
@@ -115,11 +125,14 @@ class Store:
             """)
             from .graph import initialize
             initialize(con)
+            from .catalog import initialize as initialize_catalog
+            initialize_catalog(con)
 
     @contextlib.contextmanager
     def connect(self):
         con = sqlite3.connect(self.db, timeout=30)
         con.row_factory = sqlite3.Row
+        con.create_function('unicode_casefold', 1, lambda value: str(value).casefold(), deterministic=True)
         try:
             with con:
                 yield con
@@ -155,7 +168,10 @@ class Store:
     def ingest(self, records: Iterable[dict], origin: str | None = None) -> dict:
         with self.connect() as con:
             con.execute("BEGIN IMMEDIATE")
-            return self._ingest(con, records, origin)
+            report = self._ingest(con, records, origin)
+        from .catalog import project_catalog
+        report['catalog_projection'] = project_catalog(self)
+        return report
 
     def _ingest(self, con, records, origin=None):
         """Internal transaction-aware ingestion shared by manual and collector jobs."""
@@ -181,6 +197,8 @@ class Store:
             con.execute("DELETE FROM messages_fts WHERE id=?", (mid,))
             con.execute("INSERT INTO messages_fts VALUES (?,?,?)", (mid, r["text"], r["title"]))
             index_record(con, r, mid, cid, rev)
+            from .catalog import index_record as index_catalog
+            index_catalog(con, r, mid, cid, rev)
             report["revised" if old else "inserted"] += 1
         return report
 
@@ -300,7 +318,7 @@ class Store:
         with self.connect() as con:
             con.execute("BEGIN IMMEDIATE")
             chats = con.execute("SELECT DISTINCT conversation FROM messages ORDER BY conversation").fetchall()
-            index = ["# Portable Context", "", "[[GRAPH|Relationship graph]] · [[wiki/INDEX|Knowledge wiki]]", "", "## Editable memory", ""]
+            index = ["# Portable Context", "", "[[projects/INDEX|Project entry pages]] · [[GRAPH|Relationship graph]] · [[wiki/INDEX|Knowledge wiki]]", "", "## Editable memory", ""]
             for note in sorted((self.root / "vault" / "memory").glob("*.md")):
                 index.append(f"- [[memory/{note.stem}]]")
             index.extend(["", "## Conversations", ""])
@@ -321,12 +339,14 @@ class Store:
                                                 ('message:' + row['id'],)):
                         body.extend([relation['predicate'] + ': ' + wiki_link(con, relation['object']), ''])
                     if r["attachments"]:
-                        body.extend(["Attachments (references; original export retained):", "",
+                        body.extend(["Attachment source references (see file passports for actual storage status):", "",
                                      "```json", json.dumps(r["attachments"], ensure_ascii=False, indent=2), "```", ""])
                 self._project_file(con, f"conversations/{cid}.md", "\n".join(body), report)
             self._project_file(con, "INDEX.md", "\n".join(index) + "\n", report)
             from .graph import project_graph
             project_graph(self, con, report)
+            from .catalog import project_catalog
+            project_catalog(self, con, report)
         return report
 
     def _project_file(self, con, relative, body, report):

@@ -136,6 +136,8 @@ def wiki_link(con, identifier):
         path = 'conversations/' + data['conversation'] + '#^m-' + data['message_key']
     elif row['kind'] == 'wiki':
         path = 'wiki/' + identifier.split(':', 1)[1]
+    elif row['kind'] == 'file':
+        path = 'files/' + identifier.split(':', 1)[1]
     else:
         path = 'entities/' + digest(identifier)
     return '[[' + path + '|' + label + ']]'

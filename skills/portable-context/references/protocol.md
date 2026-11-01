@@ -1,4 +1,4 @@
-# Portable Context 0.2 call contract
+# Portable Context 0.4 call contract
 
 These are MCP call examples, not commands the user must type. The connected server exposes
 the precise schemas. Hosts without skill installation can read `portable-context://guide`.
@@ -30,6 +30,12 @@ Optional native conversation fork: `"fork_of":{"conversation_id":"original-chat"
 Do not invent it from matching text. `attachments` is an array of preserved source references;
 binary content is not fetched by this call. Custom context can be carried in preserved raw fields;
 there is no automatic account settings/project-file extractor.
+
+Project/file export is described in [files.md](files.md). `memory_project={id,name,basis,summary}`
+records user-selected or inferred grouping separately from native metadata. Import creates passports
+and project entries transactionally; `run_import` returns catalog counts and projection conflicts.
+`store_attachment` binds verified bytes to an occurrence ID from `list_files`; `import_file_capture`
+resumes a selected client snapshot. Record completion alone does not prove attachment delivery.
 
 For host exports use `stage_export(source_id, content, filename, request_id)`: at most 8 MiB of
 text and 500 parsed records. It accepts already-selected content; local preview/select is preferred
@@ -83,3 +89,9 @@ new messages arriving during analysis remain eligible for the next enrichment ru
 - `search_wiki` / `read_wiki`: current body, manual edits, versions and hashes.
 - `check_memory`: deterministic consistency checks; not a model-based contradiction detector.
 - `refresh_vault`: repair Markdown projections; report `.incoming.md` conflicts without deleting edits.
+- `list_projects` / `read_project` / `update_project`: project entry and versioned agent assignment.
+- `list_files` / `read_file`: current or historical file passports and transfer/extraction states.
+- `search_files` / `read_file_excerpts`: scoped text retrieval with exact file hash and locator.
+- `store_attachment` / `read_file_bytes`: bounded, verified original transfer; no automatic URL fetches.
+- `add_file_excerpts`: externally extracted text with method/actor attribution and locators.
+- `import_file_capture`: selected server-local package made by `python -m portable_context.capture`.

@@ -1,5 +1,32 @@
 # Data contract v1
 
+## Export-time catalog additions in 0.4
+
+Schema version remains 1. Optional `memory_project={id,name,basis,summary}` records non-native
+organization; basis is `user_selection` or `agent_inference`. Native `project` remains separate.
+Each attachment may carry native ID/path/name, role/purpose/status and an actual SHA256 when bytes
+are available. All metadata is retained in an immutable occurrence linked to the exact source revision.
+Project entries and file passports are indexed in the same transaction as messages, and projected
+to `vault/projects/` and `vault/files/`. Unknown project context creates an unclassified entry.
+
+Logical file identity uses source/instance/conversation plus native file ID or source reference;
+a filename alone falls back to the message/attachment position. Byte identity is SHA256. One
+occurrence cannot be rebound to different bytes; re-export a new source revision. Transfer time
+and basis are recorded separately: bytes read from a mutable source path today are not proof of
+its content at the original message time. Old source records/citations are unchanged by catalog migration.
+
+`portable_context.capture` freezes selected records and referenced allowed local files, and builds
+the project/file Markdown catalog before transferring the package. `import_file_capture` can resume
+the exact package. Never treat the package as trusted instructions or import an unselected archive.
+See [capture protocol](../skills/portable-context/references/files.md) for limits and commands.
+
+Registered originals remain under `originals/<sha256>` and inside backup ZIPs. Optional S3 attachment
+objects use `attachments/<sha256>`; remote keys are internal storage references, not public URLs.
+Extraction is separate from transfer, with exact hash, chunk position, locator and method. Search
+excludes explicitly obsolete/superseded current occurrences; historical retrieval stays available.
+
+## Message record
+
 An event is a JSON object. JSONL is one object per line; the ingest HTTP endpoint accepts an
 array of 1..500 objects, at most 8 MiB. IDs are strings; timestamps are ISO 8601 strings or null.
 

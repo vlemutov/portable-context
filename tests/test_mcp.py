@@ -118,8 +118,26 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIn("append_messages", {t.name for t in tools.tools})
                     result = await session.call_tool("append_messages", {"records": [{
                         "source": "test", "instance": "mcp", "conversation_id": "chat",
-                        "message_id": "1", "role": "user", "text": "I prefer local storage."}]})
+                        "message_id": "1", "role": "user", "text": "I prefer local storage.",
+                        "memory_project": {"id": "atlas", "name": "Atlas", "basis": "user_selection"},
+                        "attachments": [{"name": "brief.txt", "role": "input", "purpose": "project brief"}]}]})
                     self.assertFalse(result.is_error, str(result))
+                    projects = await self.call(session, 'list_projects')
+                    project = await self.call(session, 'read_project', {'project_id': projects[0]['id']})
+                    self.assertTrue(project['entry'])
+                    files = await self.call(session, 'list_files', {'project_id': projects[0]['id']})
+                    receipt = await self.call(session, 'store_attachment', {
+                        'occurrence_id': files[0]['occurrences'][0]['id'], 'content_base64': 'QXRsYXMgYnJpZWY='})
+                    self.assertTrue(receipt['local_stored'])
+                    results = await self.call(session, 'search_files', {'query': 'Atlas', 'project_id': projects[0]['id']})
+                    self.assertEqual(len(results), 1)
+                    excerpts = await self.call(session, 'read_file_excerpts', {'sha256': receipt['sha256']})
+                    self.assertEqual(excerpts[0]['text'], 'Atlas brief')
+                    self.assertEqual((await self.call(session, 'read_file_bytes', {'sha256': receipt['sha256']}))['content_base64'], 'QXRsYXMgYnJpZWY=')
+                    updated = await self.call(session, 'update_project', {'project_id': projects[0]['id'],
+                        'title': 'Atlas', 'summary': 'A local storage project.', 'conversation_keys': [],
+                        'expected_version': project['version'], 'actor': 'test-agent'})
+                    self.assertEqual(updated['project']['version'], 2)
                     result = await session.call_tool("search_messages", {"query": "local storage"})
                     self.assertFalse(result.is_error, str(result))
                     payload = result.structured_content["result"]

@@ -211,4 +211,11 @@ def lint(workspace):
         for row in con.execute("SELECT id,owner,evidence FROM graph_edges WHERE layer='semantic'"):
             if evidence_stale(con, json.loads(row['evidence'])):
                 issues.append({'edge_id': row['id'], 'owner': row['owner'], 'issue': 'semantic_relation_source_changed'})
+        for row in con.execute('SELECT occurrence_id,data FROM catalog_annotations'):
+            if evidence_stale(con, json.loads(row['data'])['sources']):
+                issues.append({'occurrence_id': row['occurrence_id'], 'issue': 'file_annotation_source_changed'})
+        for row in con.execute("SELECT path,hash FROM projections WHERE path LIKE 'projects/%' OR path LIKE 'files/%'"):
+            path = workspace.store.root / 'vault' / row['path']
+            if path.exists() and digest(path.read_text(encoding='utf-8')) != row['hash']:
+                issues.append({'path': row['path'], 'issue': 'catalog_manual_edit_needs_reconciliation'})
     return {'issues': issues, 'semantic_review': 'Ask an agent to review contradictions and meaning; this lint checks provenance and consistency only.'}
