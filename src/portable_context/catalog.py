@@ -538,8 +538,10 @@ class Catalog:
                 WHERE catalog_chunks_fts MATCH ? AND EXISTS (
                     SELECT 1 FROM catalog_owned_occurrences o
                     LEFT JOIN catalog_annotations n ON n.occurrence_id=o.id
+                    LEFT JOIN index_policy ip ON ip.kind=json_extract(o.metadata,'$.kind')
                     WHERE o.sha256=c.sha256 AND o.current_source=1 AND (? IS NULL OR o.owner_project=?)
                     AND (? OR o.category='document')
+                    AND (o.category='document' OR coalesce(ip.enabled,1)=1)
                     AND (coalesce(json_extract(o.metadata,'$.searchable'),1)=1 OR json_extract(o.metadata,'$.kind')='service_event')
                     AND coalesce(json_extract(n.data,'$.status'),json_extract(o.metadata,'$.status'),'unknown') NOT IN ('superseded','obsolete'))
                 ORDER BY rank LIMIT ? OFFSET ?''', (expr, project_id, project_id,include_payloads,max(1, min(limit, 50)), max(0, offset)))]

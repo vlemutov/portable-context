@@ -192,7 +192,7 @@ class Manager:
         data=json.loads(self.run(['snapshots'])) or []
         with self.connect() as con:
             links={r['snapshot']:r['at'] for r in con.execute('SELECT snapshot,max(at) AS at FROM operations GROUP BY snapshot')}
-        return [{**s,'checkpoint_at':links.get(s['id'])} for s in data]
+        return [{**s,'checkpoint_at':links.get(s['id']) or (s['time'] if any(t.startswith('run:') for t in s.get('tags',[])) else None)} for s in data]
 
     def list(self,limit=20,offset=0):
         items=sorted(self.snapshots(),key=lambda s:(s['time'],s['id']),reverse=True)
@@ -201,8 +201,10 @@ class Manager:
             result=[]
             for s in items[offset:offset+limit]:
                 links=[dict(r) for r in con.execute('SELECT id,at,reason FROM operations WHERE snapshot=? ORDER BY at LIMIT 20',(s['id'],))]
+                if not links:
+                    links=[{'id':tag[4:],'at':s['time'],'reason':'snapshot_tag'} for tag in s.get('tags',[]) if tag.startswith('run:')]
                 result.append({'id':s['id'],'time':s['time'],'tags':s.get('tags',[]),'operations':links,
-                    'operations_count':con.execute('SELECT count(*) FROM operations WHERE snapshot=?',(s['id'],)).fetchone()[0],
+                    'operations_count':max(len(links),con.execute('SELECT count(*) FROM operations WHERE snapshot=?',(s['id'],)).fetchone()[0]),
                     'added_bytes':s.get('summary',{}).get('data_added_packed'),
                     'logical_bytes':s.get('summary',{}).get('total_bytes_processed')})
         return {'items':result,'total':len(items),'next_offset':offset+limit if offset+limit<len(items) else None}
@@ -330,7 +332,7 @@ class Manager:
                 else:
                     output=self.run(['backup','database-pages','originals','recovered-vault','manifest.json','memory-config.json',
                         '--host',manifest['workspace_id'],'--tag','content:'+manifest['fingerprint'],
-                        '--tag',reason],cwd=stage)
+                        '--tag',reason]+(['--tag','run:'+run_id] if run_id else []),cwd=stage)
                     records=[json.loads(line) for line in output.splitlines() if line.strip()]
                     result=next(r for r in records if r.get('message_type')=='summary')
                     sid=result['snapshot_id']; status='created'; added=result.get('data_added_packed')

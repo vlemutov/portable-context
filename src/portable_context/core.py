@@ -179,18 +179,17 @@ class Store:
                 os.fsync(out.fileno())
             value = h.hexdigest()
             target = folder / value
-            if not target.exists():
-                try:
+            with self.connect() as con:
+                # Serialize publication across processes as well as upload threads. Never replace
+                # an immutable hash while another attachment/extractor may be reading it (Windows).
+                con.execute('BEGIN IMMEDIATE')
+                if not target.exists():
                     os.replace(temp, target)
-                except (FileExistsError,PermissionError):
-                    # Concurrent identical transfers can race the existence check. Windows refuses
-                    # replacing a file another reader has open; accept only verified identical bytes.
-                    if not target.is_file():
-                        raise
+                else:
+                    if target.is_symlink(): raise ValueError('Original cannot be a symbolic link')
                     with target.open('rb') as existing:
                         if hashlib.file_digest(existing,'sha256').hexdigest()!=value:
-                            raise ValueError('Concurrent original differs from its checksum')
-            with self.connect() as con:
+                            raise ValueError('Existing original differs from its checksum')
                 con.execute("INSERT OR IGNORE INTO imports VALUES (?,?,?,?)",
                             (value, path.name, size, now()))
             return value

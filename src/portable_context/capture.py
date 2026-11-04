@@ -140,8 +140,6 @@ def capture(records, destination, allowed_roots=(), memory_project=None, max_fil
                 # A local path is read only if explicitly authorized by root, never by historical instructions.
                 source = Path(a['path']).expanduser().resolve() if isinstance(a.get('path'), str) else None
                 rule=runtime_exclusion(source,a) if source else None
-                if source and agent_workspace(source) and not rule:
-                    report['included_runtime_files']=report.get('included_runtime_files',0)+1
                 if (not permitted['tool_payloads' if a['category']=='source_payload' else 'document_bytes'] or
                         rule and str(source) not in explicitly_included):
                     reason='excluded_agent_workspace' if rule and str(source) not in explicitly_included else 'capture_policy'
@@ -195,6 +193,8 @@ def capture(records, destination, allowed_roots=(), memory_project=None, max_fil
                             a.update(sha256=sha, size=size, availability='captured')
                             a['export_observation'].update(blob='blobs/' + sha)
                             report['stored_occurrences'] += 1
+                            if agent_workspace(source) and not rule:
+                                report['included_runtime_files']=report.get('included_runtime_files',0)+1
                             attachments.append(a)
                             continue
                 elif source:

@@ -59,6 +59,16 @@ class Controls07(unittest.TestCase):
         denied=self.root/'denied'; capture(records,denied,[self.root],policy=Policy({'version':1,'default':'exclude','rules':[]}))
         self.assertEqual(json.loads((denied/'manifest.json').read_text())['blobs'],[])
 
+    def test_disabled_kind_cannot_borrow_index_from_identical_other_project_blob(self):
+        first=self.cat.create_project('service','Service'); second=self.cat.create_project('tool','Tool')
+        for i,(project,kind) in enumerate(((first,'service_event'),(second,'tool_result'))):
+            packet=self.root/str(i)
+            capture([record(conversation_id=str(i),payloads=[{'kind':kind,'block_index':0,'value':'sharedneedle'}])],packet,[self.root],
+                memory_project={'id':project['id'],'name':project['title'],'basis':'user_selection'})
+            import_capture(self.store,packet,[self.root],project_id=project['id'])
+        self.assertFalse(self.cat.search('sharedneedle',first['id'],include_payloads=True))
+        self.assertTrue(self.cat.search('sharedneedle',second['id'],include_payloads=True))
+
     def test_synthetic_storage_benchmark_default_is_smaller_than_service_index(self):
         records=[record(message_id=str(i),payloads=[{'kind':'service_event','block_index':0,
             'value':('synthetic progress observation '+str(i)+' ')*150}]) for i in range(40)]
@@ -102,5 +112,15 @@ class Controls07(unittest.TestCase):
             client.delete_object.assert_not_called()
             result=s3_cleanup(self.root,plan['confirmation']); self.assertEqual(len(result['removed']),2)
             self.assertEqual({c.kwargs['VersionId'] for c in client.delete_object.call_args_list},{'v1','v2'})
+
+    def test_concurrent_identical_original_publication_and_corruption(self):
+        from concurrent.futures import ThreadPoolExecutor
+        source=self.root/'document.txt'; source.write_text('shared immutable document')
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            hashes=list(pool.map(lambda _:self.store.archive(source),range(64)))
+        self.assertEqual(len(set(hashes)),1)
+        with self.store.connect() as con: self.assertEqual(con.execute('SELECT count(*) FROM imports').fetchone()[0],1)
+        (self.store.root/'originals'/hashes[0]).write_text('corrupt')
+        with self.assertRaisesRegex(ValueError,'checksum'): self.store.archive(source)
 
 if __name__=='__main__': unittest.main()
