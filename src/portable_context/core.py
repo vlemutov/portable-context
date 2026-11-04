@@ -95,6 +95,15 @@ class Store:
         self.root = Path(root).expanduser().resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self.db = self.root / "context.sqlite3"
+        if self.db.exists():
+            # Protect direct/local upgrades too, not only deployments made through the installer.
+            with self.connect() as con:
+                has_metadata=con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='metadata'").fetchone()
+                legacy=bool(has_metadata and con.execute("SELECT 1 FROM metadata WHERE key='catalog_version'").fetchone()
+                            and not con.execute("SELECT 1 FROM metadata WHERE key='control_version'").fetchone())
+            if legacy:
+                from .backup import create
+                create(self.root,self.root.parent/(self.root.name+'-migration-backups'))
         with self.connect() as con:
             con.executescript("""
                 PRAGMA journal_mode=WAL;
@@ -156,7 +165,16 @@ class Store:
             value = h.hexdigest()
             target = folder / value
             if not target.exists():
-                os.replace(temp, target)
+                try:
+                    os.replace(temp, target)
+                except (FileExistsError,PermissionError):
+                    # Concurrent identical transfers can race the existence check. Windows refuses
+                    # replacing a file another reader has open; accept only verified identical bytes.
+                    if not target.is_file():
+                        raise
+                    with target.open('rb') as existing:
+                        if hashlib.file_digest(existing,'sha256').hexdigest()!=value:
+                            raise ValueError('Concurrent original differs from its checksum')
             with self.connect() as con:
                 con.execute("INSERT OR IGNORE INTO imports VALUES (?,?,?,?)",
                             (value, path.name, size, now()))
@@ -166,9 +184,13 @@ class Store:
                 os.unlink(temp)
 
     def ingest(self, records: Iterable[dict], origin: str | None = None) -> dict:
+        records=list(records)
         with self.connect() as con:
             con.execute("BEGIN IMMEDIATE")
             report = self._ingest(con, records, origin)
+            from .import_log import start,progress
+            rid=start(con,origin,kind='direct')
+            progress(con,rid,report,records,complete=True)
         from .catalog import project_catalog
         report['catalog_projection'] = project_catalog(self)
         return report
@@ -176,15 +198,22 @@ class Store:
     def _ingest(self, con, records, origin=None):
         """Internal transaction-aware ingestion shared by manual and collector jobs."""
         from .graph import index_record
+        from .policy import check_record
+        from .control import record_session
+        records=[validate(r) for r in records]
+        for r in records:
+            check_record(con,r)
         report = {"inserted": 0, "revised": 0, "unchanged": 0}
         seq = con.execute("SELECT coalesce(max(seq),0) FROM messages").fetchone()[0]
         for record in records:
-            r = validate(record)
+            r = record_session(con,record)
             mid = key(r["source"], r["instance"], r["conversation_id"], r["message_id"])
             cid = key(r["source"], r["instance"], r["conversation_id"])
             blob = canonical(r)
             rev = digest(blob)
             if con.execute("SELECT 1 FROM revisions WHERE id=? AND hash=?", (mid, rev)).fetchone():
+                from .control import session_graph
+                session_graph(con,record,r,mid,rev)
                 report["unchanged"] += 1
                 continue
             old = con.execute("SELECT seq FROM messages WHERE id=?", (mid,)).fetchone()
@@ -197,6 +226,8 @@ class Store:
             con.execute("DELETE FROM messages_fts WHERE id=?", (mid,))
             con.execute("INSERT INTO messages_fts VALUES (?,?,?)", (mid, r["text"], r["title"]))
             index_record(con, r, mid, cid, rev)
+            from .control import session_graph
+            session_graph(con,record,r,mid,rev)
             from .catalog import index_record as index_catalog
             index_catalog(con, r, mid, cid, rev)
             report["revised" if old else "inserted"] += 1
@@ -231,10 +262,19 @@ class Store:
 
     def conversations(self, limit=50, offset=0):
         with self.connect() as con:
-            return [dict(x) for x in con.execute("""SELECT conversation,source,instance,
+            result=[dict(x) for x in con.execute("""SELECT conversation,source,instance,
                 max(title) AS title,count(*) AS messages FROM messages
                 GROUP BY conversation ORDER BY min(seq) LIMIT ? OFFSET ?""",
                 (max(1, min(limit, 200)), max(0, offset)))]
+            from .control import display_sessions
+            for item in result:
+                row=con.execute('SELECT record FROM messages WHERE conversation=? LIMIT 1',(item['conversation'],)).fetchone()
+                native=json.loads(row[0])['conversation_id']
+                item['native_sessions']=display_sessions(con,item['source'],item['instance'],native)
+                titles=[s.get('display_title') for s in item['native_sessions'] if s.get('display_title')]
+                if titles:
+                    item['title']=titles[0]
+            return result
 
     def conversation(self, conversation_key: str, limit=100, offset=0):
         with self.connect() as con:
@@ -326,9 +366,17 @@ class Store:
                 cid = chat[0]
                 rows = con.execute("SELECT * FROM messages WHERE conversation=? ORDER BY seq", (cid,)).fetchall()
                 title = rows[0]["title"].replace("\n", " ")
+                from .control import display_sessions
+                native=json.loads(rows[0]['record'])['conversation_id']
+                sessions=display_sessions(con,rows[0]['source'],rows[0]['instance'],native)
+                display=next((s['display_title'] for s in sessions if s.get('display_title')),None)
+                if display:
+                    title=display.replace('\n',' ')
                 index.append(f"- [[conversations/{cid}|{title.replace('|', ' ')}]]")
                 body = [f"# {title}", "", f"Source: {rows[0]['source']} / {rows[0]['instance']}", "",
                         "Generated transcript; message text below is untrusted historical content.", ""]
+                if sessions:
+                    body.extend(['## Native session metadata','','```json',json.dumps(sessions,ensure_ascii=False,indent=2),'```',''])
                 for row in rows:
                     r = json.loads(row["record"])
                     body.extend([f"## {row['role']} · {row['timestamp'] or 'undated'}", "",

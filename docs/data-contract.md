@@ -1,5 +1,46 @@
 # Data contract v1
 
+## 0.6 controls (capture manifest remains v2)
+
+Source revision hashes and historical records are not rewritten by schema migration. Catalog
+occurrences gain a persisted `category` (`document` / `source_payload`), inferred on migration
+from known kinds/native payload IDs. Embedded images are documents. Classification is per occurrence;
+identical stored bytes may be referenced in both categories. Default file lists/search use current
+documents; explicit history/payload flags and exact passport access remain available.
+
+Projects gain optional `group_id`, backed by stable versioned group IDs. Groups are not ACLs.
+`capture_policies` stores versioned future-write permissions for workspace/project targets.
+The effective permissions intersect; configured rules never come from source message instructions.
+
+Manifests add `capture_scopes` (source/instance/conversation/project and declared permission axes),
+`policy_fingerprint`, sender-reported `executor`, excluded-record/occurrence counts and rule counts.
+Capture time/policy fingerprint/executor belong to the manifest, not message identity. Local records
+may carry stable `capture_context` (working directory/selected project) for send-time policy checks.
+Byte-free excluded references use `availability=excluded` and an explicit observation reason.
+Local policy is enforced before packing and again before connecting. Server declaration checks run
+before accepting chunks and actual-record checks before staging/ingesting. A declaration cannot prove
+the absence of sensitive facts in prose or the real path used by an owner-authorized custom client.
+
+`import_runs` is a materialized operation summary. `import_events` is an append-only lifecycle log;
+the database rejects its update/delete. Batch checkpoints and message counts commit together, while
+delivery receipts continue to track bytes. Repeated network chunks are not separate import runs.
+Known legacy receipts/jobs are backfilled once, with unknown executor and explicit timing basis.
+
+Claude adapter v2 emits `conversation_metadata` separately from message content. The server retains
+native session IDs, title histories and observed relocations/transitions in `source_sessions`, then
+removes that presentation metadata before hashing a canonical message revision. Last nonempty custom
+title takes precedence over AI title. Appending a title event does not revise existing messages.
+`observed_after_session` records a native-ID transition within a transcript, not a proven fork or
+continuation. Explicit source `forkOf` remains the only supported Claude fork evidence.
+
+Migration maps native IDs found in 0.5 source records to their existing conversation identity. These
+explicit legacy aliases keep old keys/citations and existing project assignments stable. Fresh memories
+can group native sessions separately. Ambiguous legacy mappings or unmapped reused UUIDs are rejected
+for explicit reconciliation. Native views expose grouping differences; migration never guesses a split.
+
+See [0.6 controls](../skills/portable-context/references/controls.md) for policy resolution, runtime
+exclusions, upgrade order and what these controls do not promise.
+
 ## Capture protocol 2 in 0.5
 
 The message schema remains 1. A capture-v2 manifest lists sources, bounded JSON parts and blobs

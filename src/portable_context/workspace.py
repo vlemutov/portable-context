@@ -68,6 +68,8 @@ class Workspace:
                     id TEXT PRIMARY KEY, updated_at TEXT NOT NULL, report TEXT NOT NULL);
             """)
             con.execute("INSERT OR IGNORE INTO metadata VALUES ('workspace_id',?)", (str(uuid.uuid4()),))
+            from .import_log import backfill
+            backfill(con)
         self.reconcile_sources()
 
     def reconcile_sources(self):
@@ -93,6 +95,7 @@ class Workspace:
 
     def describe(self):
         from .catalog import summary as catalog_summary
+        from .import_log import list_imports
         with self.store.connect() as con:
             workspace_id = con.execute("SELECT value FROM metadata WHERE key='workspace_id'").fetchone()[0]
             processed = {r[0]: r[1] for r in con.execute('SELECT * FROM coverage')}
@@ -100,6 +103,10 @@ class Workspace:
             pages = con.execute('SELECT count(*) FROM wiki_pages').fetchone()[0]
             jobs = [dict(r) for r in con.execute("SELECT id,kind,status FROM jobs WHERE status!='completed' ORDER BY created_at LIMIT 50")]
         return {'workspace_id': workspace_id, 'version': __version__, 'stats': self.store.stats(),
+                'skill':{'recommended_version':'0.6.0','minimum_version':'0.6.0',
+                         'compatibility':'Capabilities govern write operations; older skills can still perform legacy reads.'},
+                'capabilities':['capture_policy_v1','file_categories_v1','project_groups_v1','import_log_v1','native_sessions_v1'],
+                'recent_imports':list_imports(self.store,3),
                 'capture_protocol': {'versions':[1,2],'chunk_bytes':1024*1024,'max_blob_bytes':512*1024*1024,
                     'upload_enabled':bool(self.allowed_roots),'allowed_import_directories':list(map(str,self.allowed_roots))},
                 'catalog': catalog_summary(self.store),
@@ -181,10 +188,14 @@ class Workspace:
                 raise ValueError('request_id already used with a different selection or payload')
             return self.job(row['id'])
 
-    def _create_job(self, kind, source_id, spec, payloads, details, request_id=None):
+    def _create_job(self, kind, source_id, spec, payloads, details, request_id=None, executor=None):
         job_id = str(uuid.uuid4())
         with self.store.connect() as con:
             con.execute('BEGIN IMMEDIATE')
+            if kind=='import':
+                from .policy import check_record
+                for r in payloads:
+                    check_record(con,r)
             if request_id is not None:
                 old = con.execute('SELECT id,specification FROM jobs WHERE request_id=?', (request_id,)).fetchone()
                 if old:
@@ -197,9 +208,14 @@ class Workspace:
             con.executemany('INSERT INTO job_items(job_id,position,payload) VALUES (?,?,?)',
                             [(job_id, i, canonical(p)) for i, p in enumerate(payloads)])
             self.activity(con, 'job_created', 'system', {'job_id': job_id, 'kind': kind, 'items': len(payloads)})
+            if kind=='import':
+                from .import_log import start,progress
+                start(con,'job:'+job_id,who=executor,run_id=job_id,kind='host_or_source_job')
+                if not payloads:
+                    progress(con,job_id,dict(inserted=0,revised=0,unchanged=0),[],complete=True)
         return job_id
 
-    def start_import(self, source_id, conversation_keys=None, include_forks=False, request_id=None):
+    def start_import(self, source_id, conversation_keys=None, include_forks=False, request_id=None, executor=None):
         source = self.source(source_id)
         spec = {'source_id': source_id, 'conversation_keys': sorted(conversation_keys) if conversation_keys is not None else None,
                 'include_forks': include_forks, 'operation': 'import'}
@@ -209,10 +225,10 @@ class Workspace:
         selected = select_records(records, conversation_keys, include_forks)
         report.update({'available_messages': len(records), 'selected_messages': len(selected),
                        'retention': 'Only selected normalized records and their raw fields are snapshotted. Whole source files/media are not copied.'})
-        job_id = self._create_job('import', source_id, spec, selected, report, request_id)
+        job_id = self._create_job('import', source_id, spec, selected, report, request_id, executor)
         return self.job(job_id)
 
-    def stage_records(self, source_id, records, request_id):
+    def stage_records(self, source_id, records, request_id, executor=None):
         """Host bridge / collector entry: committed snapshot before ingestion, no source guessing."""
         source = self.source(source_id)
         if source['mode'] != 'host':
@@ -233,10 +249,10 @@ class Workspace:
         if existing := self._existing(request_id, spec):
             return existing
         jid = self._create_job('import', source_id, spec, records,
-                               {'coverage': 'Only records supplied by the host; account completeness is unknown.'}, request_id)
+                               {'coverage': 'Only records supplied by the host; account completeness is unknown.'}, request_id, executor)
         return self.job(jid)
 
-    def stage_export(self, source_id, content, filename, request_id):
+    def stage_export(self, source_id, content, filename, request_id, executor=None):
         source = self.source(source_id)
         if source['mode'] != 'host' or source['format'] not in FORMATS:
             raise ValueError('Use a host source with one of the supported archive formats')
@@ -245,7 +261,7 @@ class Workspace:
         warnings = []
         records = list(parse(content, source['format'], source['instance'], filename, warnings))
         # The caller must have selected the content BEFORE transmitting it.
-        result = self.stage_records(source_id, records, request_id)
+        result = self.stage_records(source_id, records, request_id, executor)
         return {**result, 'parser_warnings': warnings}
 
     def job(self, job_id):
@@ -273,10 +289,13 @@ class Workspace:
             job = con.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone()
             if not job or job['kind'] != 'import':
                 raise ValueError('Expected import job')
+            from .import_log import start,progress
+            start(con,'job:'+job_id,run_id=job_id,kind='host_or_source_job')
             rows = con.execute("SELECT * FROM job_items WHERE job_id=? AND state='pending' ORDER BY position LIMIT ?",
                                (job_id, max(1, min(batch_size, 500)))).fetchall()
             for row in rows:
                 result = self.store._ingest(con, [json.loads(row['payload'])], 'job:' + job_id)
+                progress(con,job_id,result,[json.loads(row['payload'])],accumulate=True,batch_key=str(row['position']))
                 con.execute("UPDATE job_items SET state='completed',result=? WHERE job_id=? AND position=?",
                             (canonical(result), job_id, row['position']))
             pending = con.execute("SELECT 1 FROM job_items WHERE job_id=? AND state!='completed' LIMIT 1", (job_id,)).fetchone()
@@ -285,6 +304,7 @@ class Workspace:
             if job['status'] != 'completed' and status == 'completed':
                 con.execute("UPDATE sources SET status='ready',last_error=NULL,updated_at=? WHERE id=?", (now(), job['source_id']))
                 self.activity(con, 'import_completed', 'system', {'job_id': job_id})
+                progress(con,job_id,dict(inserted=0,revised=0,unchanged=0),[],complete=True)
         from .catalog import project_catalog, summary as catalog_summary
         result = self.job(job_id)
         result['catalog_projection'] = project_catalog(self.store)

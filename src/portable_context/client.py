@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import sys
 
-from .core import atomic_write, canonical
+from .core import atomic_write, canonical, digest
 from .capture import capture, load_package
 
 
@@ -41,18 +41,50 @@ async def connect(config,profile):
     return await with_session(entry,check)
 
 
-async def send(profile,directory,project_id=None):
+async def send(profile,directory,project_id=None,policy=None,include_paths=(),agent=None):
     profile=Path(profile)
     connection=json.loads(profile.read_text(encoding='utf-8'))
     directory=Path(directory).resolve()
-    manifest,_=load_package(directory)
+    manifest,records=load_package(directory)
+    delivery_key=digest(canonical([connection['workspace_id'],manifest,project_id]))
+    pending_file=profile.parent/'deliveries'/(delivery_key+'.json')
+    from .policy import Policy,agent_workspace
+    from .control import category
+    from . import __version__
+    policy=policy or Policy.load(None)
+    included={str(Path(p).expanduser().resolve()) for p in include_paths}
+    for r in records:
+        permitted,_=policy.select(r,project_id)
+        if not permitted['conversation']:
+            raise ValueError('Current local policy excludes a packaged conversation; prepare a new snapshot')
+        if not permitted['tool_payloads'] and (r.get('raw') or r.get('role')=='tool' and r.get('text')):
+            raise ValueError('Current local policy forbids packaged tool/raw content; prepare again')
+        for a in r.get('attachments',[]):
+            if not isinstance(a,dict) or not a.get('export_observation',{}).get('blob'):
+                continue
+            if not permitted['tool_payloads' if category(a)=='source_payload' else 'document_bytes']:
+                raise ValueError('Current local policy forbids packaged bytes; prepare again')
+            if a.get('path') and agent_workspace(a['path']) and str(Path(a['path']).resolve()) not in included:
+                raise ValueError('Package contains excluded agent workspace bytes; prepare again or explicitly include that path')
     async def delivery(session):
         status=await call(session,'memory_status')
         if status['workspace_id']!=connection['workspace_id']:
             raise ValueError('Connected to a different workspace; delivery refused')
         if 2 not in status.get('capture_protocol',{}).get('versions',[]):
             raise ValueError('Server needs Portable Context 0.5 or newer before capture-v2 delivery')
-        started=await call(session,'begin_capture_upload',{'manifest':manifest})
+        options={'manifest':manifest}
+        modern='capture_policy_v1' in status.get('capabilities',[])
+        if not modern:
+            raise ValueError('Client 0.6 requires server 0.6 capabilities for safe policy and native identity handling; upgrade the server first')
+        if modern:
+            options.update(project_id=project_id,executor={'client':'portable-context','version':__version__,'agent':agent})
+        import uuid
+        pending=json.loads(pending_file.read_text(encoding='utf-8')) if pending_file.exists() else {}
+        if not pending or pending.get('complete'):
+            pending={'run_id':str(uuid.uuid4()),'complete':False,'workspace_id':connection['workspace_id']}
+        atomic_write(pending_file,canonical(pending))
+        options['run_id']=pending['run_id']
+        started=await call(session,'begin_capture_upload',options)
         uid=started['upload_id']
         offsets={}
         offset=0
@@ -90,17 +122,29 @@ async def send(profile,directory,project_id=None):
             await call(session,'upload_capture_chunks',{'upload_id':uid,'chunks':batch})
         previous=None
         while True:
-            result=await call(session,'finish_capture_upload',{'upload_id':uid,'project_id':project_id})
+            finish={'upload_id':uid,'project_id':project_id}
+            if modern:
+                finish['run_id']=started['run_id']
+            result=await call(session,'finish_capture_upload',finish)
             atomic_write(profile.parent/'last-delivery.json',canonical(result))
             print(canonical({'phase':'import','remaining':result['remaining_transfers'],'complete':result['complete']}),file=sys.stderr,flush=True)
             if result['complete']:
+                pending['complete']=True
+                atomic_write(pending_file,canonical(pending))
                 break
             marker=(result['remaining_transfers'],result['s3'].get('failed',0))
             if marker==previous:
                 raise ValueError('Delivery made no progress; local originals remain saved. Inspect last-delivery.json and retry after repair')
             previous=marker
         return result
-    return await with_session(connection['connection'],delivery)
+    try:
+        return await with_session(connection['connection'],delivery)
+    except Exception as exc:
+        # Do not persist tool error text: it can contain source data or credentials.
+        pending=json.loads(pending_file.read_text(encoding='utf-8')) if pending_file.exists() else {}
+        atomic_write(profile.parent/'last-delivery.json',canonical({**pending,'complete':False,
+            'status':'failed','error_type':type(exc).__name__,'retry':'Run send with the same package and profile'}))
+        raise
 
 
 def main(argv=None):
@@ -124,6 +168,9 @@ def main(argv=None):
             c.add_argument('--thinking',choices=['exclude','archive'],default='exclude')
             c.add_argument('--project-id')
             c.add_argument('--project-name')
+            c.add_argument('--policy',type=Path)
+            c.add_argument('--include-path',type=Path,action='append',default=[])
+            c.add_argument('--agent',help='Self-reported invoking agent, not authenticated identity')
     c=sub.add_parser('connect')
     c.add_argument('--config',type=Path,required=True)
     c.add_argument('--profile',type=Path,required=True)
@@ -131,6 +178,9 @@ def main(argv=None):
     c.add_argument('--profile',type=Path,required=True)
     c.add_argument('--package',type=Path,required=True)
     c.add_argument('--project-id',help='Existing server project ID; not a source-native ID')
+    c.add_argument('--policy',type=Path)
+    c.add_argument('--include-path',type=Path,action='append',default=[])
+    c.add_argument('--agent')
     c=sub.add_parser('upgrade-capture',help='Repair 0.5.0 payload IDs without re-reading source sessions')
     c.add_argument('--package',type=Path,required=True)
     c.add_argument('--destination',type=Path,required=True)
@@ -140,7 +190,9 @@ def main(argv=None):
         result=upgrade_capture(args.package,args.destination)
     elif args.command in ('connect','send'):
         import asyncio
-        result=asyncio.run(connect(args.config,args.profile) if args.command=='connect' else send(args.profile,args.package,args.project_id))
+        from .policy import Policy
+        result=asyncio.run(connect(args.config,args.profile) if args.command=='connect' else
+            send(args.profile,args.package,args.project_id,Policy.load(args.policy),args.include_path,args.agent))
     else:
         from .claude_code import discover,convert
         if args.format=='claude-code':
@@ -155,7 +207,7 @@ def main(argv=None):
                 reports=[]
                 for g in groups:
                     if g['conversation_id'] in wanted:
-                        converted,report=convert(g['paths'],args.instance,g['title'],args.thinking,g['subagent'])
+                        converted,report=convert(g['paths'],args.instance,g['title'],args.thinking,g['subagent'],g['conversation_id'])
                         records+=converted
                         reports.append(report)
         else:
@@ -183,7 +235,11 @@ def main(argv=None):
                 if not args.project_id or not args.project_name:
                     p.error('Both --project-id and --project-name are required')
                 project={'id':args.project_id,'name':args.project_name,'basis':'user_selection'}
-            result=capture(records,args.destination,args.source_root,project,secret_policy=args.secrets,adapter_report=reports)
+            from .policy import Policy
+            from . import __version__
+            result=capture(records,args.destination,args.source_root,project,secret_policy=args.secrets,adapter_report=reports,
+                policy=Policy.load(args.policy),include_paths=args.include_path,
+                executor={'client':'portable-context','version':__version__,'agent':args.agent})
     print(json.dumps(result,ensure_ascii=False,indent=2))
 
 

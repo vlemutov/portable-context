@@ -206,6 +206,11 @@ def candidate(name: str, fmt: str):
 
 
 def import_path(store: Store, path: Path, fmt: str, instance: str):
+    # Whole-archive retention cannot prove scoped policy compliance before saving bytes.
+    from .policy import axes,FULL
+    with store.connect() as con:
+        if any(axes(json.loads(r[0]))!=FULL for r in con.execute('SELECT policy FROM capture_policies')):
+            raise ValueError('Restricted memory requires a locally prepared capture; whole-archive import is disabled')
     if fmt not in FORMATS:
         raise ValueError("Unknown format")
     if not instance.strip():

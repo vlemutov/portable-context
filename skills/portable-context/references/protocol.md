@@ -1,7 +1,30 @@
-# Portable Context 0.4 call contract
+# Portable Context 0.6 call contract
 
 These are MCP call examples, not commands the user must type. The connected server exposes
 the precise schemas. Hosts without skill installation can read `portable-context://guide`.
+
+## Controls added in 0.6
+
+Read [controls.md](controls.md) before changing capture permissions or migrating groups.
+`memory_status` exposes capability IDs, recommended skill version and three recent import operations.
+`list_files`/`search_files` now default to documents; pass `include_payloads=true` for source copies.
+`include_history` remains independent of category. `read_file` accepts any exact known passport ID.
+
+- `list_project_groups`, `save_project_group(identifier,title,actor,expected_version=0)`;
+  `list_projects(group_id=...)`, `create_project(group_id=...)`, `update_project(group_id=...,clear_group=false)`.
+  Omitted group retains membership. `preview_project_group_migration` is read-only.
+- `get_capture_policy(project_id?)`, `set_capture_policy(permissions,actor,expected_version,project_id?)`.
+  Permissions are boolean `conversation`, `tool_payloads`, `document_bytes`; omitted project is workspace-wide.
+- `list_imports(limit,offset)`, `read_import_events(run_id,limit,offset)`; executor labels are self-reported.
+  Scope previews are bounded; `read_import_scope(run_id,field,limit,offset)` pages conversations/projects/sources.
+- `list_source_sessions(source?,limit,offset)` exposes native IDs, title/relocation history and legacy aliases.
+
+0.6 `begin_capture_upload(manifest,project_id?,executor?,run_id?)` preflights policy and returns both `upload_id`
+and `run_id`. Keep that run ID on every `finish_capture_upload(upload_id,project_id?,run_id)` during
+the same delivery. Target project is fixed at begin; a changed policy can refuse later chunks.
+A separate user-initiated replay starts a separate run; retrying a completed finish is idempotent.
+Generate and save a UUID `run_id` before begin for safe retries even if the begin response is lost.
+Host `stage_records`, `stage_export` and `start_import` also accept `executor={client,version,agent}`.
 
 ## Source and import
 

@@ -185,14 +185,14 @@ class Release05Tests(unittest.TestCase):
         second=import_capture(self.store,folder,[self.root],transfer_limit=2)
         self.assertTrue(second['complete'])
         self.assertEqual(self.store.stats()['revisions'],3)
-        self.assertEqual(len(Catalog(self.store).files()),3)
+        self.assertEqual(len(Catalog(self.store).files(include_payloads=True)),3)
 
     def test_payload_passports_are_message_scoped_even_with_same_block_index(self):
         records=[dict(event(),message_id=str(i),payloads=[{'block_index':0,'kind':'tool_result','value':{'text':str(i)}}]) for i in range(2)]
         folder=self.root/'payload-identities'
         capture(records,folder)
         import_capture(self.store,folder,[self.root])
-        files=Catalog(self.store).files()
+        files=Catalog(self.store).files(include_payloads=True)
         self.assertEqual(len(files),2)
         self.assertTrue(all(len(f['occurrences'])==1 for f in files))
 

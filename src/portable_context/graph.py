@@ -64,6 +64,11 @@ def index_record(con, r, mid, cid, revision):
             link(chat,'subagent_of',ancestor)
     if r.get('parent_id'):
         parent_key = key(*prefix, r['conversation_id'], r['parent_id'])
+        if not con.execute('SELECT 1 FROM messages WHERE id=?',(parent_key,)).fetchone():
+            candidates=con.execute('SELECT id FROM messages WHERE source=? AND instance=? AND message_id=?',
+                                   (*prefix,r['parent_id'])).fetchall()
+            if len(candidates)==1:
+                parent_key=candidates[0][0]
         parent = 'message:' + parent_key
         node(con, parent, 'message', r['parent_id'], {'conversation': cid, 'message_key': parent_key}, False)
         link(message, 'replies_to', parent)
@@ -130,11 +135,27 @@ def read_graph(store, node_id=None, layer=None, limit=100, offset=0):
         return {'nodes': nodes, 'edges': edges, 'next_offset': offset + len(rows) if len(rows) == max(1, min(limit, 500)) else None}
 
 
+def payload_node(con,identifier):
+    row=con.execute('SELECT kind,data FROM graph_nodes WHERE id=?',(identifier,)).fetchone()
+    if not row:
+        return False
+    if row['kind']=='attachment':
+        from .control import category
+        reference=json.loads(row['data']).get('reference')
+        return isinstance(reference,dict) and category(reference)=='source_payload'
+    if row['kind']=='file':
+        return not con.execute("SELECT 1 FROM catalog_occurrences WHERE file_id=? AND category='document'",
+                               (identifier.split(':',1)[1],)).fetchone()
+    return False
+
+
 def wiki_link(con, identifier):
     row = con.execute('SELECT * FROM graph_nodes WHERE id=?', (identifier,)).fetchone()
     if not row:
         return '`' + identifier + '`'
     label = row['label'].replace('|', ' ').replace('[', '(').replace(']', ')').replace('\n', ' ')[:100]
+    if payload_node(con,identifier):
+        return '`Source payload: '+label+'` (retrieve the exact occurrence through MCP)'
     data = json.loads(row['data'])
     if row['kind'] == 'conversation':
         path = 'conversations/' + identifier.split(':', 1)[1]
@@ -151,13 +172,26 @@ def wiki_link(con, identifier):
 
 def project_graph(store, con, report):
     index = ['# Graph', '', 'Structural relationships come from source fields. Semantic relationships are agent-authored.', '']
-    for row in con.execute("SELECT * FROM graph_nodes WHERE kind IN ('project','attachment') ORDER BY id"):
+    for row in con.execute("SELECT * FROM graph_nodes WHERE kind IN ('project','attachment','source_session') ORDER BY id"):
+        if payload_node(con,row['id']):
+            rel='entities/'+digest(row['id'])+'.md'
+            path=store.root/'vault'/rel
+            previous=con.execute('SELECT hash FROM projections WHERE path=?',(rel,)).fetchone()
+            if path.exists():
+                if previous and digest(path.read_text(encoding='utf-8'))==previous[0]:
+                    path.unlink()
+                    con.execute('DELETE FROM projections WHERE path=?',(rel,))
+                else:
+                    report['conflicts'].append(rel)
+            continue
         body = ['# ' + row['label'].replace('\n', ' '), '', '```json', row['data'], '```', '', '## Connections', '']
         for e in con.execute('SELECT * FROM graph_edges WHERE subject=? OR object=?', (row['id'], row['id'])):
             body.append('- ' + wiki_link(con, e['subject']) + ' — ' + e['predicate'] + ' → ' + wiki_link(con, e['object']))
         store._project_file(con, 'entities/' + digest(row['id']) + '.md', '\n'.join(body) + '\n', report)
     # Relationships between messages remain in the machine-readable graph; keep overview compact.
     for e in con.execute("SELECT * FROM graph_edges WHERE predicate NOT IN ('part_of','replies_to','has_attachment') ORDER BY layer,id"):
+        if payload_node(con,e['subject']) or payload_node(con,e['object']):
+            continue
         stale = ' [source changed]' if evidence_stale(con, json.loads(e['evidence'])) else ''
         index.append('- ' + wiki_link(con, e['subject']) + ' — ' + e['predicate'] + ' → ' + wiki_link(con, e['object']) + stale)
     store._project_file(con, 'GRAPH.md', '\n'.join(index) + '\n', report)

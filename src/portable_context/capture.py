@@ -19,7 +19,12 @@ from .privacy import screen_value, screen_bytes
 
 
 def capture(records, destination, allowed_roots=(), memory_project=None, max_file_bytes=512 * 1024 * 1024,
-            secret_policy='block', part_bytes=4 * 1024 * 1024, adapter_report=None):
+            secret_policy='block', part_bytes=4 * 1024 * 1024, adapter_report=None, policy=None, include_paths=(), executor=None):
+    from .policy import Policy,agent_workspace
+    from .control import category
+    from . import __version__
+    policy=policy or Policy.load(None)
+    explicitly_included={str(Path(p).expanduser().resolve()) for p in include_paths}
     if secret_policy not in ('block', 'redact'):
         raise ValueError('secret_policy must be block or redact')
     destination = Path(destination).expanduser().resolve()
@@ -29,12 +34,36 @@ def capture(records, destination, allowed_roots=(), memory_project=None, max_fil
     destination.parent.mkdir(parents=True, exist_ok=True)
     report = {'stored_occurrences': 0, 'missing_occurrences': 0, 'unique_bytes': 0, 'unique_blobs': 0,
               'redacted_records': 0, 'quarantined_files': 0, 'opaque_files': 0, 'excluded_thinking_chars': 0,
-              'omitted_chars': 0, 'screening': 'best_effort_local', 'secret_policy': secret_policy}
+              'omitted_chars': 0, 'screening': 'best_effort_local', 'secret_policy': secret_policy,
+              'excluded_records':0,'excluded_occurrences':0,'exclusion_rules':{}}
+    scopes={}
+    def excluded(reason):
+        report['excluded_occurrences']+=1
+        report['exclusion_rules'][reason]=report['exclusion_rules'].get(reason,0)+1
     with tempfile.TemporaryDirectory(prefix='.capture-', dir=destination.parent) as tmp:
         folder = Path(tmp) / 'package'
         (folder / 'blobs').mkdir(parents=True)
         normalized = []
         for original in records:
+            original=json.loads(canonical(original))
+            if memory_project is not None:
+                original['memory_project']=memory_project
+            permitted,rules=policy.select(original)
+            if not permitted['conversation']:
+                report['excluded_records']+=1
+                for rule in rules or ['default']:
+                    report['exclusion_rules'][rule]=report['exclusion_rules'].get(rule,0)+1
+                continue
+            context={'cwd':(original.get('raw') or {}).get('cwd'),
+                     'project':(original.get('memory_project') or {}).get('id')}
+            original['capture_context']=context
+            if not permitted['tool_payloads']:
+                original['raw']={}
+                if original.get('role')=='tool':
+                    original['text']=''
+            for payload in original.get('payloads',[]):
+                if not permitted['document_bytes' if payload.get('kind')=='image' else 'tool_payloads']:
+                    payload['value']=None
             r, findings = screen_value(json.loads(canonical(original)), secret_policy=='redact')
             if findings and secret_policy=='block':
                 raise ValueError('Secret screening blocked record; categories: '+','.join(sorted(findings)))
@@ -44,7 +73,7 @@ def capture(records, destination, allowed_roots=(), memory_project=None, max_fil
             r = validate(r)
             # Preserve large fields in the object store, without repeating them inside every record part.
             for field in ('raw','text'):
-                if len(canonical(r[field]).encode('utf-8'))>32768:
+                if permitted['tool_payloads'] and len(canonical(r[field]).encode('utf-8'))>32768:
                     r.setdefault('payloads',[]).append({'block_index':field,'kind':'full_'+field,'value':r[field]})
                     r[field]=({'archived_payload':'payload:'+r['message_id']+':'+field} if field=='raw' else r[field][:2000]+'\n[Full text archived as payload:'+r['message_id']+':text]')
                     r.setdefault('completeness',{})[field+'_archived']=True
@@ -60,6 +89,14 @@ def capture(records, destination, allowed_roots=(), memory_project=None, max_fil
                 if payload_id in payload_ids:
                     raise ValueError('Duplicate payload identity within one message')
                 payload_ids.add(payload_id)
+                kind=payload.get('kind','payload')
+                payload_category='document' if kind=='image' else 'source_payload'
+                if not permitted['document_bytes' if payload_category=='document' else 'tool_payloads']:
+                    attachments.append({'file_id':payload_id,'name':kind+'.json','kind':kind,
+                        'category':payload_category,'availability':'excluded',
+                        'export_observation':{'reason':'capture_policy','method':'embedded_source_payload'}})
+                    excluded('capture_policy')
+                    continue
                 value=payload['value']
                 data=canonical(value).encode('utf-8')
                 name=payload.get('kind','payload')+'.json'
@@ -74,7 +111,7 @@ def capture(records, destination, allowed_roots=(), memory_project=None, max_fil
                         raise ValueError('Secret screening blocked embedded payload; categories: '+','.join(sorted(found)))
                     report['quarantined_files']+=1
                     report['missing_occurrences']+=1
-                    attachments.append({'file_id':payload_id, 'name':name,
+                    attachments.append({'file_id':payload_id, 'name':name,'kind':kind,'category':payload_category,
                                         'availability':'unavailable','export_observation':{'reason':'secret_detected'}})
                     continue
                 sha=hashlib.sha256(data).hexdigest()
@@ -85,7 +122,7 @@ def capture(records, destination, allowed_roots=(), memory_project=None, max_fil
                     report['unique_bytes']+=len(data)
                 report['stored_occurrences']+=1
                 report['opaque_files']+=scan in ('opaque','partial')
-                attachments.append({'file_id':payload_id, 'name':name,
+                attachments.append({'file_id':payload_id, 'name':name,'category':payload_category,
                     'kind':payload.get('kind','payload'),'role':'reference','purpose':'Exact source payload',
                     'status':'unknown','searchable':payload.get('searchable',True),'sha256':sha,'size':len(data),
                     'availability':'captured','screening':scan,
@@ -96,10 +133,20 @@ def capture(records, destination, allowed_roots=(), memory_project=None, max_fil
                 a.setdefault('role', 'unknown')
                 a.setdefault('purpose', 'unknown')
                 a.setdefault('status', 'unknown')
+                a['category']=category(a)
                 # Observation time belongs to the package/receipt, never to source revision identity.
                 a['export_observation'] = {'method': 'portable-context-capture'}
                 # A local path is read only if explicitly authorized by root, never by historical instructions.
                 source = Path(a['path']).expanduser().resolve() if isinstance(a.get('path'), str) else None
+                rule=agent_workspace(source) if source else None
+                if (not permitted['tool_payloads' if a['category']=='source_payload' else 'document_bytes'] or
+                        rule and str(source) not in explicitly_included):
+                    reason='excluded_agent_workspace' if rule and str(source) not in explicitly_included else 'capture_policy'
+                    a['availability']='excluded'
+                    a['export_observation'].update(reason=reason,rule=rule if reason=='excluded_agent_workspace' else 'permissions')
+                    excluded(rule if reason=='excluded_agent_workspace' else reason)
+                    attachments.append(a)
+                    continue
                 reason = 'no_local_path'
                 if source and any(source.is_relative_to(root) for root in roots):
                     reason = 'missing_file'
@@ -154,6 +201,16 @@ def capture(records, destination, allowed_roots=(), memory_project=None, max_fil
                 report['missing_occurrences'] += 1
                 attachments.append(a)
             r['attachments'] = attachments
+            scope={k:r[k] for k in ('source','instance','conversation_id')}
+            for field in ('project','memory_project'):
+                if field in r:
+                    scope[field]=r[field]
+            sid=canonical(scope)
+            if sid not in scopes:
+                scopes[sid]={**scope,'permissions':dict(permitted)}
+            else:
+                for axis in permitted:
+                    scopes[sid]['permissions'][axis] |= permitted[axis]
             normalized.append(r)
         # Passports and entry pages exist inside the capture itself, before remote import.
         draft = Store(folder / 'catalog')
@@ -182,7 +239,9 @@ def capture(records, destination, allowed_roots=(), memory_project=None, max_fil
         manifest = {'format': 'portable-context-capture-2', 'created_at': now(),
                     'parts':parts,'blobs':blobs,
                     'sources':[{'source':s,'instance':i} for s,i in sorted({(r['source'],r['instance']) for r in normalized})],
-                    'messages': len(normalized), **report,
+                    'messages': len(normalized), **report, 'capture_scopes':list(scopes.values()),
+                    'policy_fingerprint':policy.fingerprint,
+                    'executor':executor or {'client':'portable-context','version':__version__,'agent':None},
                     'adapter_report':adapter_report,
                     'note': 'These are currently accessible file bytes; original message-time bytes cannot be inferred from a mutable path.'}
         (folder / 'manifest.json').write_text(canonical(manifest), encoding='utf-8')
@@ -191,7 +250,7 @@ def capture(records, destination, allowed_roots=(), memory_project=None, max_fil
     return {'directory': str(destination), **manifest}
 
 
-def import_capture(store, directory, allowed_roots, project_id=None, transfer_limit=None):
+def import_capture(store, directory, allowed_roots, project_id=None, transfer_limit=None, run_id=None):
     directory = Path(directory).expanduser().resolve()
     roots = [Path(p).expanduser().resolve() for p in allowed_roots]
     if not any(directory.is_relative_to(root) for root in roots):
@@ -210,6 +269,17 @@ def import_capture(store, directory, allowed_roots, project_id=None, transfer_li
     manifest,records=load_package(directory,verify_blobs=previous is None)
     if project_id:
         Catalog(store).project(project_id)
+    from .policy import check_record,check_manifest
+    from .control import record_session
+    from .import_log import start,progress
+    session_metadata=[r.get('conversation_metadata') for r in records]
+    with store.connect() as con:
+        con.execute('BEGIN IMMEDIATE')
+        check_manifest(con,manifest,project_id)
+        for r in records:
+            check_record(con,r,project_id)
+        records=[record_session(con,r) for r in records]
+        run_id=start(con,package_id,manifest.get('executor'),run_id)
     # A bundle may reference ONLY its own hashed blobs, never arbitrary source paths.
     transfers = []
     for r in records:
@@ -233,7 +303,11 @@ def import_capture(store, directory, allowed_roots, project_id=None, transfer_li
                 for r in records[start:start+100]:
                     con.execute("INSERT OR REPLACE INTO catalog_assignments VALUES (?,?,'agent_assignment')",
                                 (key(r['source'],r['instance'],r['conversation_id']),project_id))
-            result = store._ingest(con, records[start:start + 100], 'capture:' + package_id)
+            batch=[dict(r,conversation_metadata=meta) if meta else r
+                   for r,meta in zip(records[start:start+100],session_metadata[start:start+100])]
+            result = store._ingest(con, batch, 'capture:' + package_id)
+            progress(con,run_id,result,records[start:start+100],accumulate=True,
+                     batch_key=digest(canonical(records[start:start+100])))
         for k in totals:
             totals[k] += result[k]
     catalog = Catalog(store, [directory])
@@ -261,10 +335,11 @@ def import_capture(store, directory, allowed_roots, project_id=None, transfer_li
             'attachments': list(receipts.values()), 'missing_at_capture': manifest.get('missing_occurrences'),
             'complete':complete,'remaining_transfers':len(transfers)-len(receipts),'project_id':project_id,
             'status':'complete' if complete else 'in_progress',
-            'package_id':package_id, 'captured_at':manifest.get('created_at'),
-            'completeness':{k:manifest.get(k,0) for k in ('missing_occurrences','omitted_chars','excluded_thinking_chars','redacted_records','quarantined_files','opaque_files')},
+            'package_id':package_id,'run_id':run_id, 'captured_at':manifest.get('created_at'),
+            'completeness':{k:manifest.get(k,0) for k in ('missing_occurrences','omitted_chars','excluded_thinking_chars','redacted_records','quarantined_files','opaque_files','excluded_records','excluded_occurrences','exclusion_rules')},
             'note': 'Safe to resume the same immutable package; inspect each S3 status separately.'}
     with store.connect() as con:
+        progress(con,run_id,totals,records,complete=complete,receipt=result)
         con.execute('INSERT OR REPLACE INTO capture_receipts VALUES (?,?,?)',(result['package_id'],now(),canonical(result)))
         if complete and manifest.get('repaired_from'):
             old=con.execute('SELECT report FROM capture_receipts WHERE id=?',(manifest['repaired_from'],)).fetchone()

@@ -51,15 +51,32 @@ class Uploads:
             raise ValueError('Unsafe upload directory')
         return p
 
-    def begin(self,manifest):
+    def begin(self,manifest,project_id=None,executor=None,run_id=None):
         files=validate_manifest(manifest)
         identifier=digest(canonical(manifest))
         folder=self.folder(identifier)
         with self.workspace.store.connect() as con:
             con.execute('BEGIN IMMEDIATE')
+            from .policy import check_manifest
+            from .import_log import start
+            check_manifest(con,manifest,project_id)
+            run_id=start(con,identifier,executor or manifest.get('executor'),run_id=run_id)
             folder.mkdir(exist_ok=True)
             atomic_write(folder/'manifest.json',canonical(manifest))
-        return {'upload_id':identifier,'files':len(files),'max_chunk_bytes':MAX_CHUNK}
+            target=folder/'target.json'
+            selection={'project_id':project_id}
+            if target.exists() and json.loads(target.read_text())!=selection:
+                raise ValueError('Package already has another target project; use explicit project reassignment')
+            atomic_write(target,canonical(selection))
+        return {'upload_id':identifier,'run_id':run_id,'files':len(files),'max_chunk_bytes':MAX_CHUNK}
+
+    def preflight(self,folder,con):
+        from .policy import check_manifest
+        manifest=json.loads((folder/'manifest.json').read_text(encoding='utf-8'))
+        target=folder/'target.json'
+        project_id=json.loads(target.read_text())['project_id'] if target.exists() else None
+        check_manifest(con,manifest,project_id)
+        return project_id
 
     def status(self,identifier,offset=0,limit=100):
         folder=self.folder(identifier)
@@ -90,6 +107,7 @@ class Uploads:
         replies=[]
         with self.workspace.store.connect() as con:
             con.execute('BEGIN IMMEDIATE')
+            self.preflight(folder,con)
             for chunk in chunks:
                 name=chunk['path']
                 if name not in files:
@@ -119,10 +137,21 @@ class Uploads:
                 replies.append({'path':name,'offset':p.stat().st_size})
         return {'files':replies}
 
-    def finish(self,identifier,project_id=None):
+    def finish(self,identifier,project_id=None,run_id=None):
         folder=self.folder(identifier)
+        with self.workspace.store.connect() as con:
+            selected=self.preflight(folder,con)
+            if selected!=project_id:
+                raise ValueError('Target project differs from preflight; begin the upload with its target project')
         # Capture preflight validates every record and blob before modifying memory.
-        result=import_capture(self.workspace.store,folder,self.workspace.allowed_roots,project_id,transfer_limit=25)
+        try:
+            result=import_capture(self.workspace.store,folder,self.workspace.allowed_roots,project_id,transfer_limit=25,run_id=run_id)
+        except Exception:
+            if run_id:
+                from .import_log import progress
+                with self.workspace.store.connect() as con:
+                    progress(con,run_id,dict(inserted=0,revised=0,unchanged=0),[],error='capture_import_failed')
+            raise
         return compact_receipt(result)
 
 

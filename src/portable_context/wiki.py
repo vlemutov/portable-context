@@ -211,7 +211,7 @@ def lint(workspace, issue_type=None, limit=50, offset=0):
             issues.append({'node': dict(row), 'issue': 'referenced_source_not_imported' if used else 'unused_placeholder'})
         for row in con.execute('''SELECT o.id,o.metadata,o.availability FROM catalog_occurrences o
             JOIN messages m ON m.id=o.message_key AND m.revision=o.revision WHERE o.availability!='stored' '''):
-            issues.append({'occurrence_id':row['id'],'issue':'missing_original',
+            issues.append({'occurrence_id':row['id'],'issue':'capture_excluded' if row['availability']=='excluded' else 'missing_original',
                 'reason':json.loads(row['metadata']).get('export_observation',{}).get('reason',row['availability'])})
         for row in con.execute('SELECT id,record FROM messages'):
             r=json.loads(row['record'])
