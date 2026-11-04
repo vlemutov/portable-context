@@ -36,7 +36,18 @@ def install(payload):
     fcntl.flock(install_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     if (root / 'bin/backup').exists():
         # Preserve a recoverable version before an upgrade can migrate the database.
-        run([str(root / 'bin/backup')], stdout=sys.stderr)
+        if (root/'restic-config.json').exists():
+            run([str(root / 'bin/backup')], stdout=sys.stderr)
+        else:
+            # The legacy wrapper also deletes old local ZIPs. Migration must not run that cleanup
+            # before the first verified restic restore; create the extra ZIP directly instead.
+            legacy_lock=(root/'backup.lock').open('a')
+            fcntl.flock(legacy_lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            command=[str(root/'current/venv/bin/python'),'-m','portable_context.backup','create',
+                '--home',str(root/'memory'),'--directory',str(root/'backups')]
+            if (root/'backup-config.json').exists(): command+=['--s3-config',str(root/'backup-config.json')]
+            run(command,stdout=sys.stderr)
+            legacy_lock.close()
     # Never replace a running release in-place. A failed install leaves current working.
     data = base64.b64decode(payload['bundle'], validate=True)
     digest = hashlib.sha256(data).hexdigest()
