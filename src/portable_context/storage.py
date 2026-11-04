@@ -45,8 +45,10 @@ def refresh_s3(store,config_path):
     config=json.loads(Path(config_path).read_text(encoding='utf-8')); client=s3_client(config)
     groups={name:{'current_bytes':0,'noncurrent_bytes':0,'objects':0,'delete_markers':0} for name in ('attachments','backups','restic','other')}
     try:
-        versioning=client.get_bucket_versioning(Bucket=config['bucket']).get('Status','Disabled')
-        if versioning in ('Enabled','Suspended'):
+        try: versioning=client.get_bucket_versioning(Bucket=config['bucket']).get('Status','Disabled')
+        except Exception: versioning='Unknown'
+        # Object-reader credentials can list versions without reading administrative bucket settings.
+        if versioning!='Disabled':
             pages=client.get_paginator('list_object_versions').paginate(Bucket=config['bucket'])
             for page in pages:
                 for item in page.get('Versions',[]):
@@ -57,7 +59,7 @@ def refresh_s3(store,config_path):
             for page in client.get_paginator('list_objects_v2').paginate(Bucket=config['bucket']):
                 for item in page.get('Contents',[]):
                     group=groups.get(item['Key'].split('/')[0],groups['other']); group['current_bytes']+=item['Size']; group['objects']+=1
-        result={'status':'measured','at':now(),'versioning':versioning,'prefixes':groups}
+        result={'status':'measured','at':now(),'versioning':versioning,'version_inventory':versioning!='Disabled','prefixes':groups}
     except Exception:
         result={'status':'unavailable','at':now(),'reason':'Check provider permissions/connectivity; credentials and diagnostics withheld'}
     atomic_write(store.root.parent/'storage-inventory.json',canonical(result))

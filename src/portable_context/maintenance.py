@@ -69,8 +69,9 @@ def s3_cleanup_preview(root):
     config=json.loads((root/'backup-config.json').read_text(encoding='utf-8')); client=s3_client(config)
     items=[]
     try:
-        versioning=client.get_bucket_versioning(Bucket=config['bucket']).get('Status','Disabled')
-        if versioning in ('Enabled','Suspended'):
+        try: versioning=client.get_bucket_versioning(Bucket=config['bucket']).get('Status','Disabled')
+        except Exception: versioning='Unknown'
+        if versioning!='Disabled':
             for page in client.get_paginator('list_object_versions').paginate(Bucket=config['bucket'],Prefix='backups/'):
                 for entry in page.get('Versions',[]):
                     if re.fullmatch(r'backups/[^/]+\.zip',entry['Key']):

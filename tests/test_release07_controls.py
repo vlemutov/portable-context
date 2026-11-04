@@ -103,7 +103,7 @@ class Controls07(unittest.TestCase):
         from unittest.mock import MagicMock
         config=self.root/'backup-config.json'; config.write_text(canonical({'bucket':'test'}))
         manager=MagicMock(); manager.state=self.root/'state'
-        client=MagicMock(); client.get_bucket_versioning.return_value={'Status':'Enabled'}
+        client=MagicMock(); client.get_bucket_versioning.side_effect=PermissionError('bucket settings denied')
         client.get_paginator.return_value.paginate.return_value=[{'Versions':[
             {'Key':'backups/2026010'+str(i)+'.zip','VersionId':'v'+str(i),'Size':100,'ETag':'e'} for i in range(1,5)]}]
         with patch('portable_context.maintenance.configured',return_value=manager),patch('portable_context.maintenance.restic_verified',return_value=True),patch('portable_context.backup.s3_client',return_value=client):
@@ -112,6 +112,20 @@ class Controls07(unittest.TestCase):
             client.delete_object.assert_not_called()
             result=s3_cleanup(self.root,plan['confirmation']); self.assertEqual(len(result['removed']),2)
             self.assertEqual({c.kwargs['VersionId'] for c in client.delete_object.call_args_list},{'v1','v2'})
+
+    def test_inventory_without_bucket_settings_permission(self):
+        from unittest.mock import MagicMock
+        from portable_context.storage import refresh_s3
+        config=self.root/'s3.json'; config.write_text(canonical({'bucket':'test'}))
+        client=MagicMock(); client.get_bucket_versioning.side_effect=PermissionError('settings denied')
+        client.get_paginator.return_value.paginate.return_value=[{'Versions':[
+            {'Key':'restic/pack','IsLatest':True,'Size':100},
+            {'Key':'restic/pack','IsLatest':False,'Size':30}],
+            'DeleteMarkers':[{'Key':'backups/old.zip'}]}]
+        with patch('portable_context.backup.s3_client',return_value=client): result=refresh_s3(self.store,config)
+        self.assertEqual(result['status'],'measured'); self.assertEqual(result['versioning'],'Unknown')
+        self.assertEqual(result['prefixes']['restic']['noncurrent_bytes'],30)
+        self.assertEqual(result['prefixes']['restic']['current_bytes'],100)
 
     def test_concurrent_identical_original_publication_and_corruption(self):
         from concurrent.futures import ThreadPoolExecutor
