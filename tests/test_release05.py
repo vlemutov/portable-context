@@ -68,8 +68,18 @@ class Release05Tests(unittest.TestCase):
     def test_embedded_image_decoded_and_screened(self):
         token='sk-'+('b'*30)
         b={'type':'image','source':{'type':'base64','media_type':'image/png','data':base64.b64encode(token.encode()).decode()}}
-        with self.assertRaisesRegex(ValueError,'payload'):
+        with self.assertRaisesRegex(ValueError,'screening'):
             capture([event(payloads=[{'kind':'image','value':b}])],self.root/'blocked')
+
+    def test_nested_tool_image_is_screened_before_archiving(self):
+        token='sk-'+('c'*30)
+        image={'type':'image','source':{'type':'base64','data':base64.b64encode(token.encode()).decode()}}
+        value={'content':[image]}
+        scrubbed,findings=screen_value(value,redact=True)
+        self.assertTrue(findings)
+        self.assertNotIn(image['source']['data'],canonical(scrubbed))
+        with self.assertRaisesRegex(ValueError,'screening'):
+            capture([event(payloads=[{'kind':'tool_result','value':value}])],self.root/'blocked-nested')
 
     def test_corrupt_blob_is_rejected_before_messages(self):
         folder=self.root/'capture'
@@ -185,6 +195,30 @@ class Release05Tests(unittest.TestCase):
         os.utime(f,(1234567890,1234567890))
         capture([r],self.root/'two',[f])
         self.assertEqual(load_package(self.root/'one')[1],load_package(self.root/'two')[1])
+
+    def test_local_web_archive_selection_never_packages_unselected_chat(self):
+        import io
+        import contextlib
+        import zipfile
+        from portable_context.client import main
+        archive=self.root/'claude.zip'
+        chats=[{'uuid':cid,'name':cid,'chat_messages':[{'uuid':'m','sender':'human','text':body}]}
+               for cid,body in [('chosen','selected context'),('other','DO_NOT_UPLOAD')]]
+        with zipfile.ZipFile(archive,'w') as z:
+            z.writestr('conversations.json',json.dumps(chats))
+        with contextlib.redirect_stdout(io.StringIO()):
+            main(['prepare','--format','claude-web','--root',str(archive),'--instance','test',
+                  '--session','chosen','--destination',str(self.root/'selected')])
+        manifest,records=load_package(self.root/'selected')
+        self.assertEqual(manifest['messages'],1)
+        self.assertNotIn('DO_NOT_UPLOAD',canonical(records))
+
+    def test_redacted_structured_credentials_are_idempotent(self):
+        clean,found=screen_value({'api_key':'sk-'+('d'*30)},redact=True)
+        self.assertTrue(found)
+        again,found=screen_value(clean,redact=True)
+        self.assertEqual(clean,again)
+        self.assertFalse(found)
 
 
 class ClientProtocolTests(unittest.IsolatedAsyncioTestCase):

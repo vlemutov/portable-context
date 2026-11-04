@@ -1,5 +1,6 @@
 """Local, deterministic best-effort secret screening. Never return matched values."""
 import io
+import base64
 import json
 import re
 import zipfile
@@ -15,11 +16,12 @@ PATTERNS = [
 def screen_text(text, redact=False):
     counts = {}
     for kind, pattern in PATTERNS:
-        count = len(pattern.findall(text))
+        matches=[m for m in pattern.finditer(text) if '[REDACTED:' not in m.group(0)]
+        count = len(matches)
         if count:
             counts[kind] = count
             if redact:
-                text = pattern.sub('[REDACTED:' + kind + ']', text)
+                text = pattern.sub(lambda m:m.group(0) if '[REDACTED:' in m.group(0) else '[REDACTED:' + kind + ']', text)
     return text, counts
 
 
@@ -35,10 +37,21 @@ def screen_value(value, redact=False):
         if isinstance(v, list):
             return [walk(x) for x in v]
         if isinstance(v, dict):
+            if v.get('type')=='base64' and isinstance(v.get('data'),str):
+                try:
+                    decoded=base64.b64decode(v['data'],validate=True)
+                except ValueError:
+                    counts['invalid_embedded_data']=counts.get('invalid_embedded_data',0)+1
+                    return {'type':'omitted','reason':'invalid_embedded_data'} if redact else v
+                found,_=screen_bytes(decoded)
+                for k,n in found.items():
+                    counts[k]=counts.get(k,0)+n
+                if found and redact:
+                    return {'type':'omitted','reason':'secret_detected'}
             out = {}
             for k, val in v.items():
                 # Structured credentials may not be adjacent after recursion.
-                if re.fullmatch(r'(?i)(password|passwd|secret_key|access_token|api_key|auth_secret)', k) and isinstance(val, str) and len(val) >= 8:
+                if re.fullmatch(r'(?i)(password|passwd|secret_key|access_token|api_key|auth_secret)', k) and isinstance(val, str) and len(val) >= 8 and not val.startswith('[REDACTED:'):
                     counts['credential'] = counts.get('credential', 0) + 1
                     out[walk(k)] = '[REDACTED:credential]' if redact else val
                 else:
