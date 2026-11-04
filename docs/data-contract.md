@@ -190,3 +190,22 @@ it never deletes or merges original transcripts heuristically.
 Upgrading 0.1 adds tables and backfills structural edges; old notes remain in `vault/memory` and
 available through the legacy tools. They are not silently rewritten into wiki pages. Back up the
 complete directory before upgrading and avoid older writers after upgrade.
+# Additions in 0.7
+
+Capture-v2 optionally carries `project_snapshot` with binding_id, project_id, workspace_id, instance,
+explicit `basis=user_selection`, root, captured_at, positive monotonic sequence, files and snapshot_id
+(SHA256 of canonical snapshot without snapshot_id). Records parts are empty arrays. File observations
+include relative_path, name, size, availability, reason or sha256, category=document and explicit unknown
+role/purpose/status. Blob hashing, path limits, workspace and current policy validation apply before import.
+
+Root bindings and project-owned file versions are separate from chat messages. Current state follows
+the largest accepted binding sequence; older/replayed snapshots retain evidence without moving current
+backward. Missing files are marked absent, not deleted. File edges cite file_occurrence and revision.
+Passports expose project-folder provenance. Semantic wiki conversation enrichment still uses message
+citations; do not invent a message citation for a folder-only file. Use passport/hash references.
+
+`restic_backups_v1`, `storage_report_v1`, `index_policy_v1`, `project_folders_v1` advertise capability.
+Backup policy and append-only operation journal live outside SQLite memory to avoid recursive changes.
+Restore format `portable-context-restic-1` includes database_parts, exact database_sha256, workspace_id,
+counts, original hashes and manifest file hashes. Reconstruct pages before opening SQLite. Credentials
+are excluded. See [recovery and folder contracts](../skills/portable-context/references/recovery-and-folders.md).

@@ -12,6 +12,19 @@ FILE_TOOLS = {'Read':'input', 'Write':'output', 'Edit':'output', 'MultiEdit':'ou
 SERVICE_TYPES = {'file-history-snapshot', 'queue-operation', 'progress', 'last-prompt', 'summary',
                  'custom-title', 'ai-title', 'agent-name', 'agent-color', 'pr-link', 'saved_hook_context','relocated'}
 
+def executed_script(command,cwd):
+    # Recognize a conservative literal invocation; never execute or expand historical shell text.
+    pattern=r'''(?:^|[;&|]\s*)\s*(?:python(?:\d+(?:\.\d+)?)?|py|node|Rscript|bash|sh)\s+(?:-u\s+)?(?:"([^"]+)"|'([^']+)'|([^\s;&|]+))'''
+    result=[]
+    for match in re.finditer(pattern,command):
+        path=next(x for x in match.groups() if x is not None)
+        if any(c in path for c in ('$','`','%')) or Path(path).suffix.lower() not in ('.py','.js','.r','.sh'): continue
+        if not Path(path).is_absolute():
+            if not cwd: continue
+            path=str(Path(cwd)/path)
+        result.append(path)
+    return result
+
 
 def default_root():
     return Path(os.environ.get('CLAUDE_CONFIG_DIR', str(Path.home()/'.claude'))) / 'projects'
@@ -106,6 +119,15 @@ def discover(root=None):
                 g[field]+=[x for x in meta[field] if x not in g[field]]
             choices=[t for t in g['titles'] if t['kind']=='customTitle'] or g['titles']
             g['title']=choices[-1]['value'] if choices else cid
+    for g in groups.values():
+        roots=set()
+        for source in g['paths']:
+            # Derive from the actual transcript directory, never reverse an encoded cwd name.
+            parent=Path(source).parent
+            if parent.name=='subagents': parent=parent.parent.parent
+            candidate=parent/'memory'
+            if candidate.is_dir() and not candidate.is_symlink(): roots.add(str(candidate.resolve()))
+        g['memory_roots']=sorted(roots)
     return list(groups.values())
 
 
@@ -163,6 +185,10 @@ def convert(paths, instance, title=None, thinking='exclude', subagent=False, ses
                         if isinstance(fp,str):
                             attachments.append({'path':fp,'role':FILE_TOOLS[name],'purpose':'Referenced by '+name,
                                                 'status':'unknown','metadata_basis':'source_tool_call','reference_kind':'tool_file'})
+                    elif isinstance(inp,dict) and name in ('Bash','bash','shell') and isinstance(inp.get('command'),str):
+                        for fp in executed_script(inp['command'],item.get('cwd')):
+                            attachments.append({'path':fp,'role':'reference','purpose':'Script invoked by source tool call',
+                                'status':'unknown','metadata_basis':'source_tool_call','reference_kind':'executed_script'})
                 elif kind=='tool_result':
                     parts.append('[Tool result: '+str(b.get('tool_use_id','unknown'))+']')
                 elif kind not in ('thinking','redacted_thinking'):

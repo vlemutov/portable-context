@@ -8,7 +8,7 @@ import re
 import time
 import uuid
 
-from .core import Store, canonical, digest, key, now, validate
+from .core import Store, canonical, digest, key, now, validate, guarded_import
 from . import __version__
 from .sources import GUIDES, catalog, conversation_key, scan_source, select_records
 from .importers import FORMATS, parse
@@ -96,6 +96,8 @@ class Workspace:
     def describe(self):
         from .catalog import summary as catalog_summary
         from .import_log import list_imports
+        from .restic_backup import configured
+        backup_manager=configured(self.store.root)
         with self.store.connect() as con:
             workspace_id = con.execute("SELECT value FROM metadata WHERE key='workspace_id'").fetchone()[0]
             processed = {r[0]: r[1] for r in con.execute('SELECT * FROM coverage')}
@@ -103,9 +105,11 @@ class Workspace:
             pages = con.execute('SELECT count(*) FROM wiki_pages').fetchone()[0]
             jobs = [dict(r) for r in con.execute("SELECT id,kind,status FROM jobs WHERE status!='completed' ORDER BY created_at LIMIT 50")]
         return {'workspace_id': workspace_id, 'version': __version__, 'stats': self.store.stats(),
-                'skill':{'recommended_version':'0.6.0','minimum_version':'0.6.0',
+                'skill':{'recommended_version':'0.7.0','minimum_version':'0.7.0',
                          'compatibility':'Capabilities govern write operations; older skills can still perform legacy reads.'},
-                'capabilities':['capture_policy_v1','file_categories_v1','project_groups_v1','import_log_v1','native_sessions_v1'],
+                'capabilities':['capture_policy_v1','file_categories_v1','project_groups_v1','import_log_v1','native_sessions_v1',
+                    'project_folders_v1','restic_backups_v1','storage_report_v1','index_policy_v1'],
+                'backup':backup_manager.status() if backup_manager else {'configured':False,'note':'Managed pre-import protection requires backup setup'},
                 'recent_imports':list_imports(self.store,3),
                 'capture_protocol': {'versions':[1,2],'chunk_bytes':1024*1024,'max_blob_bytes':512*1024*1024,
                     'upload_enabled':bool(self.allowed_roots),'allowed_import_directories':list(map(str,self.allowed_roots))},
@@ -283,7 +287,13 @@ class Workspace:
             return [dict(r) for r in con.execute('SELECT id,kind,status,source_id,created_at,updated_at FROM jobs ORDER BY created_at DESC LIMIT ? OFFSET ?',
                                                 (max(1, min(limit, 100)), max(0, offset)))]
 
+    @guarded_import
     def run_import(self, job_id, batch_size=100):
+        job=self.job(job_id)
+        if job['kind']!='import': raise ValueError('Expected import job')
+        if job['status']!='completed':
+            from .restic_backup import protection
+            protection(self.store.root,job_id)
         with self.store.connect() as con:
             con.execute('BEGIN IMMEDIATE')
             job = con.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone()

@@ -48,10 +48,19 @@ async def send(profile,directory,project_id=None,policy=None,include_paths=(),ag
     manifest,records=load_package(directory)
     delivery_key=digest(canonical([connection['workspace_id'],manifest,project_id]))
     pending_file=profile.parent/'deliveries'/(delivery_key+'.json')
-    from .policy import Policy,agent_workspace
+    from .policy import Policy,agent_workspace,runtime_exclusion
     from .control import category
     from . import __version__
     policy=policy or Policy.load(None)
+    if manifest.get('project_snapshot'):
+        snap=manifest['project_snapshot']
+        if snap['workspace_id']!=connection['workspace_id']: raise ValueError('Project package belongs to another memory')
+        for a in snap['files']:
+            record={'source':'project-files','instance':'local','conversation_id':'folder',
+                'raw':{'cwd':str(Path(snap['root'])/Path(a['relative_path']).parent)}}
+            allowed,_=policy.select(record,snap['project_id'])
+            if not allowed['conversation'] or a.get('sha256') and not allowed['document_bytes']:
+                raise ValueError('Current local policy forbids project capture; prepare again')
     included={str(Path(p).expanduser().resolve()) for p in include_paths}
     for r in records:
         permitted,_=policy.select(r,project_id)
@@ -64,7 +73,7 @@ async def send(profile,directory,project_id=None,policy=None,include_paths=(),ag
                 continue
             if not permitted['tool_payloads' if category(a)=='source_payload' else 'document_bytes']:
                 raise ValueError('Current local policy forbids packaged bytes; prepare again')
-            if a.get('path') and agent_workspace(a['path']) and str(Path(a['path']).resolve()) not in included:
+            if a.get('path') and runtime_exclusion(a['path'],a) and str(Path(a['path']).resolve()) not in included:
                 raise ValueError('Package contains excluded agent workspace bytes; prepare again or explicitly include that path')
     async def delivery(session):
         status=await call(session,'memory_status')
@@ -74,6 +83,8 @@ async def send(profile,directory,project_id=None,policy=None,include_paths=(),ag
             raise ValueError('Server needs Portable Context 0.5 or newer before capture-v2 delivery')
         options={'manifest':manifest}
         modern='capture_policy_v1' in status.get('capabilities',[])
+        if manifest.get('project_snapshot') and 'project_folders_v1' not in status.get('capabilities',[]):
+            raise ValueError('Project folder capture needs server 0.7')
         if not modern:
             raise ValueError('Client 0.6 requires server 0.6 capabilities for safe policy and native identity handling; upgrade the server first')
         if modern:
@@ -132,7 +143,7 @@ async def send(profile,directory,project_id=None,policy=None,include_paths=(),ag
                 pending['complete']=True
                 atomic_write(pending_file,canonical(pending))
                 break
-            marker=(result['remaining_transfers'],result['s3'].get('failed',0))
+            marker=(result['remaining_transfers'],result.get('s3',{}).get('failed',0))
             if marker==previous:
                 raise ValueError('Delivery made no progress; local originals remain saved. Inspect last-delivery.json and retry after repair')
             previous=marker
@@ -153,6 +164,19 @@ def main(argv=None):
             stream.reconfigure(encoding='utf-8')
     p=argparse.ArgumentParser(description=__doc__)
     sub=p.add_subparsers(dest='command',required=True)
+    for name in ('project-preview','project-bind'):
+        c=sub.add_parser(name)
+        c.add_argument('--profile',type=Path,required=True); c.add_argument('--root',type=Path,required=True)
+        c.add_argument('--project-id',required=True); c.add_argument('--include-large',action='store_true')
+        c.add_argument('--exclude',action='append',default=[]); c.add_argument('--policy',type=Path)
+        if name=='project-bind': c.add_argument('--approve-plan',required=True)
+    c=sub.add_parser('project-prepare')
+    c.add_argument('--profile',type=Path,required=True); c.add_argument('--binding',required=True)
+    c.add_argument('--destination',type=Path,required=True); c.add_argument('--policy',type=Path)
+    c.add_argument('--accept-growth',action='store_true'); c.add_argument('--agent')
+    c=sub.add_parser('project-preferences')
+    c.add_argument('--profile',type=Path,required=True); c.add_argument('--files',choices=('include','conversations-only'))
+    c=sub.add_parser('project-bindings'); c.add_argument('--profile',type=Path,required=True)
     for name in ('discover','prepare'):
         c=sub.add_parser(name)
         c.add_argument('--format',choices=['claude-code','claude-web'],default='claude-code')
@@ -185,7 +209,25 @@ def main(argv=None):
     c.add_argument('--package',type=Path,required=True)
     c.add_argument('--destination',type=Path,required=True)
     args=p.parse_args(argv)
-    if args.command=='upgrade-capture':
+    if args.command.startswith('project-'):
+        from . import project_files
+        from .policy import Policy
+        connection=json.loads(args.profile.read_text(encoding='utf-8'))
+        if args.command=='project-bindings':
+            result={'bindings':[json.loads(p.read_text(encoding='utf-8')) for p in sorted((args.profile.parent/'project-bindings').glob('*.json'))
+                if json.loads(p.read_text(encoding='utf-8')).get('workspace_id')==connection['workspace_id']]}
+        elif args.command=='project-preferences':
+            path=args.profile.parent/'project-preferences.json'
+            result=json.loads(path.read_text(encoding='utf-8')) if path.exists() else {'files':'include','accepted':False}
+            if args.files:
+                result={'files':args.files,'accepted':True}; atomic_write(path,canonical(result))
+        elif args.command=='project-preview':
+            result=project_files.preview(args.root,args.project_id,connection['workspace_id'],Policy.load(args.policy),args.include_large,args.exclude)
+        elif args.command=='project-bind':
+            result=project_files.bind(args.profile,args.root,args.project_id,args.approve_plan,args.include_large,args.exclude,Policy.load(args.policy))
+        else:
+            result=project_files.prepare(args.profile,args.binding,args.destination,Policy.load(args.policy),args.accept_growth,args.agent)
+    elif args.command=='upgrade-capture':
         from .capture import upgrade_capture
         result=upgrade_capture(args.package,args.destination)
     elif args.command in ('connect','send'):

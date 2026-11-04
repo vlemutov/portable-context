@@ -118,3 +118,18 @@ new messages arriving during analysis remain eligible for the next enrichment ru
 - `store_attachment` / `read_file_bytes`: bounded, verified original transfer; no automatic URL fetches.
 - `add_file_excerpts`: externally extracted text with method/actor attribution and locators.
 - `import_file_capture`: selected server-local package made by `python -m portable_context.capture`.
+# MCP additions in 0.7
+
+- `backup_status()` is cached/readonly; `list_backups(limit=20, offset=0)` returns paginated snapshots,
+  reasons, operation links and added bytes. Restore/activation stay in the owner deployment CLI.
+- `get_backup_policy()`, `preview_backup_policy(values)`, `set_backup_policy(values, expected_version,
+  actor, confirmation=null)` use last/weekly/monthly/checkpoints_days. Removing existing snapshots
+  requires the current exact preview digest; actual deletion occurs at scheduled cleanup.
+- `storage_report(refresh_s3=false)` inventories SQLite tables, originals, vault, staging, releases,
+  archives, free disk and cached S3 versions. `forecast_import(original_bytes, source_bytes=0)` estimates
+  additional memory and peak disk with uncertainty; it is not a price quote.
+- `get_index_policy()`, `set_index_policy(kind, enabled, expected_version, actor)` control rebuildable
+  search indexes by payload kind without discarding originals or running VACUUM.
+- Project-folder packages use normal begin/upload/finish capture tools and require `project_folders_v1`.
+  Their receipt has zero message counts plus independent project_files counts and usual blob/S3 receipts.
+  See [recovery-and-folders.md](recovery-and-folders.md) for agent decisions and local commands.

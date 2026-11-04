@@ -89,6 +89,14 @@ def validate(record: dict) -> dict:
     r["schema_version"] = 1
     return r
 
+def guarded_import(function):
+    import functools
+    @functools.wraps(function)
+    def wrapper(owner,*args,**kwargs):
+        from .restic_backup import guarded
+        return guarded(function)(owner,*args,**kwargs)
+    return wrapper
+
 
 class Store:
     def __init__(self, root: str | Path):
@@ -100,10 +108,17 @@ class Store:
             with self.connect() as con:
                 has_metadata=con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='metadata'").fetchone()
                 legacy=bool(has_metadata and con.execute("SELECT 1 FROM metadata WHERE key='catalog_version'").fetchone()
-                            and not con.execute("SELECT 1 FROM metadata WHERE key='control_version'").fetchone())
+                            and (not con.execute("SELECT 1 FROM metadata WHERE key='control_version'").fetchone()
+                            or not con.execute("SELECT 1 FROM metadata WHERE key='release07_version'").fetchone()))
             if legacy:
-                from .backup import create
-                create(self.root,self.root.parent/(self.root.name+'-migration-backups'))
+                from .restic_backup import configured
+                manager=configured(self.root)
+                if manager:
+                    import uuid
+                    manager.checkpoint('before_migration','migration:'+str(uuid.uuid4()))
+                else:
+                    from .backup import create
+                    create(self.root,self.root.parent/(self.root.name+'-migration-backups'))
         with self.connect() as con:
             con.executescript("""
                 PRAGMA journal_mode=WAL;
@@ -183,13 +198,18 @@ class Store:
             if os.path.exists(temp):
                 os.unlink(temp)
 
+    @guarded_import
     def ingest(self, records: Iterable[dict], origin: str | None = None) -> dict:
         records=list(records)
+        import uuid
+        rid=str(uuid.uuid4())
+        from .restic_backup import protection
+        protection(self.root,rid)
         with self.connect() as con:
             con.execute("BEGIN IMMEDIATE")
             report = self._ingest(con, records, origin)
             from .import_log import start,progress
-            rid=start(con,origin,kind='direct')
+            start(con,origin,run_id=rid,kind='direct')
             progress(con,rid,report,records,complete=True)
         from .catalog import project_catalog
         report['catalog_projection'] = project_catalog(self)

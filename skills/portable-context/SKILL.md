@@ -2,7 +2,7 @@
 name: portable-context
 description: Deploy a personal Portable Context memory on Cloud.ru or an existing server, import selected or all accessible conversation history, preserve source relationships, and build or update its knowledge wiki through MCP. Use for setup, migration, recall, shared graph enrichment, or resuming another agent's work.
 metadata:
-  version: "0.6.0"
+  version: "0.7.0"
 ---
 
 # Portable Context
@@ -14,7 +14,7 @@ what was actually saved. Full source access and successful reasoning are separat
 At first use, compare this skill version with `memory_status.skill` and check capabilities required
 for the requested operation. Briefly identify an outdated installed copy and its update location;
 do not demand matching patch versions for compatible read operations. Upgrade the server before
-using the 0.6 local client. Reconnect persistent MCP sessions after upgrading.
+using 0.7 project folders or backup controls. Reconnect persistent MCP sessions after upgrading.
 
 For capture permissions, groups, import history, file categories, or native session identity,
 read [references/controls.md](references/controls.md). Ordinary file recall shows documents;
@@ -60,6 +60,33 @@ reading this skill alone installs or connects MCP.
 Finish by verifying the actual connection and expected workspace identity, then summarize what
 is already there in plain language. Continue with the user's chosen first import, or ask what
 they want to save first. Setup by itself does not authorize exporting all conversation history.
+
+### Files and recovery: two simple setup choices
+
+Read [references/recovery-and-folders.md](references/recovery-and-folders.md). Reuse earlier answers.
+Ask: “Сохранять вместе с диалогами папки выбранных проектов? Рекомендую да: так документы,
+код и результаты останутся в памяти, даже если их не прикрепляли к чату. Либо сохраняем только диалоги.”
+Recommend `include`, record the accepted choice using `project-preferences`. This is not permission
+to read an entire home directory. Discover concrete roots and Claude `memory_roots` for selected
+sessions; show root→project mapping, size, exclusions and forecast, then bind the accepted roots once.
+On subsequent requested exports, inspect saved bindings and capture/send those selected projects too.
+Do not repeat the setup question unless scope changes or substantial growth needs review. A missing
+root, incomplete scan or exclusion is not proof that its files were deleted. Background collection
+remains a separate opt-in. No fabricated messages or inferred file purposes: unknown stays unknown.
+
+Offer recovery defaults conversationally: “Оставим 14 последних состояний с изменениями,
+8 еженедельных и 12 ежемесячных копий, а точки перед импортом — на 90 дней?” Explain that longer
+history costs more storage. Reuse the user's acceptance. Later changes use `preview_backup_policy`
+and `set_backup_policy` with the exact version and confirmation. Explain that deletion occurs at
+the next cleanup, not immediately. If existing snapshots become removable, show the list before
+asking. Never infer permission to disable protection or bypass a failed checkpoint.
+
+After managed deployment inspect `backup_status`. Ask the owner to privately save the recovery
+password file in their password manager; give its path, never read it into chat or print its value.
+Explain once that recovery requires this password. Before large imports use `forecast_import`
+with local prepare sizes and `storage_report`. Report actual original bytes and exclusions.
+For restore, prepare a new-directory recovery and verification first; activation and cleanup require
+the owner's explicit acceptance of their concrete preview. Keep the prior memory directory.
 
 ### Setup and connection details
 

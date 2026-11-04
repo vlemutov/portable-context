@@ -55,6 +55,21 @@ class Uploads:
         files=validate_manifest(manifest)
         identifier=digest(canonical(manifest))
         folder=self.folder(identifier)
+        from .backup import sha256
+        known={}
+        with self.workspace.store.connect() as con:
+            from .policy import check_manifest
+            check_manifest(con,manifest,project_id)
+            for part in manifest.get('blobs',[]):
+                old=self.workspace.store.root/'originals'/part['sha256']
+                row=con.execute('SELECT size FROM imports WHERE hash=?',(part['sha256'],)).fetchone()
+                if row and row[0]==part['size'] and not old.is_symlink() and old.is_file() and sha256(old)==part['sha256']:
+                    known[part['path']]=old
+        from .storage import forecast
+        estimate=forecast(self.workspace.store,sum(p['size'] for p in manifest.get('blobs',[]) if p['path'] not in known),
+            sum(p['size'] for p in manifest.get('parts',[])))
+        if not estimate['fits_with_20_percent_reserve']:
+            raise ValueError('Insufficient server space for this capture with reserve; inspect forecast_import and storage_report')
         with self.workspace.store.connect() as con:
             con.execute('BEGIN IMMEDIATE')
             from .policy import check_manifest
@@ -68,7 +83,16 @@ class Uploads:
             if target.exists() and json.loads(target.read_text())!=selection:
                 raise ValueError('Package already has another target project; use explicit project reassignment')
             atomic_write(target,canonical(selection))
-        return {'upload_id':identifier,'run_id':run_id,'files':len(files),'max_chunk_bytes':MAX_CHUNK}
+            for name,old in known.items():
+                destination=folder/name
+                if destination.exists(): continue
+                destination.parent.mkdir(exist_ok=True)
+                # A verified immutable original can satisfy a new package without network transfer.
+                # Upload retries only compare existing bytes; they never overwrite this hard link.
+                import os,shutil
+                try: os.link(old,destination)
+                except OSError: shutil.copyfile(old,destination)
+        return {'upload_id':identifier,'run_id':run_id,'files':len(files),'max_chunk_bytes':MAX_CHUNK,'reused_blobs':len(known)}
 
     def preflight(self,folder,con):
         from .policy import check_manifest

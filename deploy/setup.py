@@ -410,6 +410,13 @@ def install(state):
     if backup_file.exists():
         payload['backup'] = read(backup_file)
     payload['schedule_backup'] = config.get('schedule_backup', True)
+    import secrets
+    recovery=state/'restic-password'
+    if not recovery.exists():
+        recovery.write_text(secrets.token_urlsafe(48)+'\n',encoding='utf-8'); recovery.chmod(0o600)
+    payload['recovery_password']=recovery.read_text(encoding='utf-8')
+    payload['restic_installer']=(ROOT/'deploy/restic_tools.py').read_text(encoding='utf-8')
+    if config.get('backup_repository'): payload['backup_repository']=config['backup_repository']
     # Keep the command short: Windows SSH/shell combinations may truncate large -c arguments.
     # The trusted installer and private payload travel over encrypted stdin, never command arguments.
     envelope = {'script': (ROOT / 'deploy/remote_install.py').read_text(encoding='utf-8'), 'payload': payload}
@@ -422,7 +429,25 @@ def install(state):
     client = {'mcpServers': {'portable-context': {'command': ssh[0], 'args': args}}}
     save(state / 'client-config.json', client)
     return {'installed': True, 'workspace_id': result['memory']['workspace_id'], 'backup': result['backup'],
-            'client_config': str(state / 'client-config.json'), 'next': 'check, then merge client configuration into your agent'}
+            'client_config': str(state / 'client-config.json'),
+            'recovery_password_file':str(recovery),
+            'next': 'Save the recovery password privately outside the server (e.g. password manager); never paste it in chat. Reconnect MCP and check.'}
+
+def maintenance(state,args):
+    config=read(state/'deployment.json'); ssh=ssh_args(state,config)
+    root=read(state/'installed.json')['root']; python=root+'/current/venv/bin/python'
+    if args.command=='restore':
+        if args.archive:
+            command=[python,'-m','portable_context.maintenance','--root',root,'restore-zip','--archive',args.archive,'--target',args.target]
+        else:
+            command=[python,'-m','portable_context.restic_backup','--home',root+'/memory','--config',root+'/restic-config.json',
+                'restore','--snapshot',args.snapshot,'--target',args.target]
+    else:
+        command=[python,'-m','portable_context.maintenance','--root',root,args.command]
+        if args.command=='activate': command+=['--target',args.target]
+        if args.approve_plan: command+=['--approve-plan',args.approve_plan]
+    result=checked(ssh+[shlex.join(command)],capture_output=True,text=True,encoding='utf-8')
+    return json.loads(result.stdout)
 
 
 async def check(state):
@@ -467,6 +492,11 @@ def main(argv=None):
     p.add_argument('--approve-plan', required=True, help='Exact SHA-256 of reviewed paid infrastructure plan')
     sub.add_parser('install')
     sub.add_parser('check')
+    p=sub.add_parser('restore'); group=p.add_mutually_exclusive_group(required=True)
+    group.add_argument('--snapshot'); group.add_argument('--archive',help='Existing ZIP path on the server'); p.add_argument('--target',required=True)
+    p=sub.add_parser('cleanup'); p.add_argument('--approve-plan')
+    p=sub.add_parser('cleanup-s3'); p.add_argument('--approve-plan')
+    p=sub.add_parser('activate'); p.add_argument('--target',required=True); p.add_argument('--approve-plan')
     args = parser.parse_args(argv)
     os.umask(0o077)
     state = private_directory(args.state)
@@ -488,7 +518,7 @@ def main(argv=None):
         values = read(args.file)
         allowed = {'project_id', 'tenant_id', 'zone', 'image_id', 'flavor', 'ssh_cidr', 'bucket', 'disk_gb',
                    'ssh_user', 'ssh_port', 'host', 'identity_file', 'schedule_backup', 'storage_class', 'dns_servers',
-                   'ssh_command'}
+                   'ssh_command','backup_repository'}
         if set(values) - allowed:
             raise ValueError('Unknown or secret configuration fields: ' + ', '.join(set(values) - allowed))
         config.update(values)
@@ -514,6 +544,8 @@ def main(argv=None):
         result = apply(state, args.approve_plan)
     elif args.command == 'install':
         result = install(state)
+    elif args.command in ('restore','activate','cleanup','cleanup-s3'):
+        result=maintenance(state,args)
     else:
         import anyio
         result = anyio.run(check, state)

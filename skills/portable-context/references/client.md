@@ -99,3 +99,12 @@ python -m portable_context.client send --profile /private/portable-context-clien
 Старые capture-v1 принимаются сервером напрямую через `import_file_capture`; новая MCP-доставка
 использует capture-v2. Обновление сервера делается после резервной копии тем же deploy/setup.py install,
 без новых облачных ресурсов. Переподключи MCP в уже открытых клиентах после обновления.
+# Client additions in 0.7
+
+Project folders are independent evidence, selected by an explicit root→project binding. Follow
+[recovery-and-folders.md](recovery-and-folders.md) for `project-preferences`, `project-preview`,
+`project-bind`, `project-bindings`, `project-prepare`, and normal resumable `send`.
+The assistant includes approved bindings in subsequent user-requested exports; `prepare` for
+conversations alone does not implicitly scan folders. Discovery exposes Claude project `memory_roots`.
+Referenced temporary outputs/scripts may now be captured; privacy policy and source-root checks win.
+Update the server before using folder capture; reconnect MCP after upgrading client/server/skill.

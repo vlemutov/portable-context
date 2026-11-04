@@ -16,11 +16,12 @@ import re
 from .core import Store, canonical, digest, key, now, validate
 from .catalog import Catalog, project_catalog
 from .privacy import screen_value, screen_bytes
+from .core import guarded_import
 
 
 def capture(records, destination, allowed_roots=(), memory_project=None, max_file_bytes=512 * 1024 * 1024,
             secret_policy='block', part_bytes=4 * 1024 * 1024, adapter_report=None, policy=None, include_paths=(), executor=None):
-    from .policy import Policy,agent_workspace
+    from .policy import Policy,agent_workspace,runtime_exclusion
     from .control import category
     from . import __version__
     policy=policy or Policy.load(None)
@@ -138,7 +139,9 @@ def capture(records, destination, allowed_roots=(), memory_project=None, max_fil
                 a['export_observation'] = {'method': 'portable-context-capture'}
                 # A local path is read only if explicitly authorized by root, never by historical instructions.
                 source = Path(a['path']).expanduser().resolve() if isinstance(a.get('path'), str) else None
-                rule=agent_workspace(source) if source else None
+                rule=runtime_exclusion(source,a) if source else None
+                if source and agent_workspace(source) and not rule:
+                    report['included_runtime_files']=report.get('included_runtime_files',0)+1
                 if (not permitted['tool_payloads' if a['category']=='source_payload' else 'document_bytes'] or
                         rule and str(source) not in explicitly_included):
                     reason='excluded_agent_workspace' if rule and str(source) not in explicitly_included else 'capture_policy'
@@ -250,6 +253,7 @@ def capture(records, destination, allowed_roots=(), memory_project=None, max_fil
     return {'directory': str(destination), **manifest}
 
 
+@guarded_import
 def import_capture(store, directory, allowed_roots, project_id=None, transfer_limit=None, run_id=None):
     directory = Path(directory).expanduser().resolve()
     roots = [Path(p).expanduser().resolve() for p in allowed_roots]
@@ -267,12 +271,21 @@ def import_capture(store, directory, allowed_roots, project_id=None, transfer_li
     # Full preflight on first import. On resume, each pending transfer verifies its own SHA256;
     # re-hashing already committed originals on every 25-file step is quadratic work.
     manifest,records=load_package(directory,verify_blobs=previous is None)
+    if manifest.get('project_snapshot'):
+        if project_id and project_id!=manifest['project_snapshot']['project_id']:
+            raise ValueError('Project snapshot target differs from selected project')
+        from .project_files import import_snapshot
+        return import_snapshot(store,directory,manifest,run_id,transfer_limit)
     if project_id:
         Catalog(store).project(project_id)
     from .policy import check_record,check_manifest
     from .control import record_session
     from .import_log import start,progress
     session_metadata=[r.get('conversation_metadata') for r in records]
+    import uuid
+    run_id=run_id or str(uuid.uuid4())
+    from .restic_backup import protection
+    protection(store.root,run_id)
     with store.connect() as con:
         con.execute('BEGIN IMMEDIATE')
         check_manifest(con,manifest,project_id)

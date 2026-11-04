@@ -35,7 +35,11 @@ def build_server(store: Store, allowed_roots=None):
             'The skill is instructions, not a hosted service; downloading it does not install or start MCP. '
             'The repository owner does not provide a default backend. Each owner supplies their own storage. '
             'Only a filesystem directory with SQLite, originals and Markdown is implemented. '
-            'SQLite is the live database. S3 can hold verified attachment objects and backup ZIPs; it is not a live SQLite backend. '
+            'SQLite is the live database. S3 holds verified attachment objects and encrypted self-contained restic backups including originals. '
+            'S3 is not a live SQLite backend. Ask once whether to include selected project folders (recommended), '
+            'show their size and exclusions, then bind concrete roots to memory projects. Reuse bindings on later requested exports. '
+            'Offer retention of 14 changed snapshots, 8 weekly, 12 monthly and pre-operation checkpoints for 90 days. '
+            'Read backup_status; store the recovery password privately outside the server, never in chat. '
             'Do not synchronize a live SQLite directory through Git or a cloud drive. Stop all writers before '
             'copying the complete directory for backup or migration; resume only one authoritative workspace. '
             'Check the same workspace_id across clients. A backup copy retains this ID but does not synchronize changes. '
@@ -80,6 +84,70 @@ def build_server(store: Store, allowed_roots=None):
     def memory_status() -> dict:
         """Onboarding: shared workspace ID, real source access, unfinished jobs, and capabilities."""
         return workspace.describe()
+
+    def backup_manager():
+        from .restic_backup import configured
+        manager=configured(store.root)
+        if not manager: raise ValueError('Backups are not configured; use the deployment backup setup first')
+        return manager
+
+    @server.tool()
+    def backup_status() -> dict:
+        """Read-only latest backup, skip, restore check and failures; never exposes recovery credentials."""
+        from .restic_backup import configured
+        manager=configured(store.root)
+        return manager.status() if manager else {'configured':False}
+
+    @server.tool()
+    def list_backups(limit: int = 20, offset: int = 0) -> dict:
+        """Paginated restic snapshots and import/checkpoint links. Restore is a deployment CLI action."""
+        return backup_manager().list(limit,offset)
+
+    @server.tool()
+    def get_backup_policy() -> dict:
+        """Versioned retention: last changed, weekly, monthly and operation checkpoint days."""
+        return backup_manager().policy()
+
+    @server.tool()
+    def preview_backup_policy(values: dict) -> dict:
+        """Read-only exact candidate snapshot removal list and confirmation digest. No deletion."""
+        return backup_manager().preview(values)
+
+    @server.tool()
+    def set_backup_policy(values: dict, expected_version: int, actor: str, confirmation: str | None = None) -> dict:
+        """Apply owner-selected retention. If existing snapshots become removable, confirm the exact preview.
+        Does not delete immediately; the next scheduled cleanup applies the accepted policy.
+        """
+        return backup_manager().set_policy(values,expected_version,actor,confirmation)
+
+    @server.tool()
+    def storage_report(refresh_s3: bool = False) -> dict:
+        """Measure database tables, originals, staging, backups and free disk. S3 refresh is explicit and can be slow."""
+        from .storage import report,refresh_s3 as refresh
+        if refresh_s3:
+            import os
+            path=os.environ.get('PC_ATTACHMENT_S3_CONFIG')
+            if not path: raise ValueError('No S3 configuration')
+            refresh(store,path)
+        return report(store)
+
+    @server.tool()
+    def forecast_import(original_bytes: int, source_bytes: int = 0) -> dict:
+        """Estimate import storage from a local prepare/discover report, including temporary peak space."""
+        from .storage import forecast
+        return forecast(store,original_bytes,source_bytes)
+
+    @server.tool()
+    def get_index_policy() -> list[dict]:
+        """Search indexing by payload kind; excludes service events by default, preserves source bytes."""
+        from .indexing import get
+        return get(store)
+
+    @server.tool()
+    def set_index_policy(kind: str, enabled: bool, expected_version: int, actor: str) -> dict:
+        """Owner-directed rebuildable search-index policy. Does not delete original evidence or compact SQLite."""
+        from .indexing import set_policy
+        return set_policy(store,kind,enabled,expected_version,actor)
 
     @server.tool()
     def list_projects(query: str = '', limit: int = 30, offset: int = 0, include_archived: bool = False, group_id: str | None = None) -> list[dict]:

@@ -104,6 +104,10 @@ def index_record(con, r, mid, cid, revision):
 
 def evidence_stale(con, evidence):
     for ref in evidence:
+        if ref.get('file_occurrence'):
+            row=con.execute('SELECT current_source,revision FROM catalog_owned_occurrences WHERE id=?',(ref['file_occurrence'],)).fetchone()
+            if not row or not row[0] or row[1]!=ref['revision']: return True
+            continue
         row = con.execute('SELECT revision FROM messages WHERE id=?', (ref['message_key'],)).fetchone()
         if not row or row[0] != ref['revision']:
             return True

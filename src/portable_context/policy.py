@@ -117,6 +117,18 @@ def agent_workspace(path):
                 return variable.lower()+'_runtime'
     return None
 
+def runtime_exclusion(path,attachment):
+    rule=agent_workspace(path)
+    normalized=normalized_path(path).casefold()
+    if rule or '/.claude/' in normalized or '/.codex/' in normalized:
+        if '/tool-results/' in normalized or re.search(r'/tasks/[^/]+\.output$',normalized) or normalized.endswith('.jsonl'):
+            return rule or 'agent_runtime_log'
+    if not rule: return None
+    if attachment.get('reference_kind')=='executed_script' or (attachment.get('reference_kind')=='tool_file'
+            and attachment.get('role')=='output' and attachment.get('metadata_basis')=='source_tool_call'):
+        return None
+    return rule
+
 
 def permissions(con,project_id=None):
     values=[]
@@ -164,13 +176,24 @@ def check_record(con,r,project_id=None):
 
 def check_attachment(con,occurrence):
     row=con.execute('SELECT record FROM messages WHERE id=?',(occurrence['message_key'],)).fetchone()
-    p=permissions(con,project_for(con,json.loads(row[0])))
+    if row:
+        p=permissions(con,project_for(con,json.loads(row[0])))
+    else:
+        owned=con.execute('SELECT project_id FROM project_file_versions WHERE occurrence_id=?',(occurrence['id'],)).fetchone()
+        if not owned: raise ValueError('Unknown occurrence owner')
+        p=permissions(con,owned[0])
     if occurrence['availability']=='excluded' or not p['conversation'] or not p[
             'tool_payloads' if occurrence['category']=='source_payload' else 'document_bytes']:
         raise ValueError('Capture policy forbids attachment transfer')
 
 
 def check_manifest(con,manifest,project_id=None):
+    if manifest.get('project_snapshot'):
+        from .project_files import validate_snapshot
+        wid=con.execute("SELECT value FROM metadata WHERE key='workspace_id'").fetchone()[0]
+        validate_snapshot(con,manifest['project_snapshot'],wid)
+        if project_id and project_id!=manifest['project_snapshot']['project_id']:
+            raise ValueError('Project snapshot target differs from upload target')
     scopes=manifest.get('capture_scopes')
     if scopes is None:
         restricted=any(axes(json.loads(r[0]))!=FULL for r in con.execute('SELECT policy FROM capture_policies'))

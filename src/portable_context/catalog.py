@@ -54,6 +54,11 @@ def initialize(con):
     con.execute('BEGIN IMMEDIATE')
     from .control import initialize as initialize_controls
     initialize_controls(con)
+    from .project_files import initialize as initialize_project_files
+    initialize_project_files(con)
+    from .indexing import initialize as initialize_indexing
+    initialize_indexing(con)
+    con.execute("INSERT OR IGNORE INTO metadata VALUES ('release07_version','1')")
     if not con.execute("SELECT 1 FROM metadata WHERE key='catalog_version'").fetchone():
         # Index all revisions, then the current ones, without changing source records or citations.
         for row in con.execute('SELECT id,hash,record FROM revisions ORDER BY observed_at,id').fetchall():
@@ -116,17 +121,14 @@ def _audit(con, actor, action, details):
 
 def summary(store):
     with store.connect() as con:
-        rows = con.execute('''SELECT o.availability,count(*) AS n FROM catalog_occurrences o
-            JOIN messages m ON m.id=o.message_key AND m.revision=o.revision GROUP BY o.availability''')
+        rows = con.execute('''SELECT o.availability,count(*) AS n FROM catalog_owned_occurrences o WHERE o.current_source=1 GROUP BY o.availability''')
         counts = {r[0]: r[1] for r in rows}
         categories={}
         for kind in ('document','source_payload'):
-            current=con.execute('''SELECT count(DISTINCT o.file_id),count(*) FROM catalog_occurrences o
-                JOIN messages m ON m.id=o.message_key AND m.revision=o.revision WHERE o.category=?''',(kind,)).fetchone()
+            current=con.execute('''SELECT count(DISTINCT o.file_id),count(*) FROM catalog_owned_occurrences o WHERE o.current_source=1 AND o.category=?''',(kind,)).fetchone()
             historical=con.execute('SELECT count(DISTINCT file_id),count(*) FROM catalog_occurrences WHERE category=?',(kind,)).fetchone()
             size=con.execute('''SELECT coalesce(sum(size),0) FROM catalog_blobs WHERE sha256 IN (
-                SELECT o.sha256 FROM catalog_occurrences o JOIN messages m ON m.id=o.message_key AND m.revision=o.revision
-                WHERE o.category=?)''',(kind,)).fetchone()[0]
+                SELECT o.sha256 FROM catalog_owned_occurrences o WHERE o.current_source=1 AND o.category=?)''',(kind,)).fetchone()[0]
             categories[kind]={'current_files':current[0],'current_occurrences':current[1],
                 'all_files':historical[0],'all_occurrences':historical[1],'current_unique_bytes':size}
         return {'projects': con.execute("SELECT count(*) FROM catalog_projects WHERE status='active'").fetchone()[0],
@@ -262,18 +264,15 @@ class Catalog:
     def files(self, project_id=None, query='', limit=30, offset=0, include_history=False, include_payloads=False):
         with self.store.connect() as con:
             rows = con.execute('''SELECT DISTINCT f.id,f.name FROM catalog_files f
-                JOIN catalog_occurrences o ON o.file_id=f.id
-                JOIN catalog_assignments a ON a.conversation=o.conversation
-                JOIN messages m ON m.id=o.message_key
-                WHERE (? IS NULL OR a.project_id=?) AND instr(unicode_casefold(f.name),unicode_casefold(?))>0
-                AND (? OR m.revision=o.revision) AND (? OR o.category='document') ORDER BY f.name,f.id LIMIT ? OFFSET ?''',
+                JOIN catalog_owned_occurrences o ON o.file_id=f.id
+                WHERE (? IS NULL OR o.owner_project=?) AND instr(unicode_casefold(f.name),unicode_casefold(?))>0
+                AND (? OR o.current_source=1) AND (? OR o.category='document') ORDER BY f.name,f.id LIMIT ? OFFSET ?''',
                 (project_id, project_id, query, include_history,include_payloads,max(1, min(limit, 100)), max(0, offset)))
             results = []
             for row in rows:
                 item = dict(row)
                 item['occurrences'] = [self._annotated(con, r) for r in con.execute('''
-                    SELECT o.*,m.revision=o.revision AS current_source FROM catalog_occurrences o
-                    JOIN messages m ON m.id=o.message_key WHERE o.file_id=? AND (? OR m.revision=o.revision)
+                    SELECT o.* FROM catalog_owned_occurrences o WHERE o.file_id=? AND (? OR o.current_source=1)
                     AND (? OR o.category='document') ORDER BY o.observed_at DESC,o.id LIMIT 5''', (row['id'], include_history,include_payloads))]
                 item['categories']=sorted({o['category'] for o in item['occurrences']})
                 item['occurrences_preview_limit'] = 5
@@ -329,8 +328,7 @@ class Catalog:
             result['occurrence_count'] = con.execute('SELECT count(*) FROM catalog_occurrences WHERE file_id=?', (file_id,)).fetchone()[0]
             result['categories']=[r[0] for r in con.execute('SELECT DISTINCT category FROM catalog_occurrences WHERE file_id=? ORDER BY category',(file_id,))]
             result['occurrences'] = [self._annotated(con, r) for r in con.execute('''
-                SELECT o.*,m.revision=o.revision AS current_source FROM catalog_occurrences o
-                JOIN messages m ON m.id=o.message_key WHERE o.file_id=? ORDER BY o.observed_at DESC,o.id
+                SELECT o.* FROM catalog_owned_occurrences o WHERE o.file_id=? ORDER BY o.observed_at DESC,o.id
                 LIMIT ? OFFSET ?''', (file_id, max(1, min(limit, 100)), max(0, offset)))]
             result['versions'] = [dict(r) for r in con.execute('''SELECT DISTINCT b.* FROM catalog_blobs b
                 JOIN catalog_occurrences o ON o.sha256=b.sha256 WHERE o.file_id=?''', (file_id,))]
@@ -409,7 +407,9 @@ class Catalog:
                     'file_id': occurrence['file_id'], 'sha256': sha,
                     'basis': 'export_declared_hash' if declared else 'bytes_provided_after_message_import',
                     'note': 'Transfer observation is not proof these bytes existed at original message time.'})
-        if occurrence['metadata'].get('searchable',True):
+        from .indexing import eligible
+        with self.store.connect() as con: searchable=eligible(con,sha)
+        if searchable:
             self._extract_text(sha, name, size)
         s3 = self.sync_blob(sha)
         projection = project_catalog(self.store) if project else {'deferred':True}
@@ -493,9 +493,11 @@ class Catalog:
 
     @staticmethod
     def _write_chunks(con, sha, chunks, method):
+        from .indexing import eligible
+        searchable=eligible(con,sha)
         for pos, chunk in enumerate(chunks):
             con.execute('INSERT INTO catalog_chunks VALUES (?,?,?,?,?)', (sha, pos, chunk['text'], canonical(chunk['locator']), method))
-            con.execute('INSERT INTO catalog_chunks_fts VALUES (?,?,?)', (sha, pos, chunk['text']))
+            if searchable: con.execute('INSERT INTO catalog_chunks_fts VALUES (?,?,?)', (sha, pos, chunk['text']))
         con.execute("UPDATE catalog_blobs SET extraction='extracted' WHERE sha256=?", (sha,))
 
     def add_excerpts(self, sha, chunks, method, actor):
@@ -534,12 +536,11 @@ class Catalog:
             return [dict(r) for r in con.execute('''SELECT c.sha256,c.position,
                 snippet(catalog_chunks_fts,2,'[',']',' … ',40) AS excerpt FROM catalog_chunks_fts c
                 WHERE catalog_chunks_fts MATCH ? AND EXISTS (
-                    SELECT 1 FROM catalog_occurrences o JOIN catalog_assignments a ON a.conversation=o.conversation
-                    JOIN messages m ON m.id=o.message_key AND m.revision=o.revision
+                    SELECT 1 FROM catalog_owned_occurrences o
                     LEFT JOIN catalog_annotations n ON n.occurrence_id=o.id
-                    WHERE o.sha256=c.sha256 AND (? IS NULL OR a.project_id=?)
+                    WHERE o.sha256=c.sha256 AND o.current_source=1 AND (? IS NULL OR o.owner_project=?)
                     AND (? OR o.category='document')
-                    AND coalesce(json_extract(o.metadata,'$.searchable'),1)=1
+                    AND (coalesce(json_extract(o.metadata,'$.searchable'),1)=1 OR json_extract(o.metadata,'$.kind')='service_event')
                     AND coalesce(json_extract(n.data,'$.status'),json_extract(o.metadata,'$.status'),'unknown') NOT IN ('superseded','obsolete'))
                 ORDER BY rank LIMIT ? OFFSET ?''', (expr, project_id, project_id,include_payloads,max(1, min(limit, 50)), max(0, offset)))]
 
@@ -596,11 +597,11 @@ def project_catalog(store, con=None, report=None):
                     JOIN catalog_assignments a ON a.conversation=m.conversation WHERE a.project_id=?
                     ORDER BY w.id LIMIT 50''', (pid,)):
                 body.append(f'- [[wiki/{page["id"]}|{page["title"].replace(chr(10), " ").replace("|", " ")}]] ({page["kind"]})')
-        body.extend(['', '## Files in current source messages', ''])
+        body.extend(['', '## Current project files and message attachments', ''])
         for r in con.execute('''SELECT DISTINCT f.id,f.name,o.availability,o.metadata,o.sha256,n.data AS annotation FROM catalog_files f
-                JOIN catalog_occurrences o ON o.file_id=f.id JOIN catalog_assignments a ON a.conversation=o.conversation
+                JOIN catalog_owned_occurrences o ON o.file_id=f.id
                 LEFT JOIN catalog_annotations n ON n.occurrence_id=o.id
-                JOIN messages m ON m.id=o.message_key AND m.revision=o.revision WHERE a.project_id=?
+                WHERE o.current_source=1 AND o.owner_project=?
                 AND o.category='document' ORDER BY f.name LIMIT 200''', (pid,)):
             meta = json.loads(r['metadata'])
             if r['annotation']:
@@ -627,7 +628,7 @@ def project_catalog(store, con=None, report=None):
                 'Immutable export observations below. Paths are source references, not stored bytes.', '']
         for r in con.execute('SELECT * FROM catalog_occurrences WHERE file_id=? ORDER BY observed_at DESC,id LIMIT 50', (f['id'],)):
             body.extend([f'## Occurrence {r["id"]}', '',
-                         f'[[conversations/{r["conversation"]}#^m-{r["message_key"]}|Source message]]; revision: {r["revision"]}',
+                         (f'[[conversations/{r["conversation"]}#^m-{r["message_key"]}|Source message]]; revision: {r["revision"]}' if r["message_key"] else 'Source: explicitly selected project folder; file revision: '+r["revision"]),
                          f'Availability: {r["availability"]}; SHA256: {r["sha256"] or "not captured"}', '',
                          '```json', json.dumps(json.loads(r['metadata']), ensure_ascii=False, indent=2), '```', ''])
             annotation = con.execute('SELECT data,version FROM catalog_annotations WHERE occurrence_id=?', (r['id'],)).fetchone()
