@@ -22,8 +22,18 @@ and server permissions, pins the workspace and resumes batches. Use `--agent` fo
 `project-preferences` without `--files` reads the saved choice; without a saved answer its recommended
 value is `include`, but `accepted=false`. That does not authorize new roots.
 
-`discover --format claude-code ...` returns actual session `cwd` and adjacent `memory_roots`.
-Include these project memory Markdown folders in the proposed bindings. Never decode directory
+`discover --format claude-code ...` returns `workspaces`, `workspace_observations` and `memory_candidates`.
+Use the full Claude projects root to detect collisions across sessions. `cwd` is populated only if one
+actual observed workspace is unambiguous; inspect candidates otherwise. `message_count` counts distinct
+native records with cwd; `relocation_count` reports targets, not proof that messages were written there.
+Observations preserve field kind, timestamp and native ID; local status separates missing, unreadable
+and foreign-platform paths. Copied transcripts do not inflate record counts.
+
+`memory_roots` contains only existing, non-symlink, single-candidate adjacent folders. This is a proposal,
+not confirmed ownership. If `memory_candidates.ownership=ambiguous` or `unknown`, show the candidate
+workspaces and ask which project owns that folder before binding. A relocation does not prove shared
+ownership. Audit existing bindings against these observations if requested; never rewrite them automatically.
+Include unambiguous project memory Markdown folders in the proposed bindings. Never decode directory
 names to guess the original path. Different folders may belong to the same project. Reuse bindings
 after restart. Keep the private profile, `project-device.json` and `project-bindings/` together;
 on another computer create a fresh profile/device binding, not a copied active writer identity.

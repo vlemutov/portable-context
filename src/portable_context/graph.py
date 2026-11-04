@@ -135,7 +135,14 @@ def read_graph(store, node_id=None, layer=None, limit=100, offset=0):
         for identifier in sorted(ids):
             row = con.execute('SELECT * FROM graph_nodes WHERE id=?', (identifier,)).fetchone()
             if row:
-                nodes.append({**dict(row), 'data': json.loads(row['data']), 'materialized': bool(row['materialized'])})
+                data=json.loads(row['data'])
+                if row['kind']=='message' and data.get('message_key'):
+                    source=con.execute('SELECT record FROM messages WHERE id=?',(data['message_key'],)).fetchone()
+                    if source:
+                        from .attribution import attribution
+                        info=attribution(json.loads(source[0]),store)
+                        data={**data,**info,'role':info['effective_role']}
+                nodes.append({**dict(row), 'data': data, 'materialized': bool(row['materialized'])})
         return {'nodes': nodes, 'edges': edges, 'next_offset': offset + len(rows) if len(rows) == max(1, min(limit, 500)) else None}
 
 

@@ -3,7 +3,7 @@ import base64
 from collections import Counter
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import re
 
 from .core import canonical, digest, validate
@@ -11,6 +11,36 @@ from .core import canonical, digest, validate
 FILE_TOOLS = {'Read':'input', 'Write':'output', 'Edit':'output', 'MultiEdit':'output', 'NotebookEdit':'output'}
 SERVICE_TYPES = {'file-history-snapshot', 'queue-operation', 'progress', 'last-prompt', 'summary',
                  'custom-title', 'ai-title', 'agent-name', 'agent-color', 'pr-link', 'saved_hook_context','relocated'}
+
+
+def workspace_identity(value):
+    """Compare source path syntax without resolving it on a different operating system."""
+    if PureWindowsPath(value).drive:
+        return str(PureWindowsPath(value)).casefold()
+    return str(Path(value))
+
+
+def local_path_status(value):
+    windows = bool(PureWindowsPath(value).drive)
+    if not windows and not value.startswith('/'):
+        return 'relative_unresolved'
+    if windows != (os.name == 'nt'):
+        return 'foreign_platform'
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        return 'relative_unresolved'
+    try:
+        import stat
+        return 'directory' if stat.S_ISDIR(path.stat().st_mode) else 'not_directory'
+    except FileNotFoundError:
+        return 'missing'
+    except OSError:
+        return 'unreadable'
+
+
+def source_directory(path):
+    parent = Path(path).parent
+    return parent.parent.parent if parent.name == 'subagents' else parent
 
 def executed_script(command,cwd):
     # Recognize a conservative literal invocation; never execute or expand historical shell text.
@@ -63,7 +93,7 @@ def inventory(paths,subagent=False):
             suffix='/'+Path(path).stem if subagent else ''
             cid=sid+suffix
             g=sessions.setdefault(cid,{'native_id':cid,'session_id':sid,'titles':[],'relocations':[],
-                'transitions':[],'cwd':item.get('cwd'),'paths':[]})
+                'transitions':[],'cwd':None,'paths':[],'workspace_observations':[]})
             if str(path) not in g['paths']:
                 g['paths'].append(str(path))
             if sid!=current:
@@ -73,6 +103,14 @@ def inventory(paths,subagent=False):
                     g['transitions'].append(transition)
             current=sid
             native=item.get('uuid') or 'event-'+digest(canonical(item))
+            for field in ('cwd','relocatedCwd'):
+                value=item.get(field)
+                if isinstance(value,str) and value.strip():
+                    observation={'path':value,'kind':field,'message_id':native,'timestamp':item.get('timestamp')}
+                    if observation not in g['workspace_observations']:
+                        g['workspace_observations'].append(observation)
+                    if field=='cwd' and g['cwd'] is None:
+                        g['cwd']=value
             identity=(cid,native)
             if identity in items:
                 old={k:v for k,v in items[identity].items() if k!='cwd'}
@@ -103,6 +141,8 @@ def discover(root=None):
     root=Path(root or default_root()).expanduser().resolve()
     files=sorted(root.rglob('*.jsonl')) if root.is_dir() else [root]
     groups={}
+    identities={}
+    directory_owners={}
     for path in files:
         if path.is_symlink() or not path.resolve().is_relative_to(root if root.is_dir() else root.parent):
             continue
@@ -111,23 +151,52 @@ def discover(root=None):
         for cid,meta in sessions.items():
             g=groups.setdefault(cid,{'conversation_id':cid,'session_id':meta['session_id'],'title':cid,'paths':[],
                 'cwd':meta['cwd'],'subagent':bool(agent),'records':0,'warnings':[],'titles':[],
-                'relocations':[],'transitions':[]})
+                'relocations':[],'transitions':[],'workspace_observations':[]})
             g['paths'].append(str(path))
-            g['records']=max(g['records'],sum(c==cid for c,_ in items))
+            identities.setdefault(cid,set()).update(m for c,m in items if c==cid)
+            g['records']=len(identities[cid])
             g['warnings']+=warnings
-            for field in ('titles','relocations','transitions'):
+            for field in ('titles','relocations','transitions','workspace_observations'):
                 g[field]+=[x for x in meta[field] if x not in g[field]]
+            owners=directory_owners.setdefault(str(source_directory(path)),{})
+            for observation in meta['workspace_observations']:
+                identity=workspace_identity(observation['path'])
+                owner=owners.setdefault(identity,{'path':observation['path'],'sessions':set(),'kinds':set()})
+                owner['sessions'].add(cid)
+                owner['kinds'].add(observation['kind'])
             choices=[t for t in g['titles'] if t['kind']=='customTitle'] or g['titles']
             g['title']=choices[-1]['value'] if choices else cid
     for g in groups.values():
+        workspaces={}
+        for observation in g['workspace_observations']:
+            identity=workspace_identity(observation['path'])
+            candidate=workspaces.setdefault(identity,{'path':observation['path'],'local_status':local_path_status(observation['path']),
+                'cwd_message_ids':set(),'relocation_message_ids':set()})
+            candidate['cwd_message_ids' if observation['kind']=='cwd' else 'relocation_message_ids'].add(observation['message_id'])
+        g['workspaces']=[{'path':w['path'],'local_status':w['local_status'],
+                          'message_count':len(w['cwd_message_ids']),'relocation_count':len(w['relocation_message_ids'])}
+                         for w in workspaces.values()]
+        actual=[w['path'] for w in g['workspaces'] if w['message_count']]
+        g['cwd']=actual[0] if len(actual)==1 else None
         roots=set()
+        candidates={}
         for source in g['paths']:
             # Derive from the actual transcript directory, never reverse an encoded cwd name.
-            parent=Path(source).parent
-            if parent.name=='subagents': parent=parent.parent.parent
+            parent=source_directory(source)
             candidate=parent/'memory'
-            if candidate.is_dir() and not candidate.is_symlink(): roots.add(str(candidate.resolve()))
+            owners=directory_owners[str(parent)]
+            status=local_path_status(str(candidate))
+            if candidate.is_symlink(): status='symlink_not_followed'
+            ownership='ambiguous' if len(owners)>1 else ('candidate' if owners and root.is_dir() else 'unknown')
+            candidates[str(candidate)]={'path':str(candidate),'source_directory':str(parent),'local_status':status,
+                'ownership':ownership,'requires_explicit_binding':True,
+                'workspace_candidates':[{'path':o['path'],'sessions':sorted(o['sessions']),'observation_kinds':sorted(o['kinds'])} for o in owners.values()]}
+            if status=='directory' and ownership=='candidate': roots.add(str(candidate.resolve()))
         g['memory_roots']=sorted(roots)
+        g['memory_candidates']=list(candidates.values())
+        if any(c['ownership']=='ambiguous' for c in candidates.values()):
+            g['warnings'].append({'type':'ambiguous_memory_ownership','action':'Choose ownership explicitly; existing bindings were not changed.'})
+        g['discovery_scope']=str(root)
     return list(groups.values())
 
 
@@ -207,7 +276,7 @@ def convert(paths, instance, title=None, thinking='exclude', subagent=False, ses
         r={'source':'claude-code','instance':instance,'conversation_id':cid,'message_id':native,
            'parent_id':item.get('parentUuid'),'role':role,'text':'\n'.join(parts),'timestamp':item.get('timestamp'),
            'title':cid,'raw':raw,'attachments':attachments,'payloads':payloads,
-           'conversation_metadata':{k:v for k,v in sessions[cid].items() if k not in ('paths','cwd')},
+           'conversation_metadata':{k:v for k,v in sessions[cid].items() if k not in ('paths','cwd','workspace_observations')},
            'capture_policy':{'adapter':'claude-code-v1','thinking':thinking},
            'completeness':{'excluded_thinking_chars':excluded,'source_record_type':typ}}
         if subagent:

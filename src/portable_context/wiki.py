@@ -4,6 +4,7 @@ import json
 from .core import atomic_write, canonical, digest, key, now
 from .graph import edge, evidence_stale, node, wiki_link
 from .workspace import identifier
+from .attribution import attribution, citation_warnings
 
 RELATIONS = {'related_to', 'about', 'supports', 'contradicts', 'supersedes', 'same_as'}
 KINDS = {'user_statement', 'assistant_statement', 'inference', 'user_note'}
@@ -39,6 +40,7 @@ def _read(workspace, con, page_id):
         result['body'] = disk
     result['hash'] = digest(result['body'])
     result['stale'] = evidence_stale(con, result['sources'])
+    result['attribution_warnings'] = citation_warnings(workspace.store,con,result['sources'],result['kind'])
     return result
 
 
@@ -61,7 +63,7 @@ def search_pages(workspace, query='', limit=20, offset=0):
                 continue
             if all(t in (page['title'] + '\n' + page['body']).casefold() for t in terms):
                 results.append({k: page[k] for k in ('id', 'title', 'version', 'hash', 'manual_edit', 'stale')}
-                               | {'excerpt': page['body'][:1500]})
+                               | {'excerpt': page['body'][:1500], 'attribution_warnings': page.get('attribution_warnings',[])})
     return {'pages': results[max(0, offset):max(0, offset) + max(1, min(limit, 100))], 'total': len(results)}
 
 
@@ -104,6 +106,8 @@ def apply_pages(workspace, con, pages, author):
         if page.get('kind') not in KINDS:
             raise ValueError('Use user_statement, assistant_statement, inference or user_note')
         sources = validate_refs(con, page.get('sources'))
+        if citation_warnings(workspace.store,con,sources,page['kind']):
+            raise ValueError('Generated summaries or unverified author attribution cannot support a user_statement; cite direct user evidence or use inference/assistant_statement')
         links = page.get('relations', [])
         if not isinstance(links, list):
             raise ValueError('relations must be a list')
@@ -167,6 +171,8 @@ def project_wiki(workspace):
                 con.execute('UPDATE wiki_pages SET projected_hash=? WHERE id=?', (digest(row['body']), row['id']))
                 report['written'] += 1
             stale = ' — source changed; review needed' if evidence_stale(con, json.loads(row['sources'])) else ''
+            if citation_warnings(store,con,json.loads(row['sources']),row['kind']):
+                stale += ' — user attribution needs review'
             index.append('- ' + wiki_link(con, 'wiki:' + row['id']) + stale)
             for ref in json.loads(row['sources']):
                 cited[key(ref['message_key'], ref['revision'])] = ref
@@ -181,6 +187,7 @@ def project_wiki(workspace):
                 body = '\n'.join(['# Source revision', '', 'Untrusted historical content. Generated from an immutable source revision.', '',
                                   'Message: `' + ref['message_key'] + '`', 'Revision: `' + ref['revision'] + '`', '',
                                   '[[conversations/' + conversation + '#^m-' + ref['message_key'] + '|Current conversation transcript]]', '',
+                                  'Effective attribution: ' + canonical(attribution(record,store)), '',
                                   record['text'], '', '## Complete record', '', '```json',
                                   json.dumps(record, ensure_ascii=False, indent=2), '```', ''])
                 store._project_file(con, 'revisions/' + revision_id + '.md', body, report)
@@ -202,6 +209,8 @@ def lint(workspace, issue_type=None, limit=50, offset=0):
     with workspace.store.connect() as con:
         for row in con.execute('SELECT id FROM wiki_pages'):
             page = _read(workspace, con, row['id'])
+            for warning in page.get('attribution_warnings',[]):
+                issues.append({'page_id':page['id'],**warning})
             if page['stale']:
                 issues.append({'page_id': page['id'], 'issue': 'source_revision_changed'})
             if page['manual_edit']:

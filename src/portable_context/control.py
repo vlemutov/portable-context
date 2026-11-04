@@ -121,9 +121,20 @@ def record_session(con, record):
 
 
 def display_sessions(con,source,instance,conversation_id):
-    return [dict(native_id=r['native_id'],**json.loads(r['details'])) for r in con.execute(
+    result=[]
+    for r in con.execute(
         'SELECT native_id,details FROM source_sessions WHERE source=? AND instance=? AND conversation_id=? ORDER BY native_id',
-        (source,instance,conversation_id))]
+        (source,instance,conversation_id)):
+        try:
+            details=json.loads(r['details'])
+            if not isinstance(details,dict) or (details.get('display_title') is not None
+                                               and not isinstance(details['display_title'],str)):
+                raise ValueError('Invalid display metadata')
+            result.append({**details,'native_id':r['native_id']})
+        except (ValueError,TypeError):
+            result.append({'native_id':r['native_id'],'partial':True,
+                           'diagnostic':{'code':'invalid_native_session_metadata'}})
+    return result
 
 
 def session_graph(con,original,record,mid,revision):

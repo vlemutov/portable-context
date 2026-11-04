@@ -3,7 +3,9 @@
 A shared memory operated through your agent: import selected conversations, preserve native
 relationships, build an evidence-linked Markdown wiki, and continue the work from another client.
 
-**Status: 0.7.0, with self-contained restic recovery, storage controls and selected project folders.**
+**Status: 0.7.1.** Conversation listing, Claude compact-summary attribution and workspace discovery fixes.
+See [0.7.1 upgrade notes](docs/release-0.7.1.md) and the [approved backlog](docs/backlog-next.md).
+Self-contained restic recovery, storage controls and selected project folders remain supported.
 A real Codex conversation has been imported into the owner-operated Cloud.ru pilot. Broader provider
 adapters still depend on available exports and fixtures. This is not a promise to recover deleted,
 hidden, inaccessible, or unexported context. See [coverage and gaps](docs/connectors.md).

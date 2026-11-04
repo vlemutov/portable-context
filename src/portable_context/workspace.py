@@ -105,10 +105,10 @@ class Workspace:
             pages = con.execute('SELECT count(*) FROM wiki_pages').fetchone()[0]
             jobs = [dict(r) for r in con.execute("SELECT id,kind,status FROM jobs WHERE status!='completed' ORDER BY created_at LIMIT 50")]
         return {'workspace_id': workspace_id, 'version': __version__, 'stats': self.store.stats(),
-                'skill':{'recommended_version':'0.7.0','minimum_version':'0.7.0',
+                'skill':{'recommended_version':'0.7.1','minimum_version':'0.7.0',
                          'compatibility':'Capabilities govern write operations; older skills can still perform legacy reads.'},
                 'capabilities':['capture_policy_v1','file_categories_v1','project_groups_v1','import_log_v1','native_sessions_v1',
-                    'project_folders_v1','restic_backups_v1','storage_report_v1','index_policy_v1'],
+                    'project_folders_v1','restic_backups_v1','storage_report_v1','index_policy_v1','effective_attribution_v1','workspace_observations_v1'],
                 'backup':backup_manager.status() if backup_manager else {'configured':False,'note':'Managed pre-import protection requires backup setup'},
                 'recent_imports':list_imports(self.store,3),
                 'capture_protocol': {'versions':[1,2],'chunk_bytes':1024*1024,'max_blob_bytes':512*1024*1024,
@@ -353,7 +353,8 @@ class Workspace:
         # Page the complete JSON, including raw/tool fields, rather than truncating away evidence.
         blob = canonical(record)
         offset, count = max(0, offset), max(1, min(max_chars, 32000))
-        return {'message_key': message_key, 'revision': revision, 'json_fragment': blob[offset:offset + count],
+        from .attribution import attribution
+        return {**attribution(record,self.store),'message_key': message_key, 'revision': revision, 'json_fragment': blob[offset:offset + count],
                 'offset': offset, 'total_chars': len(blob), 'next_offset': offset + count if offset + count < len(blob) else None}
 
     def claim_enrichment(self, job_id, worker, lease_seconds=300):
@@ -379,7 +380,9 @@ class Workspace:
             previews = []
             for ref in payload['sources']:
                 item = json.loads(con.execute('SELECT record FROM revisions WHERE id=? AND hash=?', (ref['message_key'], ref['revision'])).fetchone()[0])
-                previews.append({**ref, 'role': item['role'], 'timestamp': item['timestamp'], 'title': item['title'],
+                from .attribution import attribution
+                info=attribution(item,self.store)
+                previews.append({**ref, **info, 'role': info['effective_role'], 'timestamp': item['timestamp'], 'title': item['title'],
                                  'text': item['text'][:1000], 'text_truncated': len(item['text']) > 1000,
                                  'has_raw_fields': bool(item.get('raw')), 'parent_id': item.get('parent_id')})
         return {'job_id': job_id, 'task': {'position': row['position'], 'lease_token': token, 'lease_until': expires,

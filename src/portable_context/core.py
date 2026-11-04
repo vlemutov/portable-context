@@ -260,12 +260,18 @@ class Store:
         expr = " AND ".join('"' + t.replace('"', '""') + '"' for t in terms[:32])
         with self.connect() as con:
             rows = con.execute("""SELECT m.id,m.conversation,m.source,m.instance,m.role,m.timestamp,
-                m.title,snippet(messages_fts,1,'[',']',' … ',40) AS excerpt
+                m.title,m.record,snippet(messages_fts,1,'[',']',' … ',40) AS excerpt
                 FROM messages_fts JOIN messages m ON m.id=messages_fts.id
                 WHERE messages_fts MATCH ? AND (? IS NULL OR m.source=?)
                 AND (? IS NULL OR m.instance=?) ORDER BY rank LIMIT ?""",
                                (expr, source, source, instance, instance, max(1, min(limit, 100))))
-            return [dict(row) for row in rows]
+            from .attribution import attribution
+            result=[]
+            for row in rows:
+                item=dict(row)
+                info=attribution(json.loads(item.pop('record')),self)
+                result.append({**item,**info,'role':info['effective_role']})
+            return result
 
     def read(self, message_key: str) -> dict:
         with self.connect() as con:
@@ -277,7 +283,8 @@ class Store:
             result["revision"] = row["revision"]
             result["history"] = [dict(x) for x in con.execute(
                 "SELECT hash,observed_at,origin FROM revisions WHERE id=? ORDER BY observed_at", (message_key,))]
-            return result
+            from .attribution import view
+            return view(result,self)
 
     def conversations(self, limit=50, offset=0):
         with self.connect() as con:
@@ -286,10 +293,18 @@ class Store:
                 GROUP BY conversation ORDER BY min(seq) LIMIT ? OFFSET ?""",
                 (max(1, min(limit, 200)), max(0, offset)))]
             from .control import display_sessions
-            for item in result:
+            for position,item in enumerate(result,start=max(0,offset)):
                 row=con.execute('SELECT record FROM messages WHERE conversation=? LIMIT 1',(item['conversation'],)).fetchone()
-                native=json.loads(row[0])['conversation_id']
+                try:
+                    native=json.loads(row[0])['conversation_id']
+                    if not isinstance(native,str):
+                        raise ValueError('Invalid conversation identity')
+                except (ValueError,TypeError,KeyError):
+                    item.update(partial=True,diagnostics=[{'code':'invalid_conversation_metadata','position':position}],native_sessions=[])
+                    continue
                 item['native_sessions']=display_sessions(con,item['source'],item['instance'],native)
+                if any(s.get('partial') for s in item['native_sessions']):
+                    item.update(partial=True,diagnostics=[{'code':'invalid_native_session_metadata','position':position}])
                 titles=[s.get('display_title') for s in item['native_sessions'] if s.get('display_title')]
                 if titles:
                     item['title']=titles[0]
@@ -297,7 +312,8 @@ class Store:
 
     def conversation(self, conversation_key: str, limit=100, offset=0):
         with self.connect() as con:
-            return [{"key": x["id"], **json.loads(x["record"])} for x in con.execute(
+            from .attribution import view
+            return [{"key": x["id"], **view(json.loads(x["record"]),self)} for x in con.execute(
                 "SELECT id,record FROM messages WHERE conversation=? ORDER BY seq LIMIT ? OFFSET ?",
                 (conversation_key, max(1, min(limit, 500)), max(0, offset)))]
 
@@ -397,10 +413,15 @@ class Store:
                 if sessions:
                     body.extend(['## Native session metadata','','```json',json.dumps(sessions,ensure_ascii=False,indent=2),'```',''])
                 for row in rows:
+                    from .attribution import attribution
                     r = json.loads(row["record"])
-                    body.extend([f"## {row['role']} · {row['timestamp'] or 'undated'}", "",
+                    info=attribution(r,self)
+                    label=info["effective_role"] + (" / " + info["content_kind"] if info["content_kind"] != "source_message" else "")
+                    body.extend([f"## {label} · {row['timestamp'] or 'undated'}", "",
                                  f"Source message: `{r['message_id']}`; parent: `{r['parent_id']}`", "",
                                  row["text"], "", f"^m-{row['id']}", ""])
+                    if info.get("attribution_warning"):
+                        body.extend([info["attribution_warning"] + " Source envelope: " + info["source_role"], ""])
                     from .graph import wiki_link
                     for relation in con.execute("SELECT * FROM graph_edges WHERE owner=? AND predicate!='part_of'",
                                                 ('message:' + row['id'],)):
