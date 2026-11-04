@@ -46,7 +46,7 @@ def capture(records, destination, allowed_roots=(), memory_project=None, max_fil
             for field in ('raw','text'):
                 if len(canonical(r[field]).encode('utf-8'))>32768:
                     r.setdefault('payloads',[]).append({'block_index':field,'kind':'full_'+field,'value':r[field]})
-                    r[field]=({'archived_payload':'payload:'+field} if field=='raw' else r[field][:2000]+'\n[Full text archived as payload:text]')
+                    r[field]=({'archived_payload':'payload:'+r['message_id']+':'+field} if field=='raw' else r[field][:2000]+'\n[Full text archived as payload:'+r['message_id']+':text]')
                     r.setdefault('completeness',{})[field+'_archived']=True
             if memory_project is not None:
                 r['memory_project'] = memory_project
@@ -54,7 +54,12 @@ def capture(records, destination, allowed_roots=(), memory_project=None, max_fil
             report['excluded_thinking_chars'] += r.get('completeness',{}).get('excluded_thinking_chars',0)
             report['omitted_chars'] += (r.get('raw') or {}).get('omitted_chars',0)
             attachments = []
+            payload_ids=set()
             for i,payload in enumerate(r.pop('payloads', [])):
+                payload_id='payload:'+r['message_id']+':'+str(payload.get('block_index',i))
+                if payload_id in payload_ids:
+                    raise ValueError('Duplicate payload identity within one message')
+                payload_ids.add(payload_id)
                 value=payload['value']
                 data=canonical(value).encode('utf-8')
                 name=payload.get('kind','payload')+'.json'
@@ -69,7 +74,7 @@ def capture(records, destination, allowed_roots=(), memory_project=None, max_fil
                         raise ValueError('Secret screening blocked embedded payload; categories: '+','.join(sorted(found)))
                     report['quarantined_files']+=1
                     report['missing_occurrences']+=1
-                    attachments.append({'file_id':'payload:'+str(payload.get('block_index',i)), 'name':name,
+                    attachments.append({'file_id':payload_id, 'name':name,
                                         'availability':'unavailable','export_observation':{'reason':'secret_detected'}})
                     continue
                 sha=hashlib.sha256(data).hexdigest()
@@ -80,7 +85,7 @@ def capture(records, destination, allowed_roots=(), memory_project=None, max_fil
                     report['unique_bytes']+=len(data)
                 report['stored_occurrences']+=1
                 report['opaque_files']+=scan in ('opaque','partial')
-                attachments.append({'file_id':'payload:'+str(payload.get('block_index',i)), 'name':name,
+                attachments.append({'file_id':payload_id, 'name':name,
                     'kind':payload.get('kind','payload'),'role':'reference','purpose':'Exact source payload',
                     'status':'unknown','searchable':payload.get('searchable',True),'sha256':sha,'size':len(data),
                     'availability':'captured','screening':scan,
@@ -255,11 +260,18 @@ def import_capture(store, directory, allowed_roots, project_id=None, transfer_li
     result = {'messages': totals, 'initial_messages':previous.get('initial_messages',previous['messages']) if previous else totals,
             'attachments': list(receipts.values()), 'missing_at_capture': manifest.get('missing_occurrences'),
             'complete':complete,'remaining_transfers':len(transfers)-len(receipts),'project_id':project_id,
+            'status':'complete' if complete else 'in_progress',
             'package_id':package_id, 'captured_at':manifest.get('created_at'),
             'completeness':{k:manifest.get(k,0) for k in ('missing_occurrences','omitted_chars','excluded_thinking_chars','redacted_records','quarantined_files','opaque_files')},
             'note': 'Safe to resume the same immutable package; inspect each S3 status separately.'}
     with store.connect() as con:
         con.execute('INSERT OR REPLACE INTO capture_receipts VALUES (?,?,?)',(result['package_id'],now(),canonical(result)))
+        if complete and manifest.get('repaired_from'):
+            old=con.execute('SELECT report FROM capture_receipts WHERE id=?',(manifest['repaired_from'],)).fetchone()
+            if old:
+                superseded=json.loads(old[0])
+                superseded.update(status='superseded',superseded_by=package_id)
+                con.execute('UPDATE capture_receipts SET report=? WHERE id=?',(canonical(superseded),manifest['repaired_from']))
     return result
 
 
@@ -302,6 +314,53 @@ def load_package(directory,verify_blobs=True):
                 if verify_blobs and sha256(p)!=sha:
                     raise ValueError('Capture blob checksum mismatch')
     return m,records
+
+
+def upgrade_capture(directory,destination):
+    """Repair 0.5.0 generated payload IDs from an immutable snapshot, preserving captured bytes."""
+    import shutil
+    directory=Path(directory).resolve()
+    destination=Path(destination).resolve()
+    if destination.exists():
+        raise ValueError('Upgrade requires a new destination; original capture is retained')
+    manifest,records=load_package(directory)
+    if manifest.get('format')!='portable-context-capture-2':
+        raise ValueError('This repair targets capture-v2 packages from 0.5.0')
+    changed=0
+    for r in records:
+        for a in r['attachments']:
+            if not isinstance(a,dict) or a.get('export_observation',{}).get('method')!='embedded_source_payload':
+                continue
+            fid=a.get('file_id','')
+            if re.fullmatch(r'payload:(?:\d+|raw|text)',fid):
+                suffix='service-event' if a.get('kind')=='service_event' else fid.split(':',1)[1]
+                a['file_id']='payload:'+r['message_id']+':'+suffix
+                changed+=1
+        if r.get('completeness',{}).get('raw_archived') and isinstance(r.get('raw'),dict) and r['raw'].get('archived_payload')=='payload:raw':
+            r['raw']['archived_payload']='payload:'+r['message_id']+':raw'
+        if r.get('completeness',{}).get('text_archived'):
+            r['text']=r['text'].replace('\n[Full text archived as payload:text]',
+                                         '\n[Full text archived as payload:'+r['message_id']+':text]')
+    destination.parent.mkdir(parents=True,exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=destination.parent,prefix='.capture-repair-') as tmp:
+        folder=Path(tmp)/'package'
+        folder.mkdir()
+        shutil.copytree(directory/'blobs',folder/'blobs')
+        parts=[]
+        position=0
+        for part in manifest['parts']:
+            count=part['messages']
+            data=canonical(records[position:position+count]).encode('utf-8')
+            position+=count
+            (folder/part['path']).write_bytes(data)
+            parts.append(dict(part,size=len(data),sha256=hashlib.sha256(data).hexdigest()))
+        Store(folder/'catalog').ingest(records,'capture-id-repair')
+        updated=dict(manifest,parts=parts,created_at=now(),repaired_from=digest(canonical(manifest)),
+                     repair='0.5.1-message-scoped-payload-ids')
+        (folder/'manifest.json').write_text(canonical(updated),encoding='utf-8')
+        folder.rename(destination)
+    return {'directory':str(destination),'repaired_payloads':changed,'messages':len(records),
+            'source_message_ids_preserved':True,'captured_bytes_preserved':True}
 
 
 def main(argv=None):

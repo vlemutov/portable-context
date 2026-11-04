@@ -185,6 +185,43 @@ class Release05Tests(unittest.TestCase):
         second=import_capture(self.store,folder,[self.root],transfer_limit=2)
         self.assertTrue(second['complete'])
         self.assertEqual(self.store.stats()['revisions'],3)
+        self.assertEqual(len(Catalog(self.store).files()),3)
+
+    def test_payload_passports_are_message_scoped_even_with_same_block_index(self):
+        records=[dict(event(),message_id=str(i),payloads=[{'block_index':0,'kind':'tool_result','value':{'text':str(i)}}]) for i in range(2)]
+        folder=self.root/'payload-identities'
+        capture(records,folder)
+        import_capture(self.store,folder,[self.root])
+        files=Catalog(self.store).files()
+        self.assertEqual(len(files),2)
+        self.assertTrue(all(len(f['occurrences'])==1 for f in files))
+
+    def test_repair_old_payload_ids_preserves_source_ids_and_bytes(self):
+        import hashlib
+        from portable_context.capture import upgrade_capture
+        folder=self.root/'old-capture'
+        records=[dict(event(),message_id=str(i),payloads=[{'block_index':0,'kind':'tool_result','value':{'text':str(i)}}]) for i in range(2)]
+        capture(records,folder)
+        manifest,normalized=load_package(folder)
+        for r in normalized:
+            r['attachments'][0]['file_id']='payload:0'
+        data=canonical(normalized).encode()
+        (folder/'records.json').write_bytes(data)
+        manifest['parts'][0].update(size=len(data),sha256=hashlib.sha256(data).hexdigest())
+        (folder/'manifest.json').write_text(canonical(manifest))
+        repaired=self.root/'repaired'
+        upgrade_capture(folder,repaired)
+        new_manifest,new_records=load_package(repaired)
+        self.assertEqual([r['message_id'] for r in normalized],[r['message_id'] for r in new_records])
+        self.assertEqual(manifest['blobs'],new_manifest['blobs'])
+        self.assertEqual(len({r['attachments'][0]['file_id'] for r in new_records}),2)
+        self.assertTrue(folder.exists())
+        old=import_capture(self.store,folder,[self.root],transfer_limit=1)
+        new=import_capture(self.store,repaired,[self.root])
+        self.assertTrue(new['complete'])
+        receipt=next(r for r in self.workspace.receipts() if r['package_id']==old['package_id'])
+        self.assertEqual(receipt['superseded_by'],new['package_id'])
+        self.assertEqual(receipt['status'],'superseded')
 
     def test_same_bytes_after_touch_do_not_change_revision(self):
         import os

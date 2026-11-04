@@ -146,7 +146,7 @@ def convert(paths, instance, title=None, thinking='exclude', subagent=False):
         # content also appears at top-level in some service events; archive it exactly once.
         raw.pop('content',None)
         if typ not in ('user','assistant'):
-            payloads.append({'kind':'service_event','value':item,'searchable':False})
+            payloads.append({'kind':'service_event','block_index':'service-event','value':item,'searchable':False})
         r={'source':'claude-code','instance':instance,'conversation_id':cid,'message_id':native,
            'parent_id':item.get('parentUuid'),'role':role,'text':'\n'.join(parts),'timestamp':item.get('timestamp'),
            'title':title or cid,'raw':raw,'attachments':attachments,'payloads':payloads,

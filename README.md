@@ -3,7 +3,7 @@
 A shared memory operated through your agent: import selected conversations, preserve native
 relationships, build an evidence-linked Markdown wiki, and continue the work from another client.
 
-**Status: 0.5, with local Claude Code capture, screened payloads, resumable MCP delivery and import completeness reports.**
+**Status: 0.5.1, with local Claude Code capture, screened payloads, resumable MCP delivery and import completeness reports.**
 A real Codex conversation has been imported into the owner-operated Cloud.ru pilot. Broader provider
 adapters still depend on available exports and fixtures. This is not a promise to recover deleted,
 hidden, inaccessible, or unexported context. See [coverage and gaps](docs/connectors.md).

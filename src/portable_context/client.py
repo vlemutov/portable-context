@@ -131,8 +131,14 @@ def main(argv=None):
     c.add_argument('--profile',type=Path,required=True)
     c.add_argument('--package',type=Path,required=True)
     c.add_argument('--project-id',help='Existing server project ID; not a source-native ID')
+    c=sub.add_parser('upgrade-capture',help='Repair 0.5.0 payload IDs without re-reading source sessions')
+    c.add_argument('--package',type=Path,required=True)
+    c.add_argument('--destination',type=Path,required=True)
     args=p.parse_args(argv)
-    if args.command in ('connect','send'):
+    if args.command=='upgrade-capture':
+        from .capture import upgrade_capture
+        result=upgrade_capture(args.package,args.destination)
+    elif args.command in ('connect','send'):
         import asyncio
         result=asyncio.run(connect(args.config,args.profile) if args.command=='connect' else send(args.profile,args.package,args.project_id))
     else:

@@ -330,7 +330,9 @@ class Catalog:
             from .backup import sha256
             if sha256(self.store.root / 'originals' / sha) != sha:
                 raise ValueError('Existing archived blob is corrupt; transfer cannot be confirmed')
-        name = self.file(occurrence['file_id'])['name']
+        # A transfer needs the filename, not the complete version history of this logical file.
+        with self.store.connect() as con:
+            name=con.execute('SELECT name FROM catalog_files WHERE id=?',(occurrence['file_id'],)).fetchone()[0]
         mime = mimetypes.guess_type(name)[0] or 'application/octet-stream'
         with self.store.connect() as con:
             con.execute('BEGIN IMMEDIATE')

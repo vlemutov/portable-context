@@ -1,5 +1,17 @@
 # Portable Context 0.5
 
+## 0.5.1 correction
+
+Use 0.5.1 or newer. The first 0.5.0 build scoped generated payload file IDs to the block position,
+so different messages could share a file passport. Message/occurrence evidence and bytes were retained,
+but the logical file grouping was incorrect and transfers unnecessarily loaded a growing file history.
+0.5.1 scopes payload IDs to the native message ID and reads only the filename during a transfer.
+
+For an already prepared 0.5.0 capture, run `python -m portable_context.client upgrade-capture
+--package OLD --destination NEW` (on one line), then send NEW. This preserves the immutable old
+snapshot and all captured bytes. It creates corrected attachment revisions, not duplicate messages.
+Old evidence remains retrievable. Unchanged captures made with 0.5.1 still replay without new revisions.
+
 Local Claude Code discovery/capture and selective claude.ai archive capture now share the same
 screened, chunked delivery workflow. Large tool payloads are archived as content-addressed files;
 the transcript keeps a compact pointer. Native UUIDs stay stable across folder moves. Conflicting
