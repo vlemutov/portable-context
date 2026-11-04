@@ -197,7 +197,7 @@ def project_wiki(workspace):
     return report
 
 
-def lint(workspace):
+def lint(workspace, issue_type=None, limit=50, offset=0):
     issues = []
     with workspace.store.connect() as con:
         for row in con.execute('SELECT id FROM wiki_pages'):
@@ -207,7 +207,19 @@ def lint(workspace):
             if page['manual_edit']:
                 issues.append({'page_id': page['id'], 'issue': 'manual_edit_needs_reconciliation'})
         for row in con.execute('SELECT id,kind,label FROM graph_nodes WHERE materialized=0'):
-            issues.append({'node': dict(row), 'issue': 'referenced_source_not_imported'})
+            used=con.execute('SELECT 1 FROM graph_edges WHERE subject=? OR object=? LIMIT 1',(row['id'],row['id'])).fetchone()
+            issues.append({'node': dict(row), 'issue': 'referenced_source_not_imported' if used else 'unused_placeholder'})
+        for row in con.execute('''SELECT o.id,o.metadata,o.availability FROM catalog_occurrences o
+            JOIN messages m ON m.id=o.message_key AND m.revision=o.revision WHERE o.availability!='stored' '''):
+            issues.append({'occurrence_id':row['id'],'issue':'missing_original',
+                'reason':json.loads(row['metadata']).get('export_observation',{}).get('reason',row['availability'])})
+        for row in con.execute('SELECT id,record FROM messages'):
+            r=json.loads(row['record'])
+            if (r.get('raw') or {}).get('omitted_chars',0) or r.get('completeness',{}).get('redacted') or r.get('completeness',{}).get('excluded_thinking_chars',0):
+                issues.append({'message_key':row['id'],'issue':'content_excluded_or_redacted'})
+        for row in con.execute('''SELECT p.id,p.title FROM catalog_projects p LEFT JOIN catalog_assignments a ON a.project_id=p.id
+            WHERE a.conversation IS NULL AND p.status='active' '''):
+            issues.append({'project_id':row['id'],'title':row['title'],'issue':'empty_project'})
         for row in con.execute("SELECT id,owner,evidence FROM graph_edges WHERE layer='semantic'"):
             if evidence_stale(con, json.loads(row['evidence'])):
                 issues.append({'edge_id': row['id'], 'owner': row['owner'], 'issue': 'semantic_relation_source_changed'})
@@ -218,4 +230,26 @@ def lint(workspace):
             path = workspace.store.root / 'vault' / row['path']
             if path.exists() and digest(path.read_text(encoding='utf-8')) != row['hash']:
                 issues.append({'path': row['path'], 'issue': 'catalog_manual_edit_needs_reconciliation'})
-    return {'issues': issues, 'semantic_review': 'Ask an agent to review contradictions and meaning; this lint checks provenance and consistency only.'}
+    from collections import Counter
+    counts=dict(Counter(i['issue'] for i in issues))
+    selected=[i for i in issues if issue_type is None or i['issue']==issue_type]
+    offset=max(0,offset)
+    limit=max(1,min(limit,100))
+    return {'summary':counts,'total':len(issues),'filtered_total':len(selected),'issues':selected[offset:offset+limit],
+        'next_offset':offset+limit if offset+limit<len(selected) else None,
+        'semantic_review': 'Ask an agent to review contradictions and meaning; this lint checks provenance and consistency only.'}
+
+
+def cleanup_placeholders(workspace, expected_token=None):
+    """Preview first. Apply only if the orphan set is unchanged; never remove source revisions."""
+    with workspace.store.connect() as con:
+        con.execute('BEGIN IMMEDIATE')
+        ids=[r[0] for r in con.execute('''SELECT id FROM graph_nodes n WHERE materialized=0
+            AND NOT EXISTS(SELECT 1 FROM graph_edges e WHERE e.subject=n.id OR e.object=n.id) ORDER BY id''')]
+        token=digest(canonical(ids))
+        if expected_token is not None:
+            if expected_token!=token:
+                raise ValueError('Cleanup preview changed; preview again')
+            con.executemany('DELETE FROM graph_nodes WHERE id=?',[(x,) for x in ids])
+            workspace.activity(con,'cleanup_placeholders','maintenance',{'count':len(ids),'token':token})
+    return {'count':len(ids),'preview_token':token,'applied':expected_token is not None}

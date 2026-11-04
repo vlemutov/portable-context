@@ -1,5 +1,20 @@
 # Data contract v1
 
+## Capture protocol 2 in 0.5
+
+The message schema remains 1. A capture-v2 manifest lists sources, bounded JSON parts and blobs
+with exact byte sizes and SHA256. It records capture time, screening, omissions and adapter coverage.
+`payloads` is a client preparation field: each `{kind,value,block_index?,searchable?}` becomes an
+attachment with a stable file_id and content hash. Large raw/text fields may be externalized too;
+`completeness` marks these pointers. Tool use/result IDs remain in the archived source block.
+The capture time and source file mtime no longer alter normalized message identity. Read original
+payloads via their file passport/excerpts/bytes; a compact transcript is not the full evidence.
+
+`subagent_of={conversation_id}` produces a distinct structural relation, never a guessed fork.
+Known exclusions/redactions are reported, not silently counted as complete preservation. S3 status,
+local byte availability, delivered-package completeness and source-account completeness differ.
+Capture receipts survive reconnects. Replaying legacy captures preserves their original revision hashes.
+
 ## Export-time catalog additions in 0.4
 
 Schema version remains 1. Optional `memory_project={id,name,basis,summary}` records non-native

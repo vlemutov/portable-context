@@ -82,9 +82,55 @@ def build_server(store: Store, allowed_roots=None):
         return workspace.describe()
 
     @server.tool()
-    def list_projects(query: str = '', limit: int = 30, offset: int = 0) -> list[dict]:
+    def list_projects(query: str = '', limit: int = 30, offset: int = 0, include_archived: bool = False) -> list[dict]:
         """Start recall here. Paginated project entries; unclassified means only a conversation grouping is known."""
-        return catalog.projects(query, limit, offset)
+        return catalog.projects(query, limit, offset, include_archived)
+
+    @server.tool()
+    def create_project(identifier: str, title: str, summary: str = '', actor: str = 'user') -> dict:
+        """Create an empty project with a stable user-selected identifier; returns its memory ID."""
+        return catalog.create_project(identifier,title,summary,actor)
+
+    @server.tool()
+    def archive_project(project_id: str, expected_version: int, archived: bool = True, actor: str = 'user') -> dict:
+        """Archive/unarchive a project without deleting conversations, files or history."""
+        return catalog.archive_project(project_id,expected_version,archived,actor)
+
+    @server.tool()
+    def begin_capture_upload(manifest: dict) -> dict:
+        """Begin/resume a locally selected and screened capture-v2 upload. No arbitrary server paths."""
+        from .transfer import Uploads
+        return Uploads(workspace).begin(manifest)
+
+    @server.tool()
+    def capture_upload_status(upload_id: str, offset: int = 0, limit: int = 100) -> dict:
+        """List received byte offsets and verified file hashes for resuming an interrupted upload."""
+        from .transfer import Uploads
+        return Uploads(workspace).status(upload_id,offset,limit)
+
+    @server.tool()
+    def upload_capture_chunks(upload_id: str, chunks: list[dict]) -> dict:
+        """Write up to 100 chunks, total <=1 MiB; each has path, offset, content_base64. Safe identical retries."""
+        from .transfer import Uploads
+        return Uploads(workspace).put(upload_id,chunks)
+
+    @server.tool()
+    def finish_capture_upload(upload_id: str, project_id: str | None = None) -> dict:
+        """Verify/import a complete selected package; optionally assign to an existing project. Inspect completeness."""
+        from .transfer import Uploads
+        return Uploads(workspace).finish(upload_id,project_id)
+
+    @server.tool()
+    def list_capture_receipts(limit: int = 20, offset: int = 0) -> list[dict]:
+        """Paginated import receipts with completeness, counts and S3 states."""
+        from .transfer import compact_receipt
+        return [compact_receipt(r) for r in workspace.receipts(limit,offset)]
+
+    @server.tool()
+    def cleanup_unused_placeholders(expected_token: str | None = None) -> dict:
+        """Preview orphan placeholder cleanup; apply with the returned token. Source history is never removed."""
+        from .wiki import cleanup_placeholders
+        return cleanup_placeholders(workspace,expected_token)
 
     @server.tool()
     def read_project(project_id: str) -> dict:
@@ -282,9 +328,9 @@ def build_server(store: Store, allowed_roots=None):
         return read_graph(store, node_id, layer, limit, offset)
 
     @server.tool()
-    def check_memory() -> dict:
+    def check_memory(issue_type: str | None = None, limit: int = 50, offset: int = 0) -> dict:
         """Check stale citations, unresolved source references and unreconciled manual wiki edits."""
-        return lint(workspace)
+        return lint(workspace,issue_type,limit,offset)
 
     @server.tool()
     def search_messages(query: str, limit: int = 10, source: str | None = None,

@@ -7,6 +7,7 @@ from .core import key, validate
 from .importers import FORMATS, MAX_MEMBER, MAX_ZIP_TEXT, candidate, parse
 
 GUIDES = {
+    'claude-code': 'Use the local client discover/prepare workflow for Claude Code JSONL. Explicitly select sessions before capture. Unknown records and incomplete tails are reported.',
     'claude': 'Connect a local official export JSON/ZIP, or have the host provide records it can actually read. Account-wide history is not granted by MCP.',
     'chatgpt': 'Connect an official conversation export JSON/ZIP. Saved memory, instructions and unavailable chats require separate capture.',
     'gemini': 'Connect Google Takeout My Activity / Gemini Apps JSON or HTML. Activity may omit replies and grouping; Antigravity is not needed.',

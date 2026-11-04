@@ -56,6 +56,12 @@ def index_record(con, r, mid, cid, revision):
         edge(con, a, predicate, b, 'structural', message, evidence, 'source')
 
     link(message, 'part_of', chat)
+    if isinstance(r.get('subagent_of'),dict):
+        parent_id=r['subagent_of'].get('conversation_id')
+        if isinstance(parent_id,str) and parent_id:
+            ancestor='conversation:'+key(*prefix,parent_id)
+            node(con,ancestor,'conversation',parent_id,{'conversation_id':parent_id},False)
+            link(chat,'subagent_of',ancestor)
     if r.get('parent_id'):
         parent_key = key(*prefix, r['conversation_id'], r['parent_id'])
         parent = 'message:' + parent_key

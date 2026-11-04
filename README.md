@@ -3,7 +3,7 @@
 A shared memory operated through your agent: import selected conversations, preserve native
 relationships, build an evidence-linked Markdown wiki, and continue the work from another client.
 
-**Status: 0.4, with export-time file passports, project entry pages and recoverable originals.**
+**Status: 0.5, with local Claude Code capture, screened payloads, resumable MCP delivery and import completeness reports.**
 A real Codex conversation has been imported into the owner-operated Cloud.ru pilot. Broader provider
 adapters still depend on available exports and fixtures. This is not a promise to recover deleted,
 hidden, inaccessible, or unexported context. See [coverage and gaps](docs/connectors.md).
@@ -18,6 +18,11 @@ The assistant should read the [skill](skills/portable-context/SKILL.md), help yo
 existing memory or create a new one, and guide you one step at a time. It can also help if you
 are unsure whether you already have a memory. Automated installation needs terminal and file
 access; otherwise the assistant can guide the manual steps. Each user connects their own storage.
+
+For local Claude Code sessions or selective claude.ai archives, use the
+[client guide](skills/portable-context/references/client.md). The client prepares selected data on
+your computer; the MCP server stores it in your existing memory. See the
+[0.5 release and migration notes](docs/release-0.5.md) for limits and verification.
 
 ## Deploy your own memory
 

@@ -8,6 +8,7 @@ Tests are synthetic. Check the import report and compare counts/content with you
 | Source | This release | Continuous collection | Gaps |
 |---|---|---|---|
 | Claude | `conversations*.json` in JSON/ZIP; chat_messages, content, raw fields, file references | Repeat exports | Separate saved memory/project context/instructions need separate capture; no browser recorder |
+| Claude Code | Local client: discover/select JSONL sessions, native IDs, tool payloads, service events, explicit subagent selection | Repeat client capture/delivery with stable IDs | Internal format varies; unknown events are reported; no installed background watcher |
 | ChatGPT | conversations JSON/ZIP, mapping nodes, all branches, raw fields | Repeat exports | No automatic web history API; saved memory not presumed included |
 | Codex | session_meta + response_item JSONL, directory imports | File watcher with checkpoints | Paginated app-server history exporter not implemented; JSONL presence is not proof of complete account history |
 | Gemini web | Takeout My Activity JSON; outer-cell HTML activity extraction | Repeat Takeout exports | Activity may omit responses/grouping; HTML timestamps unparsed; Gems aren't chat history |

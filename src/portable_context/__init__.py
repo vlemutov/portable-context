@@ -1,2 +1,2 @@
 """Portable Context: archive first, derive memory with provenance."""
-__version__ = "0.4.0"
+__version__ = "0.5.0"

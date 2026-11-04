@@ -64,8 +64,28 @@ class Workspace:
                     seq INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL,
                     action TEXT NOT NULL, actor TEXT NOT NULL, details TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS capture_receipts (
+                    id TEXT PRIMARY KEY, updated_at TEXT NOT NULL, report TEXT NOT NULL);
             """)
             con.execute("INSERT OR IGNORE INTO metadata VALUES ('workspace_id',?)", (str(uuid.uuid4()),))
+        self.reconcile_sources()
+
+    def reconcile_sources(self):
+        """Register observed record identities without changing historical transcripts."""
+        with self.store.connect() as con:
+            for row in con.execute('SELECT DISTINCT source,instance FROM messages').fetchall():
+                source,instance=row
+                fmt=source if source in GUIDES else 'events'
+                if con.execute('SELECT 1 FROM sources WHERE instance=? AND format=?',(instance,fmt)).fetchone():
+                    continue
+                sid='observed-'+key(source,instance)[:40]
+                con.execute('INSERT OR IGNORE INTO sources VALUES (?,?,?,?,?,?,?,NULL,?)',
+                    (sid,source+' / '+instance,fmt,instance,'host',None,'ready',now()))
+
+    def receipts(self, limit=20, offset=0):
+        with self.store.connect() as con:
+            return [json.loads(r[0]) for r in con.execute('SELECT report FROM capture_receipts ORDER BY updated_at DESC,id LIMIT ? OFFSET ?',
+                    (max(1,min(limit,100)),max(0,offset)))]
 
     def activity(self, con, action, actor, details):
         con.execute('INSERT INTO activity(at,action,actor,details) VALUES (?,?,?,?)',
@@ -80,6 +100,8 @@ class Workspace:
             pages = con.execute('SELECT count(*) FROM wiki_pages').fetchone()[0]
             jobs = [dict(r) for r in con.execute("SELECT id,kind,status FROM jobs WHERE status!='completed' ORDER BY created_at LIMIT 50")]
         return {'workspace_id': workspace_id, 'version': __version__, 'stats': self.store.stats(),
+                'capture_protocol': {'versions':[1,2],'chunk_bytes':1024*1024,'max_blob_bytes':512*1024*1024,
+                    'upload_enabled':bool(self.allowed_roots),'allowed_import_directories':list(map(str,self.allowed_roots))},
                 'catalog': catalog_summary(self.store),
                 'storage': {'backend': 'filesystem_sqlite', 'server_directory': str(self.store.root),
                             'placement': 'On the machine running this MCP process; not necessarily the client.',

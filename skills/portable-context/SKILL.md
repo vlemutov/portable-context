@@ -78,6 +78,13 @@ paths only when actually on that machine. Never put a personal memory directory 
 
 ## Import selected or all accessible data
 
+For local Claude Code sessions, selective claude.ai exports, or delivering a capture from this
+computer, read [references/client.md](references/client.md) first. Use the packaged adapter/client;
+do not invent a converter or discard tool output to fit a message limit. Check server protocol 2
+before delivery. Inspect completeness and per-file reasons, not just successful transport.
+If an existing project is intended, pass its catalog ID at delivery; create_project can create
+an empty project first. The client pins the workspace identity and resumes partial uploads.
+
 1. Inspect configured sources. If the host has real history/list/read/export tools, use them to
    discover scope, paginate fully and obtain records. The currently visible prompt/context is not
    necessarily the whole conversation, and one conversation is not the account history.

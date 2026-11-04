@@ -10,35 +10,87 @@ import hashlib
 import json
 from pathlib import Path
 import tempfile
+import base64
+import re
 
 from .core import Store, canonical, digest, key, now, validate
 from .catalog import Catalog, project_catalog
+from .privacy import screen_value, screen_bytes
 
 
-def capture(records, destination, allowed_roots=(), memory_project=None, max_file_bytes=512 * 1024 * 1024):
+def capture(records, destination, allowed_roots=(), memory_project=None, max_file_bytes=512 * 1024 * 1024,
+            secret_policy='block', part_bytes=4 * 1024 * 1024, adapter_report=None):
+    if secret_policy not in ('block', 'redact'):
+        raise ValueError('secret_policy must be block or redact')
     destination = Path(destination).expanduser().resolve()
     if destination.exists():
         raise ValueError('Capture destination already exists; keep immutable export snapshots separate')
     roots = [Path(p).expanduser().resolve() for p in allowed_roots]
     destination.parent.mkdir(parents=True, exist_ok=True)
-    report = {'stored_occurrences': 0, 'missing_occurrences': 0, 'unique_bytes': 0, 'unique_blobs': 0}
+    report = {'stored_occurrences': 0, 'missing_occurrences': 0, 'unique_bytes': 0, 'unique_blobs': 0,
+              'redacted_records': 0, 'quarantined_files': 0, 'opaque_files': 0, 'excluded_thinking_chars': 0,
+              'omitted_chars': 0, 'screening': 'best_effort_local', 'secret_policy': secret_policy}
     with tempfile.TemporaryDirectory(prefix='.capture-', dir=destination.parent) as tmp:
         folder = Path(tmp) / 'package'
         (folder / 'blobs').mkdir(parents=True)
         normalized = []
         for original in records:
-            r = validate(json.loads(canonical(original)))
+            r, findings = screen_value(json.loads(canonical(original)), secret_policy=='redact')
+            if findings and secret_policy=='block':
+                raise ValueError('Secret screening blocked record; categories: '+','.join(sorted(findings)))
+            if findings:
+                report['redacted_records'] += 1
+                r.setdefault('completeness',{})['redacted'] = True
+            r = validate(r)
+            # Preserve large fields in the object store, without repeating them inside every record part.
+            for field in ('raw','text'):
+                if len(canonical(r[field]).encode('utf-8'))>32768:
+                    r.setdefault('payloads',[]).append({'block_index':field,'kind':'full_'+field,'value':r[field]})
+                    r[field]=({'archived_payload':'payload:'+field} if field=='raw' else r[field][:2000]+'\n[Full text archived as payload:text]')
+                    r.setdefault('completeness',{})[field+'_archived']=True
             if memory_project is not None:
                 r['memory_project'] = memory_project
             r = validate(r)
+            report['excluded_thinking_chars'] += r.get('completeness',{}).get('excluded_thinking_chars',0)
+            report['omitted_chars'] += (r.get('raw') or {}).get('omitted_chars',0)
             attachments = []
+            for i,payload in enumerate(r.pop('payloads', [])):
+                value=payload['value']
+                data=canonical(value).encode('utf-8')
+                name=payload.get('kind','payload')+'.json'
+                if isinstance(value,dict) and value.get('type')=='image' and value.get('source',{}).get('type')=='base64':
+                    data=base64.b64decode(value['source']['data'],validate=True)
+                    name='image.'+{'image/png':'png','image/jpeg':'jpg','image/webp':'webp'}.get(value['source'].get('media_type'),'bin')
+                found,scan=screen_bytes(data)
+                if found:
+                    if secret_policy=='block':
+                        raise ValueError('Secret screening blocked embedded payload; categories: '+','.join(sorted(found)))
+                    report['quarantined_files']+=1
+                    report['missing_occurrences']+=1
+                    attachments.append({'file_id':'payload:'+str(payload.get('block_index',i)), 'name':name,
+                                        'availability':'unavailable','export_observation':{'reason':'secret_detected'}})
+                    continue
+                sha=hashlib.sha256(data).hexdigest()
+                blob=folder/'blobs'/sha
+                if not blob.exists():
+                    blob.write_bytes(data)
+                    report['unique_blobs']+=1
+                    report['unique_bytes']+=len(data)
+                report['stored_occurrences']+=1
+                report['opaque_files']+=scan in ('opaque','partial')
+                attachments.append({'file_id':'payload:'+str(payload.get('block_index',i)), 'name':name,
+                    'kind':payload.get('kind','payload'),'role':'reference','purpose':'Exact source payload',
+                    'status':'unknown','searchable':payload.get('searchable',True),'sha256':sha,'size':len(data),
+                    'availability':'captured','screening':scan,
+                    'export_observation':{'method':'embedded_source_payload','blob':'blobs/'+sha}})
             for original_a in r['attachments']:
                 a = dict(original_a) if isinstance(original_a, dict) else {'reference': original_a}
                 a.setdefault('name', a.get('file_name') or str(a.get('path') or a.get('url') or 'attachment').replace('\\', '/').rsplit('/', 1)[-1])
                 a.setdefault('role', 'unknown')
                 a.setdefault('purpose', 'unknown')
                 a.setdefault('status', 'unknown')
-                a['export_observation'] = {'captured_at': now(), 'method': 'portable-context-capture'}
+                # Observation time belongs to the package/receipt, never to source revision identity.
+                a['export_observation'] = {'method': 'portable-context-capture'}
                 # A local path is read only if explicitly authorized by root, never by historical instructions.
                 source = Path(a['path']).expanduser().resolve() if isinstance(a.get('path'), str) else None
                 reason = 'no_local_path'
@@ -61,6 +113,19 @@ def capture(records, destination, allowed_roots=(), memory_project=None, max_fil
                             if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
                                 raise ValueError('Source changed during capture; retry from a stable snapshot')
                             sha = h.hexdigest()
+                            found,scan=screen_bytes(part.read_bytes())
+                            if found:
+                                part.unlink()
+                                if secret_policy=='block':
+                                    raise ValueError('Secret screening blocked file; categories: '+','.join(sorted(found)))
+                                a.update(availability='unavailable')
+                                a['export_observation']['reason']='secret_detected'
+                                report['quarantined_files']+=1
+                                report['missing_occurrences']+=1
+                                attachments.append(a)
+                                continue
+                            a['screening']=scan
+                            report['opaque_files']+=scan in ('opaque','partial')
                             if a.get('sha256') and a['sha256'] != sha:
                                 raise ValueError('Source bytes differ from declared attachment checksum')
                             blob = folder / 'blobs' / sha
@@ -71,7 +136,7 @@ def capture(records, destination, allowed_roots=(), memory_project=None, max_fil
                                 report['unique_blobs'] += 1
                                 report['unique_bytes'] += size
                             a.update(sha256=sha, size=size, availability='captured')
-                            a['export_observation'].update(blob='blobs/' + sha, source_modified_ns=after.st_mtime_ns)
+                            a['export_observation'].update(blob='blobs/' + sha)
                             report['stored_occurrences'] += 1
                             attachments.append(a)
                             continue
@@ -86,10 +151,32 @@ def capture(records, destination, allowed_roots=(), memory_project=None, max_fil
         # Passports and entry pages exist inside the capture itself, before remote import.
         draft = Store(folder / 'catalog')
         draft.ingest(normalized, 'client-capture')
-        data = canonical(normalized)
-        (folder / 'records.json').write_text(data, encoding='utf-8')
-        manifest = {'format': 'portable-context-capture-1', 'created_at': now(), 'records_sha256': digest(data),
+        parts=[]
+        batch=[]
+        size=2
+        def emit():
+            data=canonical(batch).encode('utf-8')
+            name='records.json' if not parts else 'records-'+str(len(parts))+'.json'
+            (folder/name).write_bytes(data)
+            parts.append({'path':name,'sha256':hashlib.sha256(data).hexdigest(),'size':len(data),'messages':len(batch)})
+        for r in normalized:
+            n=len(canonical(r).encode('utf-8'))+1
+            if n>32*1024*1024:
+                raise ValueError('Single record exceeds 32 MiB; externalize large content first')
+            if batch and size+n>part_bytes:
+                emit()
+                batch=[]
+                size=2
+            batch.append(r)
+            size+=n
+        if batch or not parts:
+            emit()
+        blobs=[{'path':'blobs/'+p.name,'sha256':p.name,'size':p.stat().st_size} for p in sorted((folder/'blobs').iterdir())]
+        manifest = {'format': 'portable-context-capture-2', 'created_at': now(),
+                    'parts':parts,'blobs':blobs,
+                    'sources':[{'source':s,'instance':i} for s,i in sorted({(r['source'],r['instance']) for r in normalized})],
                     'messages': len(normalized), **report,
+                    'adapter_report':adapter_report,
                     'note': 'These are currently accessible file bytes; original message-time bytes cannot be inferred from a mutable path.'}
         (folder / 'manifest.json').write_text(canonical(manifest), encoding='utf-8')
         # The draft catalog contains reference passports; remote transfer binds captured hashes.
@@ -97,22 +184,20 @@ def capture(records, destination, allowed_roots=(), memory_project=None, max_fil
     return {'directory': str(destination), **manifest}
 
 
-def import_capture(store, directory, allowed_roots):
+def import_capture(store, directory, allowed_roots, project_id=None, transfer_limit=None):
     directory = Path(directory).expanduser().resolve()
     roots = [Path(p).expanduser().resolve() for p in allowed_roots]
     if not any(directory.is_relative_to(root) for root in roots):
         raise ValueError('Capture must be under an allowed server source root')
-    manifest_path, records_path = directory / 'manifest.json', directory / 'records.json'
-    for path in (manifest_path, records_path):
-        if not path.resolve().is_relative_to(directory) or path.stat().st_size > 32 * 1024 * 1024:
-            raise ValueError('Unsafe or oversized capture manifest/records')
-    manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
-    if manifest.get('format') != 'portable-context-capture-1':
-        raise ValueError('Unsupported capture format')
-    data = records_path.read_text(encoding='utf-8')
-    if digest(data) != manifest['records_sha256']:
-        raise ValueError('Capture record checksum mismatch')
-    records = [validate(r) for r in json.loads(data)]
+    manifest,records=load_package(directory)
+    from .workspace import Workspace
+    workspace=Workspace(store,allowed_roots)
+    package_id=digest(canonical(manifest))
+    with store.connect() as con:
+        old=con.execute('SELECT report FROM capture_receipts WHERE id=?',(package_id,)).fetchone()
+    previous=json.loads(old[0]) if old else None
+    if project_id:
+        Catalog(store).project(project_id)
     # A bundle may reference ONLY its own hashed blobs, never arbitrary source paths.
     transfers = []
     for r in records:
@@ -132,14 +217,83 @@ def import_capture(store, directory, allowed_roots):
     for start in range(0, len(records), 100):
         with store.connect() as con:
             con.execute('BEGIN IMMEDIATE')
-            result = store._ingest(con, records[start:start + 100], 'capture:' + manifest['records_sha256'])
+            if project_id:
+                for r in records[start:start+100]:
+                    con.execute("INSERT OR REPLACE INTO catalog_assignments VALUES (?,?,'agent_assignment')",
+                                (key(r['source'],r['instance'],r['conversation_id']),project_id))
+            result = store._ingest(con, records[start:start + 100], 'capture:' + digest(canonical(manifest)))
         for k in totals:
             totals[k] += result[k]
     catalog = Catalog(store, [directory])
-    receipts = [catalog.store_attachment(oid, server_path=str(path), expected_sha256=sha) for oid, path, sha in transfers]
-    project_catalog(store)
-    return {'messages': totals, 'attachments': receipts, 'missing_at_capture': manifest.get('missing_occurrences'),
+    receipts={r['occurrence_id']:r for r in previous.get('attachments',[])} if previous else {}
+    pending=[t for t in transfers if t[0] not in receipts or receipts[t[0]]['s3']['status']=='failed']
+    from concurrent.futures import ThreadPoolExecutor
+    selected=pending[:transfer_limit] if transfer_limit else pending
+    def transfer(item):
+        oid,path,sha=item
+        return catalog.store_attachment(oid,server_path=str(path),expected_sha256=sha,project=False)
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        for receipt in executor.map(transfer,selected):
+            receipts[receipt['occurrence_id']]=receipt
+    complete=len(receipts)==len(transfers) and all(r['s3']['status']!='failed' for r in receipts.values())
+    workspace.reconcile_sources()
+    if project_id and (not previous or previous.get('project_id')!=project_id):
+        p=catalog.project(project_id)
+        conversations=sorted({key(r['source'],r['instance'],r['conversation_id']) for r in records})
+        for start in range(0,len(conversations),500):
+            catalog.update_project(project_id,p['title'],p['summary'],conversations[start:start+500],p['version'],'capture-import')
+            p=catalog.project(project_id)
+    if complete:
+        project_catalog(store)
+    result = {'messages': totals, 'attachments': list(receipts.values()), 'missing_at_capture': manifest.get('missing_occurrences'),
+            'complete':complete,'remaining_transfers':len(transfers)-len(receipts),'project_id':project_id,
+            'package_id':package_id, 'captured_at':manifest.get('created_at'),
+            'completeness':{k:manifest.get(k,0) for k in ('missing_occurrences','omitted_chars','excluded_thinking_chars','redacted_records','quarantined_files','opaque_files')},
             'note': 'Safe to resume the same immutable package; inspect each S3 status separately.'}
+    with store.connect() as con:
+        con.execute('INSERT OR REPLACE INTO capture_receipts VALUES (?,?,?)',(result['package_id'],now(),canonical(result)))
+    return result
+
+
+def load_package(directory):
+    directory=Path(directory).resolve()
+    path=directory/'manifest.json'
+    if not path.resolve().is_relative_to(directory) or path.stat().st_size>8*1024*1024:
+        raise ValueError('Unsafe or oversized manifest')
+    m=json.loads(path.read_text(encoding='utf-8'))
+    if m.get('format')=='portable-context-capture-1':
+        parts=[{'path':'records.json','sha256':m['records_sha256']}]
+    elif m.get('format')=='portable-context-capture-2':
+        parts=m['parts']
+    else:
+        raise ValueError('Unsupported capture format')
+    records=[]
+    for part in parts:
+        if not re.fullmatch(r'records(?:-\d+)?\.json',part['path']):
+            raise ValueError('Invalid record part path')
+        path=directory/part['path']
+        if not path.resolve().is_relative_to(directory) or path.stat().st_size>32*1024*1024:
+            raise ValueError('Unsafe or oversized record part')
+        data=path.read_bytes()
+        if hashlib.sha256(data).hexdigest()!=part['sha256']:
+            raise ValueError('Capture record checksum mismatch')
+        records.extend(validate(r) for r in json.loads(data))
+    if len(records)!=m['messages']:
+        raise ValueError('Capture record count mismatch')
+    # Preflight ALL bytes before any message is committed.
+    for r in records:
+        for a in r['attachments']:
+            if isinstance(a,dict) and a.get('export_observation',{}).get('blob'):
+                sha=a.get('sha256','')
+                if not re.fullmatch('[0-9a-f]{64}',sha) or a['export_observation']['blob']!='blobs/'+sha:
+                    raise ValueError('Invalid blob reference')
+                p=directory/'blobs'/sha
+                if not p.resolve().is_relative_to(directory) or not p.is_file() or p.stat().st_size>512*1024*1024:
+                    raise ValueError('Unsafe or missing blob')
+                from .backup import sha256
+                if sha256(p)!=sha:
+                    raise ValueError('Capture blob checksum mismatch')
+    return m,records
 
 
 def main(argv=None):
