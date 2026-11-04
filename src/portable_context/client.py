@@ -160,7 +160,11 @@ def main(argv=None):
                                       args.root.resolve().parent/'.pc-preview-placeholder')
             if args.command=='discover':
                 # Return all selected archive titles locally; nothing is sent to the server.
-                result={'conversations':catalog(records,limit=200),'report':report}
+                first=catalog(records,limit=200)
+                groups=first['conversations']
+                for offset in range(200,first['total_conversations'],200):
+                    groups+=catalog(records,limit=200,offset=offset)['conversations']
+                result={'conversations':groups,'total_conversations':first['total_conversations'],'report':report}
             else:
                 wanted={r['conversation_id'] for r in records} if args.all else set(args.session)
                 if not wanted.issubset({r['conversation_id'] for r in records}):

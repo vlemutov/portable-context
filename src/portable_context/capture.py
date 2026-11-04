@@ -61,6 +61,8 @@ def capture(records, destination, allowed_roots=(), memory_project=None, max_fil
                 if isinstance(value,dict) and value.get('type')=='image' and value.get('source',{}).get('type')=='base64':
                     data=base64.b64decode(value['source']['data'],validate=True)
                     name='image.'+{'image/png':'png','image/jpeg':'jpg','image/webp':'webp'}.get(value['source'].get('media_type'),'bin')
+                if len(data)>min(max_file_bytes,512*1024*1024):
+                    raise ValueError('Embedded payload exceeds capture size limit')
                 found,scan=screen_bytes(data)
                 if found:
                     if secret_policy=='block':
@@ -189,13 +191,18 @@ def import_capture(store, directory, allowed_roots, project_id=None, transfer_li
     roots = [Path(p).expanduser().resolve() for p in allowed_roots]
     if not any(directory.is_relative_to(root) for root in roots):
         raise ValueError('Capture must be under an allowed server source root')
-    manifest,records=load_package(directory)
     from .workspace import Workspace
     workspace=Workspace(store,allowed_roots)
-    package_id=digest(canonical(manifest))
+    manifest_path=directory/'manifest.json'
+    if not manifest_path.resolve().is_relative_to(directory) or manifest_path.stat().st_size>8*1024*1024:
+        raise ValueError('Unsafe or oversized manifest')
+    package_id=digest(canonical(json.loads(manifest_path.read_text(encoding='utf-8'))))
     with store.connect() as con:
         old=con.execute('SELECT report FROM capture_receipts WHERE id=?',(package_id,)).fetchone()
     previous=json.loads(old[0]) if old else None
+    # Full preflight on first import. On resume, each pending transfer verifies its own SHA256;
+    # re-hashing already committed originals on every 25-file step is quadratic work.
+    manifest,records=load_package(directory,verify_blobs=previous is None)
     if project_id:
         Catalog(store).project(project_id)
     # A bundle may reference ONLY its own hashed blobs, never arbitrary source paths.
@@ -221,7 +228,7 @@ def import_capture(store, directory, allowed_roots, project_id=None, transfer_li
                 for r in records[start:start+100]:
                     con.execute("INSERT OR REPLACE INTO catalog_assignments VALUES (?,?,'agent_assignment')",
                                 (key(r['source'],r['instance'],r['conversation_id']),project_id))
-            result = store._ingest(con, records[start:start + 100], 'capture:' + digest(canonical(manifest)))
+            result = store._ingest(con, records[start:start + 100], 'capture:' + package_id)
         for k in totals:
             totals[k] += result[k]
     catalog = Catalog(store, [directory])
@@ -245,7 +252,8 @@ def import_capture(store, directory, allowed_roots, project_id=None, transfer_li
             p=catalog.project(project_id)
     if complete:
         project_catalog(store)
-    result = {'messages': totals, 'attachments': list(receipts.values()), 'missing_at_capture': manifest.get('missing_occurrences'),
+    result = {'messages': totals, 'initial_messages':previous.get('initial_messages',previous['messages']) if previous else totals,
+            'attachments': list(receipts.values()), 'missing_at_capture': manifest.get('missing_occurrences'),
             'complete':complete,'remaining_transfers':len(transfers)-len(receipts),'project_id':project_id,
             'package_id':package_id, 'captured_at':manifest.get('created_at'),
             'completeness':{k:manifest.get(k,0) for k in ('missing_occurrences','omitted_chars','excluded_thinking_chars','redacted_records','quarantined_files','opaque_files')},
@@ -255,7 +263,7 @@ def import_capture(store, directory, allowed_roots, project_id=None, transfer_li
     return result
 
 
-def load_package(directory):
+def load_package(directory,verify_blobs=True):
     directory=Path(directory).resolve()
     path=directory/'manifest.json'
     if not path.resolve().is_relative_to(directory) or path.stat().st_size>8*1024*1024:
@@ -291,7 +299,7 @@ def load_package(directory):
                 if not p.resolve().is_relative_to(directory) or not p.is_file() or p.stat().st_size>512*1024*1024:
                     raise ValueError('Unsafe or missing blob')
                 from .backup import sha256
-                if sha256(p)!=sha:
+                if verify_blobs and sha256(p)!=sha:
                     raise ValueError('Capture blob checksum mismatch')
     return m,records
 
