@@ -209,3 +209,27 @@ Backup policy and append-only operation journal live outside SQLite memory to av
 Restore format `portable-context-restic-1` includes database_parts, exact database_sha256, workspace_id,
 counts, original hashes and manifest file hashes. Reconstruct pages before opening SQLite. Credentials
 are excluded. See [recovery and folder contracts](../skills/portable-context/references/recovery-and-folders.md).
+
+
+## 0.8 source equivalence and event classification
+
+Exact revision hashes continue to address immutable archived JSON. Versioned content hashes exclude
+capture context, memory-project selection and capture policy, while retaining unknown substantive fields
+and omission/redaction evidence. Derived full_raw/full_text references are equivalent to inline content
+only with checksum-verified originals. Historical equivalence requires the explicit identity-migration
+preview/apply operation; citations are not rewritten. Exact archive counts and content-version counts
+are different metrics. See release-0.8.md for upgrade and verification.
+
+New embedded source payloads require a nonempty kind. Unsupported shapes use an explicit unknown kind;
+document passports do not require a payload kind. file_excerpt contains captured text, source path and
+line locator, with original_bytes=false. A complete line range does not establish byte-identical originals.
+
+Claude source_classification distinguishes diagnostic, session_metadata, structural_event,
+attachment_context, task_notification and queued_event_unknown_author. renderedRole is presentation,
+not authorship. Request hashes/base references and file-history message/snapshot references are typed
+source evidence, never inferred reply/fork edges. Known diagnostic bodies are stubbed before content
+parsing; full mode remains subject to thinking/privacy filtering. Unknown source types remain preserved.
+
+Import receipts use messages/project_files for cumulative run totals and pass_messages for this call.
+A replay starts a new run; retries keep the same run ID. Phase timings are wall-clock durations;
+worker_* timings sum worker durations and can exceed elapsed time under concurrent transfer.

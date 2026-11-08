@@ -200,10 +200,11 @@ def discover(root=None):
     return list(groups.values())
 
 
-def convert(paths, instance, title=None, thinking='exclude', subagent=False, session_id=None):
+def convert(paths, instance, title=None, thinking='exclude', subagent=False, session_id=None, diagnostics='stub'):
     """Merge copies by native UUID. Divergent copies are reported and require explicit selection."""
     if thinking not in ('exclude','archive'):
         raise ValueError('thinking must be exclude or archive')
+    if diagnostics not in ('stub','full'): raise ValueError('diagnostics must be stub or full')
     items,sessions,warnings=inventory(paths,subagent)
     service=Counter()
     if not sessions:
@@ -211,6 +212,7 @@ def convert(paths, instance, title=None, thinking='exclude', subagent=False, ses
     if session_id is not None and session_id not in sessions:
         raise ValueError('Selected native session is not in this transcript')
     records=[]
+    classified=Counter(); omitted=Counter()
     for (cid,native),item in items.items():
         if session_id is not None and cid!=session_id:
             continue
@@ -218,6 +220,22 @@ def convert(paths, instance, title=None, thinking='exclude', subagent=False, ses
         typ=item.get('type','unknown')
         if not item.get('uuid'):
             service[typ]+=1
+        from .claude_records import classify
+        classified_record=classify(item,diagnostics,thinking)
+        if classified_record:
+            if typ=='atis-latch' and item.get('atis') not in ('',None):
+                warnings.append({'type':'unsupported_diagnostic_shape','record_type':typ,'message_id':native})
+            classification=classified_record.pop('classification')
+            classified[classification]+=1
+            omitted[typ]+=classified_record['completeness']['diagnostic_omitted_bytes']
+            r={'source':'claude-code','instance':instance,'conversation_id':cid,'message_id':native,
+               'parent_id':item.get('parentUuid'),'role':'system','timestamp':item.get('timestamp'),'title':cid,
+               'capture_policy':{'adapter':'claude-code-v3','thinking':thinking,'diagnostics':diagnostics},
+               'conversation_metadata':{k:v for k,v in sessions[cid].items() if k not in ('paths','cwd','workspace_observations')},
+               **classified_record}
+            if subagent: r['subagent_of']={'conversation_id':session}
+            records.append(validate(r))
+            continue
         if typ not in ('user','assistant','system') and typ not in SERVICE_TYPES:
             warnings.append({'type':'unknown_record_type','record_type':typ,'message_id':native})
         msg=item.get('message') or {}
@@ -288,6 +306,8 @@ def convert(paths, instance, title=None, thinking='exclude', subagent=False, ses
             if explicit.get('messageId'):
                 r['fork_of']['message_id']=explicit['messageId']
         records.append(validate(r))
-    return records,{'adapter':'claude-code-v2','warnings':warnings,'service_types':dict(service),
+    return records,{'adapter':'claude-code-v3','warnings':warnings,'service_types':dict(service),
+                    'classifications':dict(classified),'diagnostic_omitted_bytes_by_type':dict(omitted),
+                    'identity_policy':'Native UUID, otherwise exact source hash before filtering; identical state records collapse. Request IDs remain diagnostic references.',
                     'records':len(records),'conversation_ids':sorted({r['conversation_id'] for r in records}),
                     'source_files':list(map(str,paths))}

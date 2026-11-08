@@ -96,7 +96,8 @@ class Controls07(unittest.TestCase):
         cleanup(self.root,plan['confirmation'])
         self.assertFalse((releases/'0').exists()); self.assertTrue((releases/'2').exists())
         storage=report(self.store); self.assertGreater(storage['sqlite_bytes'],0)
-        self.assertTrue(forecast(self.store,1024)['fits_with_20_percent_reserve'])
+        self.assertIsNone(forecast(self.store,1024)['fits_with_20_percent_reserve'])
+        self.assertTrue(forecast(self.store,1024,source_bytes=256)['fits_with_20_percent_reserve'])
         with self.assertRaises(ValueError): forecast(self.store,-1)
 
     def test_s3_cleanup_lists_exact_versions_and_never_attachments(self):

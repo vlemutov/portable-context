@@ -30,6 +30,24 @@ def start(con,package_id=None,who=None,run_id=None,kind='capture'):
     return rid
 
 
+def completed_batch(con,run_id,batch_key):
+    return bool(con.execute('SELECT 1 FROM import_run_batches WHERE run_id=? AND batch_key=?',(run_id,batch_key)).fetchone())
+
+
+def metrics(con,run_id,phase,elapsed,**counters):
+    row=con.execute('SELECT details FROM import_runs WHERE id=?',(run_id,)).fetchone()
+    details=json.loads(row[0]); details['phase']=phase
+    timings=details.setdefault('timings_seconds',{})
+    timings[phase]=timings.get(phase,0)+elapsed
+    totals=details.setdefault('work',{})
+    for k,v in counters.items(): totals[k]=totals.get(k,0)+v
+    con.execute('UPDATE import_runs SET details=?,updated_at=? WHERE id=?',(canonical(details),now(),run_id))
+
+
+def totals(con,run_id):
+    return json.loads(con.execute('SELECT details FROM import_runs WHERE id=?',(run_id,)).fetchone()[0])
+
+
 def progress(con,run_id,counts,records,complete=False,receipt=None,error=None,accumulate=False,batch_key=None):
     row=con.execute('SELECT * FROM import_runs WHERE id=?',(run_id,)).fetchone()
     if not row:

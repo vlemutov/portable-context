@@ -20,15 +20,18 @@ def identifier(value, label='id'):
     return value
 
 
-def fingerprints(con):
+def fingerprints(con,semantic=True):
     groups = {}
-    for row in con.execute('SELECT id,conversation,revision FROM messages ORDER BY id'):
+    sql=('SELECT m.id,m.conversation,coalesce(c.content_hash,m.revision) AS revision FROM messages m '
+         'LEFT JOIN content_identity c ON c.message_key=m.id AND c.revision=m.revision AND c.version=1 ORDER BY m.id'
+         if semantic else 'SELECT id,conversation,revision FROM messages ORDER BY id')
+    for row in con.execute(sql):
         groups.setdefault(row['conversation'], []).append((row['id'], row['revision']))
     return {cid: digest(canonical(items)) for cid, items in groups.items()}
 
 
 class Workspace:
-    def __init__(self, store: Store, allowed_roots=None):
+    def __init__(self, store: Store, allowed_roots=None, reconcile=True):
         self.store = store
         roots = allowed_roots if allowed_roots is not None else [p for p in os.environ.get('PC_SOURCE_ROOTS', '').split(os.pathsep) if p]
         self.allowed_roots = [Path(p).expanduser().resolve() for p in roots]
@@ -70,7 +73,7 @@ class Workspace:
             con.execute("INSERT OR IGNORE INTO metadata VALUES ('workspace_id',?)", (str(uuid.uuid4()),))
             from .import_log import backfill
             backfill(con)
-        self.reconcile_sources()
+        if reconcile: self.reconcile_sources()
 
     def reconcile_sources(self):
         """Register observed record identities without changing historical transcripts."""
@@ -105,10 +108,10 @@ class Workspace:
             pages = con.execute('SELECT count(*) FROM wiki_pages').fetchone()[0]
             jobs = [dict(r) for r in con.execute("SELECT id,kind,status FROM jobs WHERE status!='completed' ORDER BY created_at LIMIT 50")]
         return {'workspace_id': workspace_id, 'version': __version__, 'stats': self.store.stats(),
-                'skill':{'recommended_version':'0.7.1','minimum_version':'0.7.0',
+                'skill':{'recommended_version':'0.8.0','minimum_version':'0.7.0',
                          'compatibility':'Capabilities govern write operations; older skills can still perform legacy reads.'},
                 'capabilities':['capture_policy_v1','file_categories_v1','project_groups_v1','import_log_v1','native_sessions_v1',
-                    'project_folders_v1','restic_backups_v1','storage_report_v1','index_policy_v1','effective_attribution_v1','workspace_observations_v1'],
+                    'project_folders_v1','restic_backups_v1','storage_report_v1','index_policy_v1','effective_attribution_v1','workspace_observations_v1','content_identity_v1','resumable_capture_phases_v1','recovery_coverage_v1','claude_record_taxonomy_v1'],
                 'backup':backup_manager.status() if backup_manager else {'configured':False,'note':'Managed pre-import protection requires backup setup'},
                 'recent_imports':list_imports(self.store,3),
                 'capture_protocol': {'versions':[1,2],'chunk_bytes':1024*1024,'max_blob_bytes':512*1024*1024,

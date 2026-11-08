@@ -109,7 +109,8 @@ def evidence_stale(con, evidence):
             if not row or not row[0] or row[1]!=ref['revision']: return True
             continue
         row = con.execute('SELECT revision FROM messages WHERE id=?', (ref['message_key'],)).fetchone()
-        if not row or row[0] != ref['revision']:
+        from .identity import equivalent
+        if not row or not equivalent(con,ref['message_key'],row[0],ref['revision']):
             return True
     return False
 

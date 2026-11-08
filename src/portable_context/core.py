@@ -80,7 +80,7 @@ def validate(record: dict) -> dict:
             raise ValueError('project.name must be a string')
     if r.get('memory_project') is not None:
         p = r['memory_project']
-        if not isinstance(p, dict) or any(not isinstance(p.get(k), str) or not p[k].strip() for k in ('id', 'name', 'basis')):
+        if not isinstance(p, dict) or any(not isinstance(p.get(k), str) or not p[k].strip() for k in (('id','basis') if p.get('existing') is True else ('id', 'name', 'basis'))):
             raise ValueError('memory_project needs id, name and basis strings')
         if p['basis'] not in ('user_selection', 'agent_inference'):
             raise ValueError('memory_project.basis must be user_selection or agent_inference; native facts use project')
@@ -151,6 +151,9 @@ class Store:
             initialize(con)
             from .catalog import initialize as initialize_catalog
             initialize_catalog(con)
+            con.commit()
+            from .identity import initialize as initialize_identity
+            initialize_identity(con)
 
     @contextlib.contextmanager
     def connect(self):
@@ -214,7 +217,7 @@ class Store:
         report['catalog_projection'] = project_catalog(self)
         return report
 
-    def _ingest(self, con, records, origin=None):
+    def _ingest(self, con, records, origin=None, blob_root=None):
         """Internal transaction-aware ingestion shared by manual and collector jobs."""
         from .graph import index_record
         from .policy import check_record
@@ -222,6 +225,9 @@ class Store:
         records=[validate(r) for r in records]
         for r in records:
             check_record(con,r)
+        from .identity import verified_payloads
+        verify=verified_payloads(blob_root or self.root/'originals')
+        historical_verify=verified_payloads(self.root/'originals')
         report = {"inserted": 0, "revised": 0, "unchanged": 0}
         seq = con.execute("SELECT coalesce(max(seq),0) FROM messages").fetchone()[0]
         for record in records:
@@ -235,10 +241,23 @@ class Store:
                 session_graph(con,record,r,mid,rev)
                 report["unchanged"] += 1
                 continue
-            old = con.execute("SELECT seq FROM messages WHERE id=?", (mid,)).fetchone()
+            old = con.execute("SELECT seq,revision FROM messages WHERE id=?", (mid,)).fetchone()
+            from .identity import observe, equivalent
+            for historical in con.execute('SELECT hash,record,origin FROM revisions WHERE id=? AND hash NOT IN '
+                    '(SELECT revision FROM content_identity WHERE message_key=? AND version=1)',(mid,mid)).fetchall():
+                observe(con,mid,historical['hash'],json.loads(historical['record']),historical['origin'],historical_verify)
+            content_hash=observe(con,mid,rev,r,origin,verify)
+            seen_content=con.execute('SELECT 1 FROM content_identity WHERE message_key=? AND content_hash=? '
+                                    'AND version=1 AND revision!=? LIMIT 1',(mid,content_hash,rev)).fetchone()
             if not old:
                 seq += 1
             con.execute("INSERT INTO revisions VALUES (?,?,?,?,?)", (mid, rev, blob, now(), origin))
+            # An older source state arriving in a new export must not regress the current message.
+            if old and seen_content and not equivalent(con,mid,old['revision'],rev):
+                from .catalog import index_record as index_catalog
+                index_catalog(con,r,mid,cid,rev)
+                report['unchanged']+=1
+                continue
             con.execute("INSERT OR REPLACE INTO messages VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                         (mid, cid, r["source"], r["instance"], r["message_id"], r["title"],
                          r["role"], r["text"], r["timestamp"], rev, blob, old[0] if old else seq))
@@ -249,7 +268,7 @@ class Store:
             session_graph(con,record,r,mid,rev)
             from .catalog import index_record as index_catalog
             index_catalog(con, r, mid, cid, rev)
-            report["revised" if old else "inserted"] += 1
+            report['unchanged' if old and seen_content else "revised" if old else "inserted"] += 1
         return report
 
     def search(self, query: str, limit: int = 10, source: str | None = None,
@@ -335,6 +354,9 @@ class Store:
         with self.connect() as con:
             return {"messages": con.execute("SELECT count(*) FROM messages").fetchone()[0],
                     "revisions": con.execute("SELECT count(*) FROM revisions").fetchone()[0],
+                    "content_versions": con.execute('SELECT count(*) FROM (SELECT message_key,content_hash FROM content_identity WHERE version=1 GROUP BY message_key,content_hash)').fetchone()[0],
+                    "unmapped_exact_revisions": con.execute('SELECT count(*) FROM revisions r WHERE NOT EXISTS '
+                        '(SELECT 1 FROM content_identity c WHERE c.message_key=r.id AND c.revision=r.hash AND c.version=1)').fetchone()[0],
                     "conversations": con.execute("SELECT count(DISTINCT conversation) FROM messages").fetchone()[0],
                     "originals": con.execute("SELECT count(*) FROM imports").fetchone()[0],
                     "notes": len(list((self.root / "vault" / "memory").glob("*.md")))}

@@ -3,7 +3,7 @@ import json
 from .core import canonical, key, now
 
 PAYLOAD_KINDS = {'service_event', 'tool_use', 'tool_result', 'full_raw', 'full_text',
-                 'thinking', 'redacted_thinking'}
+                 'thinking', 'redacted_thinking','file_excerpt'}
 
 
 def category(metadata):

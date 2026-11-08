@@ -190,6 +190,7 @@ def main(argv=None):
             c.add_argument('--source-root',type=Path,action='append',default=[])
             c.add_argument('--secrets',choices=['block','redact'],default='block')
             c.add_argument('--thinking',choices=['exclude','archive'],default='exclude')
+            c.add_argument('--diagnostics',choices=['stub','full'],default='stub')
             c.add_argument('--project-id')
             c.add_argument('--project-name')
             c.add_argument('--policy',type=Path)
@@ -249,7 +250,7 @@ def main(argv=None):
                 reports=[]
                 for g in groups:
                     if g['conversation_id'] in wanted:
-                        converted,report=convert(g['paths'],args.instance,g['title'],args.thinking,g['subagent'],g['conversation_id'])
+                        converted,report=convert(g['paths'],args.instance,g['title'],args.thinking,g['subagent'],g['conversation_id'],args.diagnostics)
                         records+=converted
                         reports.append(report)
         else:
@@ -274,9 +275,11 @@ def main(argv=None):
         if args.command=='prepare':
             project=None
             if args.project_id or args.project_name:
-                if not args.project_id or not args.project_name:
-                    p.error('Both --project-id and --project-name are required')
-                project={'id':args.project_id,'name':args.project_name,'basis':'user_selection'}
+                if not args.project_id:
+                    p.error('--project-id is required')
+                project={'id':args.project_id,'basis':'user_selection'}
+                if args.project_name: project['name']=args.project_name
+                else: project['existing']=True
             from .policy import Policy
             from . import __version__
             result=capture(records,args.destination,args.source_root,project,secret_policy=args.secrets,adapter_report=reports,

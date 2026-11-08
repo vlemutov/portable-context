@@ -72,10 +72,16 @@ def initialize(con):
 def index_record(con, r, mid, cid, revision):
     native = r.get('project')
     selected = r.get('memory_project')
+    unresolved=bool(selected and selected.get('existing') is True and not con.execute('SELECT 1 FROM catalog_projects WHERE id=?',(selected['id'],)).fetchone())
     assigned=con.execute('''SELECT p.id,p.title,a.basis FROM catalog_assignments a
         JOIN catalog_projects p ON p.id=a.project_id WHERE a.conversation=? AND a.basis='agent_assignment' ''',(cid,)).fetchone()
     if assigned:
         pid,title,basis=assigned
+    elif selected and selected.get('existing') is True:
+        pid=selected['id']
+        found=con.execute('SELECT title FROM catalog_projects WHERE id=?',(pid,)).fetchone()
+        title=found[0] if found else None
+        basis=selected['basis']
     elif native:
         pid, title, basis = key('native-project', r['source'], r['instance'], native['id']), native.get('name') or native['id'], 'native'
     elif selected:
@@ -83,11 +89,12 @@ def index_record(con, r, mid, cid, revision):
     else:
         pid, title, basis = key('unclassified-conversation', cid), r['title'], 'unclassified'
     summary = selected.get('summary', '') if selected else ''
-    con.execute('INSERT OR IGNORE INTO catalog_projects(id,title,basis,summary,version,updated_at) VALUES (?,?,?,?,1,?)',
-                (pid, title, basis, summary, now()))
-    # Explicit reassignment survives later imports that lack project metadata.
-    con.execute('INSERT OR IGNORE INTO catalog_assignments VALUES (?,?,?)', (cid, pid, basis))
-    if native or selected:
+    if not unresolved:
+        con.execute('INSERT OR IGNORE INTO catalog_projects(id,title,basis,summary,version,updated_at) VALUES (?,?,?,?,1,?)',
+                    (pid, title, basis, summary, now()))
+        # Explicit reassignment survives later imports that lack project metadata.
+        con.execute('INSERT OR IGNORE INTO catalog_assignments VALUES (?,?,?)', (cid, pid, basis))
+    if (native or selected) and not unresolved:
         con.execute("UPDATE catalog_assignments SET project_id=?,basis=? WHERE conversation=? AND basis='unclassified'",
                     (pid, basis, cid))
     for pos, value in enumerate(r['attachments']):
@@ -347,7 +354,34 @@ class Catalog:
                 raise ValueError('Unknown attachment occurrence')
             return self._occurrence(row)
 
+    def store_shared(self,occurrences,sha):
+        """Verify/store one immutable blob, bind all authorized occurrences to those same bytes."""
+        from .policy import check_attachment
+        oid,path=occurrences[0]
+        first=self.store_attachment(oid,server_path=str(path),expected_sha256=sha,project=False)
+        results=[first]
+        for oid,_ in occurrences[1:]:
+            occurrence=self.occurrence(oid)
+            with self.store.connect() as con:
+                con.execute('BEGIN IMMEDIATE')
+                check_attachment(con,occurrence)
+                if occurrence['sha256'] not in (None,sha) or occurrence['metadata'].get('sha256') not in (None,sha):
+                    raise ValueError('Shared occurrence checksum mismatch')
+                con.execute("UPDATE catalog_occurrences SET sha256=?,availability='stored' WHERE id=?",(sha,oid))
+                _audit(con,'file-transfer','bind_attachment',{'occurrence_id':oid,'file_id':occurrence['file_id'],
+                       'sha256':sha,'basis':'verified_shared_blob'})
+            results.append({**first,'occurrence_id':oid,'reused_verified_blob':True})
+        # Another occurrence may make a previously non-searchable blob eligible.
+        from .indexing import eligible
+        with self.store.connect() as con:
+            searchable=eligible(con,sha)
+            name=con.execute('SELECT name FROM catalog_files WHERE id=?',(self.occurrence(occurrences[-1][0])['file_id'],)).fetchone()[0]
+        if searchable: self._extract_text(sha,name,first['size'])
+        return results
+
     def store_attachment(self, occurrence_id, content_base64=None, server_path=None, expected_sha256=None, project=True):
+        from time import monotonic
+        started=monotonic(); timings={}
         occurrence = self.occurrence(occurrence_id)
         from .policy import check_attachment
         with self.store.connect() as con:
@@ -386,11 +420,13 @@ class Catalog:
                 raise ValueError('Attachment checksum mismatch; source bytes may have changed')
             if occurrence['sha256'] and occurrence['sha256'] != sha:
                 raise ValueError('Occurrence already bound to different bytes; export a new source revision')
+            timings['copy_and_hash']=monotonic()-started; started=monotonic()
             archived = self.store.archive(target)
             assert archived == sha
             from .backup import sha256
             if sha256(self.store.root / 'originals' / sha) != sha:
                 raise ValueError('Existing archived blob is corrupt; transfer cannot be confirmed')
+            timings['archive_and_verify']=monotonic()-started; started=monotonic()
         # A transfer needs the filename, not the complete version history of this logical file.
         with self.store.connect() as con:
             name=con.execute('SELECT name FROM catalog_files WHERE id=?',(occurrence['file_id'],)).fetchone()[0]
@@ -408,13 +444,16 @@ class Catalog:
                     'basis': 'export_declared_hash' if declared else 'bytes_provided_after_message_import',
                     'note': 'Transfer observation is not proof these bytes existed at original message time.'})
         from .indexing import eligible
+        timings['catalog_bind']=monotonic()-started; started=monotonic()
         with self.store.connect() as con: searchable=eligible(con,sha)
         if searchable:
             self._extract_text(sha, name, size)
+        timings['extraction']=monotonic()-started; started=monotonic()
         s3 = self.sync_blob(sha)
+        timings['s3']=monotonic()-started
         projection = project_catalog(self.store) if project else {'deferred':True}
         return {'occurrence_id': occurrence_id, 'sha256': sha, 'size': size, 'local_stored': True,
-                's3': s3, 'projection': projection}
+                's3': s3, 'projection': projection,'timings_seconds':timings}
 
     def sync_blob(self, sha):
         config_path = os.environ.get('PC_ATTACHMENT_S3_CONFIG')

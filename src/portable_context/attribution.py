@@ -39,6 +39,11 @@ def attribution(record, store=None):
                     'attribution_basis': 'raw_payload_unavailable_or_unverified',
                     'attribution_warning': 'Do not infer human authorship from the envelope; inspect the exact raw payload.'}
         raw = resolved
+    classification=raw.get('source_classification')
+    if isinstance(classification,dict):
+        return {**result,'effective_role':'system','content_kind':classification.get('kind','source_event'),
+                'attribution_basis':'claude-code.source_event',
+                'attribution_warning':'Historical event/context, not evidence of human authorship.'}
     if raw.get('isCompactSummary') is True or record.get('isCompactSummary') is True:
         return {**result, 'effective_role': 'assistant', 'content_kind': 'generated_summary',
                 'attribution_basis': 'claude-code.isCompactSummary',
@@ -61,7 +66,8 @@ def citation_warnings(store, con, refs, kind):
                           (ref['message_key'], ref['revision'])).fetchone()
         if row:
             info = attribution(json.loads(row[0]), store)
-            if info['content_kind'] in ('generated_summary', 'unverified_source'):
+            if info['content_kind'] in ('generated_summary','unverified_source','diagnostic','session_metadata',
+                                       'structural_event','attachment_context','task_notification','queued_event_unknown_author'):
                 warnings.append({**ref, 'issue': 'user_statement_attribution_needs_review',
                                  'content_kind': info['content_kind'], 'basis': info['attribution_basis']})
     return warnings

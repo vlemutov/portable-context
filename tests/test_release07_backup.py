@@ -58,6 +58,24 @@ class ResticTests(unittest.TestCase):
         self.assertEqual(self.manager.snapshots(),[])
         self.assertIsNotNone(self.manager.status()['latest']['checkpoint_failed'])
 
+    def test_post_import_exact_coverage_and_cache_cleanup(self):
+        from portable_context.capture import capture,import_capture
+        from portable_context.maintenance import cleanup_preview
+        before=self.manager.post_import()
+        self.assertTrue(before['coverage_verified'])
+        packet=self.root/'imports/legacy-package'
+        capture([dict(record(10),payloads=[{'kind':'tool_result','value':'backed up bytes'}])],packet)
+        import_capture(self.store,packet,[self.root])
+        with patch('portable_context.maintenance.configured',return_value=self.manager):
+            plan=cleanup_preview(self.root)
+            self.assertEqual(plan['items'],[])
+            self.assertEqual(plan['kept'][0]['reason'],'no_verified_snapshot_covering_contents')
+            after=self.manager.post_import()
+            self.assertNotEqual(before['snapshot_id'],after['snapshot_id'])
+            plan=cleanup_preview(self.root)
+            self.assertEqual(plan['items'][0]['snapshot_id'],after['snapshot_id'])
+        self.assertEqual(self.manager.cache_cleanup(30)['policy_max_age_days'],30)
+
     def test_policy_preview_confirmation_and_protected_restore(self):
         self.manager.checkpoint()
         self.store.ingest([record(1)]); self.manager.checkpoint()

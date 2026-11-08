@@ -25,6 +25,8 @@ def main(argv=None):
     commands.add_parser("sources")
     commands.add_parser("jobs")
     commands.add_parser("lint")
+    p = commands.add_parser('identity-migration')
+    p.add_argument('--approve-plan',help='Exact confirmation from a reviewed preview; test on a restored copy first')
     p = commands.add_parser("connect")
     p.add_argument("source_id")
     p.add_argument("--format", required=True)
@@ -102,7 +104,10 @@ def main(argv=None):
         store = Store(args.home)
         from .workspace import Workspace
         workspace = Workspace(store)
-        if args.command in ("init", "stats"):
+        if args.command=='identity-migration':
+            from .identity import preview,apply
+            output(apply(store,args.approve_plan) if args.approve_plan else preview(store))
+        elif args.command in ("init", "stats"):
             output({"home": str(store.root), **store.stats()})
         elif args.command == "import":
             result = import_path(store, args.path, args.format, args.instance)

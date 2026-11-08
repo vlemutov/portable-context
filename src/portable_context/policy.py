@@ -155,7 +155,7 @@ def project_for(con,r,override=None):
     if p:
         return key('native-project',r['source'],r['instance'],p['id'])
     p=r.get('memory_project')
-    return key('memory-project',p['id']) if p else None
+    return (p['id'] if p.get('existing') is True else key('memory-project',p['id'])) if p else None
 
 
 def check_record(con,r,project_id=None):

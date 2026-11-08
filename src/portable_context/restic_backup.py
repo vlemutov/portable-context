@@ -251,7 +251,8 @@ class Manager:
             h=hashlib.sha256()
             for table in ('messages','revisions','imports','catalog_projects','catalog_assignments','catalog_annotations',
                           'project_groups','capture_policies','source_sessions','wiki_pages','wiki_history','note_history',
-                          'project_roots','project_file_current','project_file_versions','index_policy','metadata'):
+                          'project_roots','project_file_current','project_file_versions','index_policy','metadata',
+                          'content_identity','export_observations'):
                 if table not in tables: continue
                 h.update(table.encode())
                 for row in dst.execute('SELECT * FROM '+table+' ORDER BY rowid'):
@@ -398,6 +399,14 @@ class Manager:
                     'activation':'Separate explicit owner confirmation required'}
                 atomic_write(target/'restore-receipt.json',canonical(result))
                 self.event('restore_verified',result)
+                if verify_sample is None:
+                    from .recovery_coverage import inventory
+                    with closing(sqlite3.connect((target/'context.sqlite3').as_uri()+'?mode=ro',uri=True)) as con:
+                        coverage=inventory(con)
+                    text=canonical(coverage)
+                    atomic_write(self.state/'coverage'/(snapshot+'.json'),text)
+                    self.event('coverage_verified',{'snapshot_id':snapshot,'coverage_sha256':digest(text),
+                               'manifest_sha256':result['manifest_sha256'],'basis':'full_verified_restore'})
                 return result
             except Exception:
                 self.event('restore_failed',{'snapshot_id':snapshot,'operation':operation})
@@ -415,6 +424,27 @@ class Manager:
             self.run(['check','--read-data-subset=5%'])
         self.event('check_verified',{'snapshot_id':chosen,'verified_files':report['verified_files'],'restic_subset':'5%'})
         return {'verified':True,'snapshot_id':chosen}
+
+    def post_import(self):
+        """Snapshot current committed contents, then verify every restored original for cleanup."""
+        result=self.checkpoint('after_import')
+        if not result.get('snapshot_id'): return result
+        with tempfile.TemporaryDirectory(prefix='pc-post-import-',dir=self.home.parent) as tmp:
+            checked=self.restore(result['snapshot_id'],Path(tmp)/'memory')
+        return {**result,'coverage_verified':checked['verified']}
+
+    def cache_cleanup(self,max_age_days=30):
+        if type(max_age_days) is not int or not 1<=max_age_days<=3650:
+            raise ValueError('Cache age must be 1..3650 days')
+        from .storage import tree_bytes
+        with file_lock(self.state/'operation.lock'):
+            before=tree_bytes(self.state/'cache')
+            self.run(['cache','--cleanup','--max-age',str(max_age_days)])
+            after=tree_bytes(self.state/'cache')
+            result={'before_bytes':before,'after_bytes':after,'evicted_bytes':max(0,before-after),
+                    'policy_max_age_days':max_age_days,'note':'Only restic cache; repository and staging retained. Evicted data may be downloaded again.'}
+            self.event('cache_cleanup',result)
+            return result
 
     def prune(self):
         with file_lock(self.state/'operation.lock'):
@@ -444,15 +474,17 @@ def main(argv=None):
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--home',required=True); p.add_argument('--config',required=True)
     sub=p.add_subparsers(dest='command',required=True)
-    for name in ('init','backup','status','list','check','prune'): sub.add_parser(name)
+    for name in ('init','backup','status','list','check','prune','post-import'): sub.add_parser(name)
+    r=sub.add_parser('cache-cleanup'); r.add_argument('--max-age-days',type=int,default=30)
     r=sub.add_parser('restore'); r.add_argument('--snapshot',required=True); r.add_argument('--target',required=True)
     r=sub.add_parser('bypass-once'); r.add_argument('--run-id',required=True); r.add_argument('--actor',required=True); r.add_argument('--reason',required=True); r.add_argument('--confirm',required=True)
     for name in ('enable','disable'):
         r=sub.add_parser(name); r.add_argument('--actor',required=True); r.add_argument('--confirm')
     args=p.parse_args(argv); manager=Manager(args.home,args.config)
     actions={'init':manager.initialize,'backup':manager.checkpoint,'status':manager.status,'list':manager.list,
-             'check':manager.check,'prune':manager.prune}
+             'check':manager.check,'prune':manager.prune,'post-import':manager.post_import}
     if args.command=='restore': result=manager.restore(args.snapshot,args.target)
+    elif args.command=='cache-cleanup': result=manager.cache_cleanup(args.max_age_days)
     elif args.command=='bypass-once': result=manager.bypass_once(args.run_id,args.actor,args.reason,args.confirm)
     elif args.command in ('enable','disable'): result=manager.set_enabled(args.command=='enable',args.actor,args.confirm)
     else: result=actions[args.command]()

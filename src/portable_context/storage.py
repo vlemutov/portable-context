@@ -15,26 +15,40 @@ def report(store):
         free=con.execute('PRAGMA freelist_count').fetchone()[0]*con.execute('PRAGMA page_size').fetchone()[0]
     root=store.root.parent
     provider=root/'storage-inventory.json'
+    from .restic_backup import configured
+    manager=configured(store.root)
+    state=manager.state if manager else root/'backup-state'
+    restic={'cache_bytes':tree_bytes(state/'cache'),'staging_database_bytes':
+        (state/'stage/context.sqlite3').stat().st_size if (state/'stage/context.sqlite3').exists() else 0,
+        'staging_pages_bytes':tree_bytes(state/'stage/database-pages'),'staging_originals_bytes':tree_bytes(state/'stage/originals'),
+        'staging_vault_bytes':tree_bytes(state/'stage/recovered-vault'),
+        'journal_bytes':sum(p.stat().st_size for p in state.glob('journal.sqlite3*') if p.is_file())}
     return {'sqlite_bytes':store.db.stat().st_size,'sqlite_wal_bytes':
             (Path(str(store.db)+'-wal').stat().st_size if Path(str(store.db)+'-wal').exists() else 0),
         'sqlite_free_pages_bytes':free,'tables':tables,'originals_bytes':tree_bytes(store.root/'originals'),
         'vault_bytes':tree_bytes(store.root/'vault'),'local_backups_bytes':tree_bytes(root/'backups'),
         'migration_backups_bytes':tree_bytes(root/(store.root.name+'-migration-backups')),
         'imports_bytes':tree_bytes(root/'imports'),'releases_bytes':tree_bytes(root/'releases'),
-        'restic_local_state_bytes':tree_bytes(root/'backup-state'),
+        'restic_local_state_bytes':tree_bytes(state),'restic_breakdown':restic,
+        'size_basis':'Logical file lengths; shared hard links can be counted in multiple directories, not allocated disk usage.',
         'restic_local_repository_bytes':tree_bytes(root/'restic-repository'),
         'disk_free_bytes':shutil.disk_usage(store.root).free,
         's3':json.loads(provider.read_text(encoding='utf-8')) if provider.exists() else {'status':'not_measured'},
         'note':'Freed SQLite pages may be reused without shrinking the file. No automatic VACUUM.'}
 
-def forecast(store,original_bytes,source_bytes=0):
+def forecast(store,original_bytes,source_bytes=None):
+    if source_bytes is None:
+        if type(original_bytes) is not int or not 0<=original_bytes<=10**15: raise ValueError('Invalid original bytes')
+        return {'status':'incomplete_inputs','missing':['source_bytes'],'fits_with_20_percent_reserve':None,
+                'note':'Supply record-part and manifest bytes from prepare; omitted metadata size is not zero.'}
     if any(type(v) is not int or not 0<=v<=10**15 for v in (original_bytes,source_bytes)):
         raise ValueError('Byte counts must be nonnegative integers')
     # Conservative initial range; observed ratios are not a universal expansion constant.
     low=original_bytes+2*source_bytes; high=original_bytes+6*source_bytes
     peak=3*original_bytes+2*6*source_bytes+store.db.stat().st_size
     free=shutil.disk_usage(store.root).free
-    return {'memory_growth_range_bytes':[low,high],'additional_peak_bytes':peak,'disk_free_bytes':free,
+    return {'status':'estimated','input_unique_blob_bytes':original_bytes,'input_source_bytes':source_bytes,
+        'memory_growth_range_bytes':[low,high],'additional_peak_bytes':peak,'disk_free_bytes':free,
         'fits_with_20_percent_reserve':peak<=free*0.8,
         's3_new_original_copies_up_to_bytes':2*original_bytes,
         'assumptions':'Includes upload staging, local originals and restic staging. S3 may hold operational and backup originals. '
