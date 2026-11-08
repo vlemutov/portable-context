@@ -90,6 +90,20 @@ class Release09(unittest.TestCase):
         self.assertEqual(one['next_offset'],1000)
         self.assertEqual(self.ws.read_evidence(**ref,offset=1000)['text_range'],{'start':1000,'end':6000})
 
+    def test_dialogue_omits_tool_only_rows_but_exposes_parent_evidence(self):
+        self.ingest([record(),{**record('call'),'role':'assistant','text':'[Tool call: Read]','parent_id':'1',
+                              'attachments':[{'kind':'tool_use','name':'call.json'}]},
+                     {**record('result'),'role':'tool','text':'[Tool result: call]','parent_id':'call'},
+                     {**record('answer'),'role':'assistant','text':'Here is the result.','parent_id':'result'}])
+        job=self.ws.start_enrichment();task=self.ws.claim_enrichment(job['id'],'reader')['task']
+        self.assertEqual(len(task['sources']),2)
+        self.assertEqual(len(task['context_refs']),2)
+        detail=self.ws.read_evidence(**task['sources'][-1])
+        self.assertEqual(detail['current_parent_reference']['message_key'],key('claude-code','fixture','chat','result'))
+        report=self.ws.review_coverage()['conversations'][0]
+        self.assertEqual((report['unseen'],report['excluded']),(2,2))
+        self.assertEqual(self.ws.review_coverage(scope='all')['conversations'][0]['unseen'],4)
+
     def test_s3_proof_reuse_target_change_expiry_and_forced_repair(self):
         self.ingest([{**record(),'attachments':[{'name':'a.txt','path':'a.txt'}]}])
         catalog=Catalog(self.store,[self.root]);path=self.root/'a.txt';path.write_text('payload')

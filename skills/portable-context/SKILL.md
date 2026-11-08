@@ -181,7 +181,7 @@ and wiki pages, perform the reasoning yourself with the following resumable work
 Read [references/review.md](references/review.md) for the 0.9 review contract before enrichment.
 
 1. Use `review_coverage` to preview selected conversations, counts, scope and rough text volume.
-   Default `scope="dialogue"` includes human/assistant text and tool references; service events and
+   Default `scope="dialogue"` includes human/substantive assistant text with separate tool references; service events and
    raw/attachment bytes are not thereby reviewed. Use `scope="all"` only for a full evidence review.
 2. `start_enrichment` queues unread, partial or changed evidence even for explicit conversation keys.
    Use `include_reviewed=true` only for an intentional re-review. `claim_enrichment` grants a lease

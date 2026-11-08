@@ -374,15 +374,22 @@ class Workspace:
         from .attribution import attribution,display_text
         with self.store.connect() as con:
             row=con.execute('SELECT record FROM revisions WHERE id=? AND hash=?',(message_key,revision)).fetchone()
+            parent_ref=None
+            if row:
+                r=json.loads(row[0])
+                parent=con.execute('SELECT id,revision FROM messages WHERE id=?',
+                    (key(r['source'],r['instance'],r['conversation_id'],r.get('parent_id')),)).fetchone() if r.get('parent_id') else None
+                if parent: parent_ref={'message_key':parent['id'],'revision':parent['revision']}
         if not row: raise ValueError('Unknown source revision')
         record=json.loads(row[0]); info=attribution(record,self.store); text=display_text(record,info)
-        start=max(0,offset); end=min(len(text),start+max(1,min(max_chars,32000)))
+        start=min(len(text),max(0,offset)); end=min(len(text),start+max(1,min(max_chars,32000)))
         base=next((s['start'] for s in info.get('content_segments',[]) if s['role']=='user'),0)
         return {**info,'message_key':message_key,'revision':revision,'text':text[start:end],
                 'offset':start,'total_chars':len(text),'next_offset':end if end<len(text) else None,
                 'text_range':{'start':base+start,'end':base+end},'attachments':record.get('attachments',[])[:20],
                 'attachment_count':len(record.get('attachments',[])), 'attachment_manifest_truncated':len(record.get('attachments',[]))>20,
-                'scope':'dialogue','raw_and_attachment_bytes_reviewed':False,'parent_id':record.get('parent_id')}
+                'scope':'dialogue','raw_and_attachment_bytes_reviewed':False,'parent_id':record.get('parent_id'),
+                'current_parent_reference':parent_ref}
 
     def claim_enrichment(self, job_id, worker, lease_seconds=300):
         if not worker.strip():

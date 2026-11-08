@@ -1,5 +1,5 @@
 """Agent-declared, version-scoped evidence review. Publication is not proof of reading."""
-import json
+import json,re
 from .core import canonical,digest,now
 from .attribution import attribution,display_text
 
@@ -38,8 +38,9 @@ def evidence(store,con,cid,scope):
     for row in con.execute('SELECT id,revision,record FROM messages WHERE conversation=? ORDER BY seq',(cid,)):
         record=json.loads(row['record']); info=attribution(record,store)
         ref={'message_key':row['id'],'revision':row['revision']}
-        included=scope=='all' or (info['effective_role'] in ('user','assistant','tool') and info['content_kind'] not in ('unverified_source',))
         text=display_text(record,info)
+        substantive=re.sub(r'^\[Tool (?:call|result):[^\n]*\]\s*','',text,flags=re.MULTILINE).strip()
+        included=scope=='all' or (info['effective_role']=='user' or info['effective_role']=='assistant' and bool(substantive))
         items.append({'ref':ref,'record':record,'info':info,'text':text,'included':included,'review_state':state(con,ref,scope)})
     return items
 
@@ -83,7 +84,18 @@ def batches(store,con,cid,scope,chunk_size,max_chars,include_reviewed):
             out.append(current); current=[]; size=0
         current+=group; size+=cost
     if current: out.append(current)
-    return [{'conversation_key':cid,'sources':[i['ref'] for i in group],
+    native={i['record']['message_id']:i for i in items}
+    def parents(group):
+        refs=[]; seen={i['ref']['message_key'] for i in group}
+        for i in group:
+            parent=native.get(i['record'].get('parent_id'));depth=0
+            while parent and parent['ref']['message_key'] not in seen and depth<8 and len(refs)<50:
+                seen.add(parent['ref']['message_key']);refs.append(parent['ref']);depth+=1
+                if parent['included']: break
+                parent=native.get(parent['record'].get('parent_id'))
+        return refs
+    return [{'conversation_key':cid,'sources':[i['ref'] for i in group], 'context_refs':parents(group),
+             'context_note':'Up to 8 parent steps per selected record, 50 refs per chunk. Context is not marked read by reviewing selected sources.',
              'scope':scope,'view_version':VIEW_VERSION,'max_chars':max_chars,
              'chunk':n+1,'chunks':len(out),'excluded_records':sum(not i['included'] for i in items)} for n,group in enumerate(out)]
 

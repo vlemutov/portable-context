@@ -6,7 +6,7 @@ citations remain immutable; attribution is a derived view. Mixed human citations
 
 ## Wiki review
 
-- Dialogue scope filters source service events, groups adjacent tool exchanges and bounds text
+- Dialogue scope filters service events and tool-only rows, retains bounded parent/tool context references, and bounds text
   previews. `read_evidence` pages the readable text; exact raw revisions and attachment bytes remain
   available separately. No silent claim that tool placeholders represent the tool output.
 - `review_coverage` records agent-declared reviewed/partial/unseen/changed evidence by content
