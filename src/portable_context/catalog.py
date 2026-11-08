@@ -34,6 +34,7 @@ def initialize(con):
             observed_at TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS catalog_file_idx ON catalog_occurrences(file_id);
         CREATE INDEX IF NOT EXISTS catalog_conversation_idx ON catalog_occurrences(conversation);
+        CREATE INDEX IF NOT EXISTS catalog_blob_occurrence_idx ON catalog_occurrences(sha256);
         CREATE TABLE IF NOT EXISTS catalog_annotations (
             occurrence_id TEXT PRIMARY KEY, data TEXT NOT NULL, version INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS catalog_blobs (
@@ -360,6 +361,7 @@ class Catalog:
         oid,path=occurrences[0]
         first=self.store_attachment(oid,server_path=str(path),expected_sha256=sha,project=False)
         results=[first]
+        if len(occurrences)==1: return results
         for oid,_ in occurrences[1:]:
             occurrence=self.occurrence(oid)
             with self.store.connect() as con:

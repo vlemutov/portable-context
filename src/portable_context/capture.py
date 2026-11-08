@@ -389,15 +389,16 @@ def import_capture(store, directory, allowed_roots, project_id=None, transfer_li
     def transfer(item):
         sha,occurrences=item
         return catalog.store_shared(occurrences,sha)
+    worker_timings={}
     with ThreadPoolExecutor(max_workers=4) as executor:
         for batch_receipts in executor.map(transfer,selected):
             for receipt in batch_receipts: receipts[receipt['occurrence_id']]=receipt
             if batch_receipts:
-                with store.connect() as con:
-                    for phase,elapsed in batch_receipts[0].get('timings_seconds',{}).items():
-                        metrics(con,run_id,'worker_'+phase,elapsed)
+                for phase,elapsed in batch_receipts[0].get('timings_seconds',{}).items():
+                    worker_timings[phase]=worker_timings.get(phase,0)+elapsed
     complete=len(receipts)==len(transfers) and all(r['s3']['status']!='failed' for r in receipts.values())
     with store.connect() as con:
+        for phase,elapsed in worker_timings.items(): metrics(con,run_id,'worker_'+phase,elapsed)
         metrics(con,run_id,'transfer',monotonic()-clock,unique_blob_attempts=len(selected),
                 attachment_attempts=sum(len(items) for _,items in selected))
     clock=monotonic()

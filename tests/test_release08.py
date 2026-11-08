@@ -79,6 +79,14 @@ class Release08(unittest.TestCase):
         result=import_capture(self.store,packet,[self.root])
         self.assertEqual(result['project_id'],project['id'])
 
+    def test_unknown_existing_project_rejected_before_upload(self):
+        from portable_context.transfer import Uploads
+        packet=self.root/'packet'
+        prepared=capture([event()],packet,memory_project={'id':'missing','basis':'user_selection','existing':True})
+        manifest=json.loads((packet/'manifest.json').read_text(encoding='utf-8'))
+        with self.assertRaisesRegex(ValueError,'Unknown existing project'):
+            Uploads(Workspace(self.store,[self.root/'imports'])).begin(manifest)
+
     def test_resume_uses_committed_phase_and_rechecks_policy(self):
         from portable_context.policy import set_policy
         packet=self.root/'packet'
