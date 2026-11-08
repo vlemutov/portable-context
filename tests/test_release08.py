@@ -125,6 +125,13 @@ class Release08(unittest.TestCase):
         self.assertFalse(records[2]['payloads'][0]['value']['original_bytes'])
         self.assertEqual(records[2]['payloads'][0]['value']['locator']['startLine'],20)
 
+    def test_unrecognized_file_content_shape_is_preserved_without_fabricated_excerpt(self):
+        row={'sessionId':'s','uuid':'file','type':'attachment','attachment':{
+            'type':'file','filename':'source.txt','content':'unparsed source representation'}}
+        records,_=self.convert_rows([row])
+        self.assertEqual(records[0]['raw']['attachment']['content'],'unparsed source representation')
+        self.assertEqual(records[0]['payloads'],[])
+
     def test_cleanup_keeps_import_until_exact_recovery_coverage(self):
         packet=self.root/'imports/legacy-capture'; capture([event()],packet)
         import_capture(self.store,packet,[self.root])

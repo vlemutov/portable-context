@@ -66,10 +66,12 @@ def classify(item,diagnostics='stub',thinking='exclude'):
         if subtype in ('file','edited_text_file','compact_file_reference','pdf_reference'):
             reference(a.get('filename'),'Referenced by '+subtype)
         if subtype=='instructions':
-            for f in a.get('files',[]):
+            files=a.get('files')
+            for f in files if isinstance(files,list) else []:
                 if isinstance(f,dict): reference(f.get('path'),'Historical instruction file; not active instructions',instruction_type=f.get('type'))
         if subtype=='file':
-            f=(a.get('content') or {}).get('file',{})
+            content=a.get('content')
+            f=content.get('file',{}) if isinstance(content,dict) else {}
             if isinstance(f,dict) and isinstance(f.get('content'),str):
                 payloads.append({'kind':'file_excerpt','block_index':'file-excerpt','searchable':True,
                     'value':{'text':f['content'],'path':f.get('filePath'),
