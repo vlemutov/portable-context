@@ -1,8 +1,8 @@
 # Backlog after the 0.7 pilot
 
-Status: 0.8.0 shipped and cross-platform release validation passed, 2026-11-08. At the owner's request,
+Status: 0.9 implementation and end-to-end validation in progress, 2026-11-09. At the owner's request,
 return to data/import stabilization as the next release; the access/authentication proposal is deferred.
-0.7.1 and 0.8.0 are shipped; the next step is the 0.8 user pilot. Destructive cleanup still requires its concrete preview.
+0.8 is shipped; 0.9 is authorized for the two-conversation memory/wiki pilot. Destructive cleanup still requires its concrete preview.
 R-numbers refer to the sixteen-item pilot. Raw diagnostics and personal source examples remain private.
 
 ## Findings verified against 0.7
@@ -32,7 +32,7 @@ R-numbers refer to the sixteen-item pilot. Raw diagnostics and personal source e
 |---|---|---|
 | 0.7.1 hotfix — shipped | R1, R3, R9a/b | Recall, summary attribution and workspace ambiguity fixes are already delivered; new diagnostic summary fixtures also pass current classification. |
 | 0.8 stabilization — shipped | R2, R4–R8, R10–R14 | Re-exports preserve content identity; imports resume without repeated ingestion; operation totals and verified recovery coverage are trustworthy. |
-| 0.9 enrichment — provisional | R15, R16 together | Byte/token-aware evidence batches and full/selective/unseen coverage; reconsider sequencing after 0.8 pilot. |
+| 0.9 memory/wiki stabilization — implementation | R15/R16 minimum plus proposed 0.8.1 fixes | Correct mixed-message authorship, selective review/resume, repeat-delivery performance and verified recovery. |
 | Deferred, no release assigned | HTTPS/device credentials/OAuth, local installation tiers, domain onboarding | Keep [the access proposal](access-and-installation-plan.md) for later review; do not change the live access path as part of stabilization. |
 | Later | Marketplace packaging, background delivery, offline multi-writer sync, optional tunnels | Separate decisions after the core workflow is reliable. |
 
@@ -250,7 +250,43 @@ examples. No full transcript, unredacted text or another large import is require
 - Acceptance: session-only, folder-only, mixed package, known existing blobs, compressed/expanded
   source formats, missing size information and backup staging included in disk reserve.
 
-## 0.9: enrichment without false completeness (R15/R16; provisional)
+## 0.8.1 proposal incorporated into 0.9: repeat delivery and backup workspace
+
+Verified after the 0.8 pilot; implementation and validation are included in 0.9. No authentication/transport change.
+
+- **P1 — S3 verification reuse.** `sync_blob` currently ignores its persisted verification time
+  and performs HEAD plus full GET on every delivery. Persist proof scoped to the storage target,
+  object key/version, hash and size. A recent prior proof may be reused with an explicit
+  `previously_verified`/reused status and its original timestamp, never reported as a new remote
+  integrity check. Define expiry and invalidation for target changes, failed verification and
+  explicit audits. First upload and untrusted/changed objects still require byte verification;
+  forced/periodic audit must detect deletion/corruption. Policy checks remain on every import.
+  Acceptance: unchanged delivery avoids full S3 GETs within the defined reuse window; test target
+  switch, expiry, prior failure, explicit audit, missing/corrupt object and interrupted upload.
+- **P1 — unchanged backup overhead and timing.** `validate` includes protection/checkpoint
+  staging. Report checkpoint, manifest/policy validation, transfer wall time and summed worker
+  time separately. Avoid rebuilding a full checkpoint merely to learn that business contents
+  have not changed, using a transactionally valid change marker/consistent snapshot boundary.
+  Never reuse a checkpoint across unprotected data, policy, identity or manual-vault changes.
+  Measure a complete newly prepared equivalent replay with the real S3 path, not just local ingestion.
+- **P2 — bound staging lifetime.** Current persistent workspace holds a SQLite copy, another
+  database-sized directory of page parts, copied originals and projected Markdown. Remove the
+  redundant assembled database after the validated parts/manifest no longer need it; make
+  retention/cleanup of the remaining regenerable stage explicit and lock-protected. Preserve
+  repository, recovery credentials, coverage and operation journal. Handle interrupted backup,
+  retry, skipped snapshots, restoration and maintenance races. Report allocated and logical size,
+  retained workspace, cache and temporary peak distinctly. Do not promise zero backup peak.
+- **P2 — upgrade handoff.** Ensure the installation's entry guide is refreshed with version,
+  completed migration state, verification instructions and known limitations on every upgrade.
+  Preserve user-specific paths/preferences and keep prior verification sections historical.
+- **Measure before database compaction.** Attribute growth to evidence, equivalence/observations,
+  duplicate full-text content and indexes. A zero freelist means VACUUM is not the proposed fix.
+  Preserve exact source archives and citations. External-content FTS and more compact observation
+  storage are separate candidates requiring rebuild/migration and recovery tests; do not mix them
+  into the S3 latency fix. Adapter representation transitions with text/raw/completeness changes
+  must not be silently collapsed as export metadata.
+
+## 0.9: enrichment without false completeness (R15/R16)
 
 - Build on stable content identity and correct source attribution. Preview total evidence volume,
   estimated context/token budget and coverage before starting; estimates depend on the chosen model.
@@ -274,3 +310,19 @@ read from an authorized consistent backup, not reconstructed from truncated diag
 
 The review used local files and temporary adapter checks only. No live reimport, source migration,
 cleanup, access change or diagnostic upload to the public repository was performed.
+
+
+## 0.9 accepted scope and limits
+
+- Correct mixed user/context messages in derived recall, including existing immutable revisions.
+  Exact text ranges distinguish human evidence from application reminders. Retain raw envelopes.
+- Persist per-message, per-content, per-view-version and per-scope agent-declared reviewed/partial
+  status. Missing declarations remain unseen; old chunk completion is not backfilled as full review.
+- Default dialogue batches exclude service events and retain tool/parent references; all-evidence
+  review remains explicit. Token estimates are approximate text-only; tool/raw bytes require reads.
+- A selective finish defers remaining work; another agent resumes unread/changed records. Saving
+  pages does not establish complete review. Existing pages and manual edits remain protected.
+- Verify original-first-message recall, citation ranges, two-agent continuation, equivalent replay,
+  true edits, S3 proof reuse/audit, restic staging cleanup and full restoration before rollout.
+- SQLite compaction/external-content FTS, HTTPS/OAuth, marketplaces and richer automatic semantic
+  analysis remain later work. No authentication or cloud resource changes in this release.

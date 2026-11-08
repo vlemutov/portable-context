@@ -3,7 +3,7 @@
 A shared memory operated through your agent: import selected conversations, preserve native
 relationships, build an evidence-linked Markdown wiki, and continue the work from another client.
 
-**Status: 0.8.0.** Content equivalence, resumable imports, Claude source classification and verified recovery coverage.
+**Status: 0.9.0.** Mixed-message authorship, selective wiki review and resume, bounded dialogue evidence, and efficient repeat delivery. See [release notes](docs/release-0.9.md).
 See [0.8 upgrade notes](docs/release-0.8.md) and the [approved backlog](docs/backlog-next.md).
 Self-contained restic recovery, storage controls and selected project folders remain supported.
 A real Codex conversation has been imported into the owner-operated Cloud.ru pilot. Broader provider

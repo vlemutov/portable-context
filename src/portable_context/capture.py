@@ -282,6 +282,12 @@ def import_capture(store, directory, allowed_roots, project_id=None, transfer_li
         old=con.execute('SELECT report FROM capture_receipts WHERE id=?',(package_id,)).fetchone()
         cached=con.execute('SELECT * FROM capture_run_state WHERE run_id=?',(run_id,)).fetchone() if run_id else None
     previous=json.loads(old[0]) if old else None
+    # Legacy direct callers omit run_id between bounded transfer steps. Resume
+    # their unfinished operation; a completed package starts a fresh operation.
+    if run_id is None and previous and not previous.get('complete') and previous.get('run_id'):
+        run_id=previous['run_id']
+        with store.connect() as con:
+            cached=con.execute('SELECT * FROM capture_run_state WHERE run_id=?',(run_id,)).fetchone()
     # Full preflight on first import. On resume, each pending transfer verifies its own SHA256;
     # re-hashing already committed originals on every 25-file step is quadratic work.
     if cached:
@@ -317,7 +323,9 @@ def import_capture(store, directory, allowed_roots, project_id=None, transfer_li
     import uuid
     run_id=run_id or str(uuid.uuid4())
     from .restic_backup import protection
+    checkpoint_started=monotonic()
     protection(store.root,run_id)
+    checkpoint_elapsed=monotonic()-checkpoint_started
     with store.connect() as con:
         con.execute('BEGIN IMMEDIATE')
         check_manifest(con,manifest,project_id)
@@ -325,7 +333,8 @@ def import_capture(store, directory, allowed_roots, project_id=None, transfer_li
             check_record(con,r,project_id)
         if not cached: records=[record_session(con,r) for r in records]
         run_id=start(con,package_id,manifest.get('executor'),run_id)
-        metrics(con,run_id,'validate',monotonic()-clock)
+        metrics(con,run_id,'checkpoint',checkpoint_elapsed)
+        metrics(con,run_id,'validate',monotonic()-clock-checkpoint_elapsed)
     # A bundle may reference ONLY its own hashed blobs, never arbitrary source paths.
     transfers = []
     for r in ([] if cached else records):
@@ -353,7 +362,8 @@ def import_capture(store, directory, allowed_roots, project_id=None, transfer_li
                 continue
             if project_id:
                 for r in records[start:start+100]:
-                    con.execute("INSERT OR REPLACE INTO catalog_assignments VALUES (?,?,'agent_assignment')",
+                    con.execute("INSERT INTO catalog_assignments VALUES (?,?,'agent_assignment') ON CONFLICT(conversation) DO UPDATE SET "
+                                "project_id=excluded.project_id,basis=excluded.basis WHERE catalog_assignments.project_id!=excluded.project_id",
                                 (key(r['source'],r['instance'],r['conversation_id']),project_id))
             batch=[dict(r,conversation_metadata=meta) if meta else r
                    for r,meta in zip(records[start:start+100],session_metadata[start:start+100])]
@@ -379,7 +389,10 @@ def import_capture(store, directory, allowed_roots, project_id=None, transfer_li
             state={'policy_records':list(policy_records.values()),'transfers':[(oid,sha) for oid,_,sha in transfers]}
             con.execute('INSERT OR REPLACE INTO capture_run_state VALUES (?,?,?,?)',(run_id,package_id,project_id,canonical(state)))
     catalog = Catalog(store, [directory])
-    receipts={r['occurrence_id']:r for r in previous.get('attachments',[])} if previous else {}
+    # A previous run's receipt is not a current proof for this S3 target. New runs
+    # traverse sync_blob (cheap while its scoped proof is valid); only resume the
+    # same run without repeating transfers already committed by that run.
+    receipts={r['occurrence_id']:r for r in previous.get('attachments',[])} if previous and previous.get('run_id')==run_id else {}
     pending=[t for t in transfers if t[0] not in receipts or receipts[t[0]]['s3']['status']=='failed']
     from concurrent.futures import ThreadPoolExecutor
     grouped={}

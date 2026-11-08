@@ -20,6 +20,10 @@ from .core import canonical, digest, key, now
 
 def initialize(con):
     con.executescript('''
+        CREATE TABLE IF NOT EXISTS blob_verifications (
+            target TEXT NOT NULL, sha256 TEXT NOT NULL, size INTEGER NOT NULL,
+            verified_at TEXT NOT NULL, object_version TEXT, etag TEXT,
+            PRIMARY KEY(target,sha256));
         CREATE TABLE IF NOT EXISTS catalog_projects (
             id TEXT PRIMARY KEY, title TEXT NOT NULL, basis TEXT NOT NULL,
             summary TEXT NOT NULL, version INTEGER NOT NULL, updated_at TEXT NOT NULL);
@@ -257,16 +261,20 @@ class Catalog:
             from .control import group
             group(con,group_id)
             selected_group=None if clear_group else (group_id if group_id is not None else previous['group_id'])
+            changed=(title,summary_text,selected_group)!=(previous['title'],previous['summary'],previous['group_id'])
             for cid in conversation_keys:
                 if not con.execute('SELECT 1 FROM messages WHERE conversation=?', (cid,)).fetchone():
                     raise ValueError('Unknown conversation')
-                con.execute('UPDATE catalog_assignments SET project_id=?,basis=? WHERE conversation=?',
-                            (project_id, 'agent_assignment', cid))
-            con.execute('UPDATE catalog_projects SET title=?,summary=?,basis=?,group_id=?,version=version+1,updated_at=? WHERE id=?',
-                        (title, summary_text, 'agent_assignment',selected_group, now(), project_id))
-            _audit(con, actor, 'update_project', {'previous': dict(previous), 'title': title,
-                                               'summary': summary_text, 'conversations': conversation_keys,'group_id':selected_group})
-        projection = project_catalog(self.store)
+                assignment=con.execute('SELECT project_id FROM catalog_assignments WHERE conversation=?',(cid,)).fetchone()
+                if not assignment or assignment[0]!=project_id:
+                    con.execute('INSERT OR REPLACE INTO catalog_assignments VALUES (?,?,?)',(cid,project_id,'agent_assignment'))
+                    changed=True
+            if changed:
+                con.execute('UPDATE catalog_projects SET title=?,summary=?,basis=?,group_id=?,version=version+1,updated_at=? WHERE id=?',
+                            (title, summary_text, 'agent_assignment',selected_group, now(), project_id))
+                _audit(con, actor, 'update_project', {'previous': dict(previous), 'title': title,
+                                                   'summary': summary_text, 'conversations': conversation_keys,'group_id':selected_group})
+        projection = project_catalog(self.store) if changed else {'written':0,'conflicts':[],'unchanged':True}
         return {'project': self.project(project_id), 'projection': projection}
 
     def files(self, project_id=None, query='', limit=30, offset=0, include_history=False, include_payloads=False):
@@ -457,7 +465,7 @@ class Catalog:
         return {'occurrence_id': occurrence_id, 'sha256': sha, 'size': size, 'local_stored': True,
                 's3': s3, 'projection': projection,'timings_seconds':timings}
 
-    def sync_blob(self, sha):
+    def sync_blob(self, sha, force=False):
         config_path = os.environ.get('PC_ATTACHMENT_S3_CONFIG')
         if not config_path:
             return {'status': 'not_configured'}
@@ -469,11 +477,22 @@ class Catalog:
         try:
             from .backup import s3_client, sha256
             config = json.loads(Path(config_path).read_text(encoding='utf-8'))
-            client = s3_client(config)
             path = self.store.root / 'originals' / sha
             if sha256(path) != sha:
                 raise ValueError('Local blob integrity failure')
             object_key = 'attachments/' + sha
+            from datetime import datetime,timezone
+            target=digest(canonical([config['endpoint'].rstrip('/'),config['bucket'],config.get('region'),object_key]))
+            with self.store.connect() as con:
+                proof=con.execute('SELECT * FROM blob_verifications WHERE target=? AND sha256=?',(target,sha)).fetchone()
+            ttl=max(0,min(int(config.get('verification_reuse_seconds',86400)),604800))
+            if proof and not force and proof['size']==row['size']:
+                age=(datetime.now(timezone.utc)-datetime.fromisoformat(proof['verified_at'])).total_seconds()
+                if 0<=age<ttl:
+                    return {'status':'previously_verified','key':object_key,'sha256':sha,
+                            'verified_at':proof['verified_at'],'object_version':proof['object_version'],
+                            'reuse_seconds':ttl,'remote_checked_now':False}
+            client = s3_client(config)
             try:
                 head = client.head_object(Bucket=config['bucket'], Key=object_key)
                 exists = head['ContentLength'] == row['size'] and head.get('Metadata', {}).get('sha256') == sha
@@ -500,11 +519,15 @@ class Catalog:
                     raise ValueError('S3 checksum mismatch')
                 client.upload_file(str(path), config['bucket'], object_key, ExtraArgs={'Metadata': {'sha256': sha}})
             with self.store.connect() as con:
-                con.execute('UPDATE catalog_blobs SET s3_key=?,s3_verified_at=? WHERE sha256=?', (object_key, now(), sha))
-            return {'status': 'verified', 'key': object_key, 'sha256': sha}
+                checked=now()
+                con.execute('UPDATE catalog_blobs SET s3_key=?,s3_verified_at=? WHERE sha256=?', (object_key, checked, sha))
+                con.execute('INSERT OR REPLACE INTO blob_verifications VALUES (?,?,?,?,?,?)',
+                            (target,sha,row['size'],checked,response.get('VersionId'),response.get('ETag')))
+            return {'status': 'verified', 'key': object_key, 'sha256': sha,'verified_at':checked,'remote_checked_now':True}
         except Exception:
             with self.store.connect() as con:
                 con.execute('UPDATE catalog_blobs SET s3_verified_at=NULL WHERE sha256=?', (sha,))
+                con.execute('DELETE FROM blob_verifications WHERE sha256=?',(sha,))
             return {'status': 'failed', 'retry': 'Repeat store_attachment with identical bytes; local original remains in backups.'}
 
     def _extract_text(self, sha, name, size):

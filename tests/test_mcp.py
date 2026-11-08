@@ -80,7 +80,7 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
                             'kind': 'inference', 'sources': task['sources'], 'expected_version': 0,
                             'relations': [{'type': 'about', 'target': 'conversation:' + task['conversation_key']}]}]
                         await self.call(agent_b, 'commit_enrichment', {'job_id': enrichment['id'], 'position': task['position'],
-                            'lease_token': task['lease_token'], 'pages': pages, 'summary': 'Linked source to Atlas wiki'})
+                            'lease_token': task['lease_token'], 'pages': pages, 'summary': 'Linked source to Atlas wiki', 'reviews':[{**r,'status':'reviewed','detail':'Read fixture dialogue text.'} for r in task['sources']]})
                     status = await self.call(agent_b, 'memory_status')
                     self.assertEqual(status['conversations_needing_enrichment'], 0)
                     self.assertEqual(status['stats']['messages'], 2)

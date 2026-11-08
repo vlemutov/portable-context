@@ -289,6 +289,9 @@ class Store:
             for row in rows:
                 item=dict(row)
                 info=attribution(json.loads(item.pop('record')),self)
+                if info.get('content_segments'):
+                    from .attribution import display_text
+                    item['excerpt']=display_text(json.loads(row['record']),info,self)[:1500]
                 result.append({**item,**info,'role':info['effective_role']})
             return result
 

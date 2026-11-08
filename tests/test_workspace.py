@@ -47,7 +47,7 @@ class WorkspaceTests(unittest.TestCase):
         return job, self.ws.claim_enrichment(job['id'], 'agent-a')['task']
 
     def commit(self, job, task, pages, **kwargs):
-        return self.ws.commit_enrichment(job['id'], task['position'], task['lease_token'], pages, 'Reviewed source', **kwargs)
+        return self.ws.commit_enrichment(job['id'], task['position'], task['lease_token'], pages, 'Reviewed source', reviews=[{**r,'status':'reviewed','detail':'Read the complete dialogue text.'} for r in task['sources']], **kwargs)
 
     def test_selected_import_never_persists_excluded_content(self):
         secret = 'EXCLUDED-PRIVATE-CONVERSATION-8f770'
@@ -198,7 +198,7 @@ class WorkspaceTests(unittest.TestCase):
         old = read_page(self.ws, 'atlas')
         path = self.store.root / 'vault/wiki/atlas.md'
         path.write_text(old['body'] + '\nHuman clarification.\n', encoding='utf-8')
-        second = self.ws.start_enrichment([key('demo', 'laptop', 'project')])
+        second = self.ws.start_enrichment([key('demo', 'laptop', 'project')],include_reviewed=True)
         next_task = self.ws.claim_enrichment(second['id'], 'agent-b')['task']
         stale_update = page(next_task, expected_version=old['version'], expected_hash=old['hash'])
         with self.assertRaises(ValueError):
