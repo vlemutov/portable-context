@@ -248,9 +248,13 @@ class Manager:
                    'content_identity','export_observations','evidence_reviews','graph_nodes','graph_edges')
             for table in names:
                 if table not in tables: continue
-                cols=[r[1] for r in con.execute('PRAGMA table_info('+table+')') if table not in ('graph_nodes','graph_edges') or r[1]!='updated_at']
+                schema=list(con.execute('PRAGMA table_info('+table+')'))
+                cols=[r[1] for r in schema if table not in ('graph_nodes','graph_edges') or r[1]!='updated_at']
+                # REPLACE can move an unchanged row to a different rowid. Hash
+                # logical key order, not SQLite's incidental insertion order.
+                order=[r[1] for r in sorted(schema,key=lambda r:r[5]) if r[5]] or cols
                 h.update(table.encode())
-                for row in con.execute('SELECT '+','.join(cols)+' FROM '+table+' ORDER BY rowid'):
+                for row in con.execute('SELECT '+','.join(cols)+' FROM '+table+' ORDER BY '+','.join(order)):
                     h.update(canonical(row).encode())
             for checksum,size in con.execute('SELECT hash,size FROM imports ORDER BY hash'):
                 path=self.home/'originals'/checksum

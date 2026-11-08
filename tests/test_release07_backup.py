@@ -51,8 +51,14 @@ class ResticTests(unittest.TestCase):
         self.assertEqual((self.root/'restored/originals'/original).read_text(),'original content')
 
     def test_unchanged_checkpoint_skips_stage_and_manual_edits_invalidate(self):
+        with self.store.connect() as con:
+            for native in ('one','two'):
+                con.execute('INSERT INTO source_sessions VALUES (?,?,?,?,?)',('events','fixture',native,native,'{}'))
         first=self.manager.checkpoint()
         self.assertFalse((self.manager.state/'stage').exists())
+        with self.store.connect() as con:
+            row=tuple(con.execute("SELECT * FROM source_sessions WHERE native_id='one'").fetchone())
+            con.execute('INSERT OR REPLACE INTO source_sessions VALUES (?,?,?,?,?)',row)
         with patch.object(self.manager,'stage',side_effect=AssertionError('must not stage unchanged memory')):
             replay=self.manager.checkpoint('before_import','unchanged-run')
         self.assertEqual(replay['status'],'reused_unchanged')

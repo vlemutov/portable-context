@@ -282,6 +282,12 @@ def import_capture(store, directory, allowed_roots, project_id=None, transfer_li
         old=con.execute('SELECT report FROM capture_receipts WHERE id=?',(package_id,)).fetchone()
         cached=con.execute('SELECT * FROM capture_run_state WHERE run_id=?',(run_id,)).fetchone() if run_id else None
     previous=json.loads(old[0]) if old else None
+    # Legacy direct callers omit run_id between bounded transfer steps. Resume
+    # their unfinished operation; a completed package starts a fresh operation.
+    if run_id is None and previous and not previous.get('complete') and previous.get('run_id'):
+        run_id=previous['run_id']
+        with store.connect() as con:
+            cached=con.execute('SELECT * FROM capture_run_state WHERE run_id=?',(run_id,)).fetchone()
     # Full preflight on first import. On resume, each pending transfer verifies its own SHA256;
     # re-hashing already committed originals on every 25-file step is quadratic work.
     if cached:
