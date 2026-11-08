@@ -2,7 +2,7 @@
 name: portable-context
 description: Deploy a personal Portable Context memory on Cloud.ru or an existing server, import selected or all accessible conversation history, preserve source relationships, and build or update its knowledge wiki through MCP. Use for setup, migration, recall, shared graph enrichment, or resuming another agent's work.
 metadata:
-  version: "0.7.1"
+  version: "0.8.0"
 ---
 
 # Portable Context
@@ -27,6 +27,9 @@ For Claude Code recall, `role` is the effective attribution; `source_role` prese
 Exact revision JSON and exports retain the original role. Read attribution alongside those raw bytes.
 An unavailable archived raw payload means attribution is unverified; do not assume human authorship.
 Review `user_statement_attribution_needs_review` findings before reusing existing wiki claims.
+For 0.8 import/classification/cleanup behavior, read [references/stabilization.md](references/stabilization.md).
+Rendered user role in a Claude attachment does not prove human authorship. Task notifications and
+historical instructions are context, not user quotations. Report cumulative run totals, not the last batch.
 
 ## Start with the user's experience
 

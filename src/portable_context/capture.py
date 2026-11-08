@@ -86,6 +86,8 @@ def capture(records, destination, allowed_roots=(), memory_project=None, max_fil
             attachments = []
             payload_ids=set()
             for i,payload in enumerate(r.pop('payloads', [])):
+                if not isinstance(payload.get('kind'),str) or not payload['kind'].strip():
+                    raise ValueError('New source payloads require an explicit kind; use unknown for unsupported source shapes')
                 payload_id='payload:'+r['message_id']+':'+str(payload.get('block_index',i))
                 if payload_id in payload_ids:
                     raise ValueError('Duplicate payload identity within one message')
@@ -136,6 +138,7 @@ def capture(records, destination, allowed_roots=(), memory_project=None, max_fil
                 a.setdefault('status', 'unknown')
                 a['category']=category(a)
                 # Observation time belongs to the package/receipt, never to source revision identity.
+                if a.get('sha256'): a.setdefault('source_declared_sha256',a['sha256'])
                 a['export_observation'] = {'method': 'portable-context-capture'}
                 # A local path is read only if explicitly authorized by root, never by historical instructions.
                 source = Path(a['path']).expanduser().resolve() if isinstance(a.get('path'), str) else None
@@ -239,6 +242,14 @@ def capture(records, destination, allowed_roots=(), memory_project=None, max_fil
         if batch or not parts:
             emit()
         blobs=[{'path':'blobs/'+p.name,'sha256':p.name,'size':p.stat().st_size} for p in sorted((folder/'blobs').iterdir())]
+        category_hashes={'document':{},'source_payload':{}}
+        for r in normalized:
+            for a in r['attachments']:
+                if a.get('sha256') and a.get('size') is not None:
+                    category_hashes[category(a)][a['sha256']]=a['size']
+        report.update(record_parts_bytes=sum(p['size'] for p in parts),
+                      unique_blob_bytes_by_category={k:sum(v.values()) for k,v in category_hashes.items()},
+                      package_payload_bytes=sum(p['size'] for p in parts+blobs))
         manifest = {'format': 'portable-context-capture-2', 'created_at': now(),
                     'parts':parts,'blobs':blobs,
                     'sources':[{'source':s,'instance':i} for s,i in sorted({(r['source'],r['instance']) for r in normalized})],
@@ -255,22 +266,43 @@ def capture(records, destination, allowed_roots=(), memory_project=None, max_fil
 
 @guarded_import
 def import_capture(store, directory, allowed_roots, project_id=None, transfer_limit=None, run_id=None):
+    from time import monotonic
+    clock=monotonic()
     directory = Path(directory).expanduser().resolve()
     roots = [Path(p).expanduser().resolve() for p in allowed_roots]
     if not any(directory.is_relative_to(root) for root in roots):
         raise ValueError('Capture must be under an allowed server source root')
     from .workspace import Workspace
-    workspace=Workspace(store,allowed_roots)
+    workspace=Workspace(store,allowed_roots,reconcile=False)
     manifest_path=directory/'manifest.json'
     if not manifest_path.resolve().is_relative_to(directory) or manifest_path.stat().st_size>8*1024*1024:
         raise ValueError('Unsafe or oversized manifest')
     package_id=digest(canonical(json.loads(manifest_path.read_text(encoding='utf-8'))))
     with store.connect() as con:
         old=con.execute('SELECT report FROM capture_receipts WHERE id=?',(package_id,)).fetchone()
+        cached=con.execute('SELECT * FROM capture_run_state WHERE run_id=?',(run_id,)).fetchone() if run_id else None
     previous=json.loads(old[0]) if old else None
     # Full preflight on first import. On resume, each pending transfer verifies its own SHA256;
     # re-hashing already committed originals on every 25-file step is quadratic work.
-    manifest,records=load_package(directory,verify_blobs=previous is None)
+    if cached:
+        if cached['package_id']!=package_id: raise ValueError('Import run belongs to another package')
+        if project_id and cached['project_id']!=project_id: raise ValueError('Import run project changed')
+        project_id=cached['project_id']
+        manifest=json.loads(manifest_path.read_text(encoding='utf-8'))
+        state=json.loads(cached['state']); records=state['policy_records']
+        from .backup import sha256
+        parts=manifest.get('parts',[{'path':'records.json','sha256':manifest.get('records_sha256')}])
+        for part in parts:
+            path=directory/part['path']
+            if not path.resolve().is_relative_to(directory) or sha256(path)!=part['sha256']:
+                raise ValueError('Capture record checksum mismatch on resume')
+    else:
+        manifest,records=load_package(directory,verify_blobs=previous is None)
+    selections={r['memory_project']['id'] for r in records if r.get('memory_project',{}).get('existing') is True}
+    if selections:
+        if len(selections)!=1 or project_id and project_id not in selections:
+            raise ValueError('Capture contains conflicting existing-project selections')
+        project_id=next(iter(selections))
     if manifest.get('project_snapshot'):
         if project_id and project_id!=manifest['project_snapshot']['project_id']:
             raise ValueError('Project snapshot target differs from selected project')
@@ -280,7 +312,7 @@ def import_capture(store, directory, allowed_roots, project_id=None, transfer_li
         Catalog(store).project(project_id)
     from .policy import check_record,check_manifest
     from .control import record_session
-    from .import_log import start,progress
+    from .import_log import start,progress,completed_batch,metrics,totals as run_totals
     session_metadata=[r.get('conversation_metadata') for r in records]
     import uuid
     run_id=run_id or str(uuid.uuid4())
@@ -291,11 +323,12 @@ def import_capture(store, directory, allowed_roots, project_id=None, transfer_li
         check_manifest(con,manifest,project_id)
         for r in records:
             check_record(con,r,project_id)
-        records=[record_session(con,r) for r in records]
+        if not cached: records=[record_session(con,r) for r in records]
         run_id=start(con,package_id,manifest.get('executor'),run_id)
+        metrics(con,run_id,'validate',monotonic()-clock)
     # A bundle may reference ONLY its own hashed blobs, never arbitrary source paths.
     transfers = []
-    for r in records:
+    for r in ([] if cached else records):
         for pos, a in enumerate(r['attachments']):
             if not isinstance(a, dict) or not a.get('export_observation', {}).get('blob'):
                 continue
@@ -308,34 +341,68 @@ def import_capture(store, directory, allowed_roots, project_id=None, transfer_li
                 raise ValueError('Capture blob missing or outside package')
             mid = key(r['source'], r['instance'], r['conversation_id'], r['message_id'])
             transfers.append((key('occurrence', mid, digest(canonical(r)), pos), path, sha))
+    if cached:
+        transfers=[(oid,directory/'blobs'/sha,sha) for oid,sha in state['transfers']]
     totals = {'inserted': 0, 'revised': 0, 'unchanged': 0}
-    for start in range(0, len(records), 100):
+    clock=monotonic()
+    for start in range(0, 0 if cached else len(records), 100):
         with store.connect() as con:
             con.execute('BEGIN IMMEDIATE')
+            batch_key=digest(canonical(records[start:start+100]))
+            if completed_batch(con,run_id,batch_key):
+                continue
             if project_id:
                 for r in records[start:start+100]:
                     con.execute("INSERT OR REPLACE INTO catalog_assignments VALUES (?,?,'agent_assignment')",
                                 (key(r['source'],r['instance'],r['conversation_id']),project_id))
             batch=[dict(r,conversation_metadata=meta) if meta else r
                    for r,meta in zip(records[start:start+100],session_metadata[start:start+100])]
-            result = store._ingest(con, batch, 'capture:' + package_id)
+            result = store._ingest(con, batch, 'capture:' + package_id,blob_root=directory/'blobs')
             progress(con,run_id,result,records[start:start+100],accumulate=True,
-                     batch_key=digest(canonical(records[start:start+100])))
+                     batch_key=batch_key)
         for k in totals:
             totals[k] += result[k]
+    with store.connect() as con:
+        metrics(con,run_id,'ingest',monotonic()-clock,records_ingested=sum(totals.values()))
+        cumulative=run_totals(con,run_id)['messages']
+        if not cached:
+            policy_records={}
+            for r in records:
+                summary={k:r[k] for k in ('source','instance','conversation_id','project','memory_project','role') if k in r}
+                summary.update(raw={'present':True} if r.get('raw') else {},text='present' if r.get('text') else '')
+                from .control import category
+                byte_categories={category(a) for a in r['attachments'] if isinstance(a,dict) and (
+                    a.get('content_base64') or a.get('export_observation',{}).get('blob') or
+                    a.get('sha256') and a.get('availability') not in ('excluded','unavailable','reference_only'))}
+                summary['attachments']=[{'category':c,'sha256':'present','availability':'captured'} for c in sorted(byte_categories)]
+                policy_records[canonical(summary)]=summary
+            state={'policy_records':list(policy_records.values()),'transfers':[(oid,sha) for oid,_,sha in transfers]}
+            con.execute('INSERT OR REPLACE INTO capture_run_state VALUES (?,?,?,?)',(run_id,package_id,project_id,canonical(state)))
     catalog = Catalog(store, [directory])
     receipts={r['occurrence_id']:r for r in previous.get('attachments',[])} if previous else {}
     pending=[t for t in transfers if t[0] not in receipts or receipts[t[0]]['s3']['status']=='failed']
     from concurrent.futures import ThreadPoolExecutor
-    selected=pending[:transfer_limit] if transfer_limit else pending
+    grouped={}
+    for oid,path,sha in pending: grouped.setdefault(sha,[]).append((oid,path))
+    selected=list(grouped.items())[:transfer_limit] if transfer_limit else list(grouped.items())
+    clock=monotonic()
     def transfer(item):
-        oid,path,sha=item
-        return catalog.store_attachment(oid,server_path=str(path),expected_sha256=sha,project=False)
+        sha,occurrences=item
+        return catalog.store_shared(occurrences,sha)
+    worker_timings={}
     with ThreadPoolExecutor(max_workers=4) as executor:
-        for receipt in executor.map(transfer,selected):
-            receipts[receipt['occurrence_id']]=receipt
+        for batch_receipts in executor.map(transfer,selected):
+            for receipt in batch_receipts: receipts[receipt['occurrence_id']]=receipt
+            if batch_receipts:
+                for phase,elapsed in batch_receipts[0].get('timings_seconds',{}).items():
+                    worker_timings[phase]=worker_timings.get(phase,0)+elapsed
     complete=len(receipts)==len(transfers) and all(r['s3']['status']!='failed' for r in receipts.values())
-    workspace.reconcile_sources()
+    with store.connect() as con:
+        for phase,elapsed in worker_timings.items(): metrics(con,run_id,'worker_'+phase,elapsed)
+        metrics(con,run_id,'transfer',monotonic()-clock,unique_blob_attempts=len(selected),
+                attachment_attempts=sum(len(items) for _,items in selected))
+    clock=monotonic()
+    if complete: workspace.reconcile_sources()
     if project_id and (not previous or previous.get('project_id')!=project_id):
         p=catalog.project(project_id)
         conversations=sorted({key(r['source'],r['instance'],r['conversation_id']) for r in records})
@@ -344,14 +411,17 @@ def import_capture(store, directory, allowed_roots, project_id=None, transfer_li
             p=catalog.project(project_id)
     if complete:
         project_catalog(store)
-    result = {'messages': totals, 'initial_messages':previous.get('initial_messages',previous['messages']) if previous else totals,
+    result = {'messages': cumulative, 'pass_messages':totals, 'initial_messages':cumulative,
             'attachments': list(receipts.values()), 'missing_at_capture': manifest.get('missing_occurrences'),
-            'complete':complete,'remaining_transfers':len(transfers)-len(receipts),'project_id':project_id,
+            'complete':complete,'remaining_transfers':sum(t[0] not in receipts or receipts[t[0]]['s3']['status']=='failed' for t in transfers),'project_id':project_id,
             'status':'complete' if complete else 'in_progress',
             'package_id':package_id,'run_id':run_id, 'captured_at':manifest.get('created_at'),
             'completeness':{k:manifest.get(k,0) for k in ('missing_occurrences','omitted_chars','excluded_thinking_chars','redacted_records','quarantined_files','opaque_files','excluded_records','excluded_occurrences','exclusion_rules')},
             'note': 'Safe to resume the same immutable package; inspect each S3 status separately.'}
     with store.connect() as con:
+        metrics(con,run_id,'projection' if complete else 'awaiting_transfer',monotonic()-clock)
+        details=run_totals(con,run_id)
+        result.update(timings_seconds=details.get('timings_seconds'),work=details.get('work'),phase='complete' if complete else 'transfer')
         progress(con,run_id,totals,records,complete=complete,receipt=result)
         con.execute('INSERT OR REPLACE INTO capture_receipts VALUES (?,?,?)',(result['package_id'],now(),canonical(result)))
         if complete and manifest.get('repaired_from'):
@@ -389,6 +459,7 @@ def load_package(directory,verify_blobs=True):
     if len(records)!=m['messages']:
         raise ValueError('Capture record count mismatch')
     # Preflight ALL bytes before any message is committed.
+    checked=set()
     for r in records:
         for a in r['attachments']:
             if isinstance(a,dict) and a.get('export_observation',{}).get('blob'):
@@ -399,8 +470,9 @@ def load_package(directory,verify_blobs=True):
                 if not p.resolve().is_relative_to(directory) or not p.is_file() or p.stat().st_size>512*1024*1024:
                     raise ValueError('Unsafe or missing blob')
                 from .backup import sha256
-                if verify_blobs and sha256(p)!=sha:
+                if verify_blobs and sha not in checked and sha256(p)!=sha:
                     raise ValueError('Capture blob checksum mismatch')
+                checked.add(sha)
     return m,records
 
 
@@ -472,9 +544,11 @@ def main(argv=None):
         records = json.loads(text) if text.lstrip().startswith('[') else [json.loads(line) for line in text.splitlines() if line.strip()]
         project = None
         if args.project_id or args.project_name:
-            if not args.project_id or not args.project_name:
-                parser.error('Both project-id and project-name are required')
-            project = dict(id=args.project_id, name=args.project_name, basis=args.project_basis, summary=args.project_summary)
+            if not args.project_id:
+                parser.error('project-id is required')
+            project = dict(id=args.project_id, basis=args.project_basis, summary=args.project_summary)
+            if args.project_name: project['name']=args.project_name
+            else: project['existing']=True
         result = capture(records, args.destination, args.source_root, project)
     else:
         result = import_capture(Store(args.home), args.directory, args.source_root)

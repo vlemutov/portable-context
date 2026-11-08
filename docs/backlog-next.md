@@ -1,8 +1,9 @@
 # Backlog after the 0.7 pilot
 
-Status: release split approved, 2026-11-04; 0.7.1 implementation authorized.
-0.8 migrations and historical cleanup still require their separate review. Requirement numbers below
-refer to the owner's sixteen-item pilot report. Personal transcripts and logs stay outside Git.
+Status: 0.8 implementation and release validation in progress, 2026-11-08. At the owner's request,
+return to data/import stabilization as the next release; the access/authentication proposal is deferred.
+0.7.1 is shipped; 0.8 implementation is authorized. Destructive cleanup still requires its concrete preview.
+R-numbers refer to the sixteen-item pilot. Raw diagnostics and personal source examples remain private.
 
 ## Findings verified against 0.7
 
@@ -29,16 +30,92 @@ refer to the owner's sixteen-item pilot report. Personal transcripts and logs st
 
 | Release | Scope | Exit condition |
 |---|---|---|
-| 0.7.1 hotfix | R1, R3, R9a/b | Recall works; generated summaries cannot masquerade as user statements; ambiguous folder ownership is explicit. No revision-hash migration. |
-| 0.8 stabilization | R2, R4–R8, R10–R14 | New exports preserve content identity; resumable import reports one operation accurately; storage/cleanup decisions have verifiable evidence. |
-| 0.9 enrichment | R15, R16 together | Byte/token-aware evidence batches and honest full/selective/unseen coverage share one model. |
-| After stabilization | Multi-client onboarding, marketplace packaging, background delivery | Stable identity, attribution, receipts and checkpoint coverage first. Existing manual workflow remains supported. |
+| 0.7.1 hotfix — shipped | R1, R3, R9a/b | Recall, summary attribution and workspace ambiguity fixes are already delivered; new diagnostic summary fixtures also pass current classification. |
+| 0.8 stabilization — implementation/validation | R2, R4–R8, R10–R14 | Re-exports preserve content identity; imports resume without repeated ingestion; operation totals and verified recovery coverage are trustworthy. |
+| 0.9 enrichment — provisional | R15, R16 together | Byte/token-aware evidence batches and full/selective/unseen coverage; reconsider sequencing after 0.8 pilot. |
+| Deferred, no release assigned | HTTPS/device credentials/OAuth, local installation tiers, domain onboarding | Keep [the access proposal](access-and-installation-plan.md) for later review; do not change the live access path as part of stabilization. |
+| Later | Marketplace packaging, background delivery, offline multi-writer sync, optional tunnels | Separate decisions after the core workflow is reliable. |
 
-The content-identity repair is the first work item in 0.8, before performance changes or another
-large enrichment run. Do not defer it behind convenience features. If its scope proves small enough
-to ship sooner, make a separate stabilization release; do not hide a cross-adapter migration in a hotfix.
+The intermediate proposal to make 0.8 an access release is superseded. Original data work returns to
+0.8 and starts with content identity. Do not mix a transport/authorization rollout into this migration.
+The diagnostic packet is sufficient to start the core work; the requested service-type and role/mode
+fixtures have arrived. Optional linked examples would improve edge-case coverage, not block implementation.
 
-## 0.7.1: unblock reading and protect attribution
+## Diagnostic review: corrections and implementation order
+
+### Evidence confirmed locally
+
+- The supplied user/tool pairs are equivalent after removing capture_context and memory_project and
+  deriving attachment category consistently. The tool payload SHA256 is unchanged. The user text in
+  the packet is truncated, so these are diagnostic examples, not checksum-valid immutable originals.
+- Historical change summaries also contain text, parent_id, role and raw changes. Do not classify all
+  old revisions as export noise. Validate exact original evidence on a restored copy for migration.
+- Current code reparses packages and re-enters all message ingestion batches on every transfer round.
+  The batch ledger suppresses duplicate counting but does not suppress that work. Missing phase timings
+  prevent attributing the elapsed time precisely to SQLite, S3, parsing or backup.
+- Folder sends expose final-pass unchanged counts while the server's run ledger records inserted files.
+  One run-scoped cumulative receipt must serve both client and server; fresh replay remains a new run.
+- All supplied attachment subtypes currently become generic service_event payloads with empty visible
+  text and no document passports. Raw evidence survives, but file/context semantics are not represented.
+- Missing payload kind is NOT established for the supplied document passports. category=document and
+  reference_kind=tool_file are valid without kind. Their unavailable reason is outside_allowed_roots;
+  do not widen allowed roots or invent a kind to repair that. Audit the full reported set before generalizing.
+- Compact-summary samples are correctly recognized by 0.7.1. Encoded-folder collisions reinforce its
+  conservative behavior; nested cwd and relocation paths are not proof of separate projects or ownership.
+- Legacy package manifests identify format-v1 directories outside uploads. Age and format alone cannot
+  establish that their records/blobs have been imported and are covered by a verified backup.
+
+### 0.8 implementation sequence
+
+1. R2 + R8: versioned content identity, capture/organization observations, safe equivalence mapping,
+   unchanged exact citations, project-by-ID selection, and migration preview on a restored copy.
+2. R6 + R7: persist import phases; ingest once per run; transfer/check unique blobs once while retaining
+   occurrences; return authoritative cumulative receipts. Add phase/batch monotonic timings and counters
+   before tuning batch sizes. Test interruption, replay, resumed-policy enforcement and project folders.
+3. R4 + R5: classify actual attachment subtypes, not just the outer attachment record. Distinguish file
+   bytes versus excerpts/references, context/reminders, task notifications and structural/completeness evidence
+   from bulky diagnostics. Stub only known diagnostic data by default, with an explicit full option;
+   prevent its reappearance through raw/rendered/service_event duplication. Retain unknown evidence.
+4. R10–R14: verified post-import backup coverage, explainable remove/keep previews, managed-root legacy
+   package recognition, cache accounting and accurate source/unique-blob/peak-space forecast.
+5. Pilot: replay the identical package, rebuild the same selected source slice, then add a genuine change.
+   Verify source versions, wiki freshness, totals, original hashes and recovery on each case. Do not
+   benchmark by repeatedly importing the real full archive before instrumentation exists.
+
+### Additional adapter evidence reviewed on November 8
+
+- All eight requested service families are represented by 23 examples; a further 25 attachment examples
+  cover 20 subtype/renderedRole/commandMode combinations. Isolated local conversion on 0.7.1 produces
+  unknown-type warnings and service_event payloads for all 48, with no extracted document references.
+  Three file-history-delta examples require a synthetic session anchor when tested in isolation.
+- api-request-blob also produces nonempty visible text from its nested message. Classification must
+  precede generic content/tool parsing; a diagnostic stub must not leak full content through text,
+  tool-derived attachments, raw, rendered or service_event. Apply privacy/thinking policy to full mode too.
+- renderedRole is presentation metadata, not human authorship: session_context, instructions and
+  remote_session_change can render as user. All supplied queued_command examples use task-notification;
+  retain notification provenance and known origin/delivery references, without inventing a user command.
+  Missing/unknown commandMode must not default to human input. Keep source envelopes unchanged.
+- file-history-delta carries messageId/snapshotMessageId, path and backup metadata. Preserve these as
+  structural evidence; they do not establish conversation forks or the existence of original bytes.
+  Supplied backupFileName values are null. A tracking path is not permission to read outside allowed roots.
+- Keep small mode/tools-used/cost-state observations as typed session metadata, outside conversational
+  claims. Treat cumulative cost snapshots as snapshots, not additive charges. atis-latch examples only
+  contain an empty value: preserve a conservative stub and flag unsupported nonempty shapes.
+- Preserve native request IDs and shape/blob/base references as typed diagnostic references, not reply
+  or fork edges. Do not invent timestamps where absent. Policy-dependent stubs must not become the
+  source of event identity; repeated identical state observations need an explicit occurrence policy.
+- File snippets and reread metadata are not original bytes. Even a complete line range establishes
+  captured text coverage, not byte-for-byte identity with a historical file.
+- Sanitization replaces hashes/paths with length markers and parses embedded JSON strings. These
+  examples establish shapes, not checksum validity, exact original wire types or reference equality.
+  Use synthetic linked fixtures for string/object forms, distinct hashes, repeated states and partial files.
+
+Optional follow-up only: one small consistently pseudonymized linked request/blob/shape sequence;
+a file-history delta with non-null backupFileName if present; queued_command modes other than
+task-notification if actually observed. Preserve origin.kind/producer and reference equality in those
+examples. No full transcript, unredacted text or another large import is required.
+
+## 0.7.1: shipped — unblock reading and protect attribution
 
 ### R1 — conversation listing [server]
 
@@ -109,7 +186,11 @@ to ship sooner, make a separate stabilization release; do not hide a cross-adapt
   disposable merely because their records are non-user messages. Local source transcripts remain untouched.
 - Parse attachment subtypes individually. File references, inline context and hook output are different
   evidence; do not fabricate a file or follow arbitrary paths just because the outer type is attachment.
-- Require explicit kind for new payloads. Repair old missing kinds only from reliable source structure;
+- Distinguish rendered role from authorship and task notifications from human input. Classify service
+  records before parsing nested message content. Preserve typed structural/file-history references and
+  compact telemetry without exposing them as user claims; see the November 8 evidence above.
+- Require explicit kind for new source payloads; do not require payload kind for document passports.
+  Repair genuinely missing payload kinds only from reliable source structure;
   otherwise label unknown with a reason, without revising the original message as a side effect.
 - Acceptance: fixtures for each reported diagnostic family, attachment subtype, compact summary and
   missing-kind case; default contains no full request blob through another field; explicit opt-in works.
@@ -169,7 +250,7 @@ to ship sooner, make a separate stabilization release; do not hide a cross-adapt
 - Acceptance: session-only, folder-only, mixed package, known existing blobs, compressed/expanded
   source formats, missing size information and backup staging included in disk reserve.
 
-## 0.9: enrichment without false completeness (R15/R16)
+## 0.9: enrichment without false completeness (R15/R16; provisional)
 
 - Build on stable content identity and correct source attribution. Preview total evidence volume,
   estimated context/token budget and coverage before starting; estimates depend on the chosen model.
@@ -184,21 +265,12 @@ to ship sooner, make a separate stabilization release; do not hide a cross-adapt
 - Acceptance: selective reading, tool-only evidence, oversized tool pair, new messages arriving during
   analysis, equivalence-only revision changes, real content changes and cross-agent resume.
 
-## Minimal additional evidence requested from the pilot
+## Diagnostic packet status
 
-1. Versions: local package/skill and server; commands/options for discover/prepare/send; package ID,
-   run ID and paths to locally retained artifacts. Native IDs are useful; no credentials or full archive needed.
-2. Adapter fixtures: sanitized original JSONL records for compact summary, a visibility-only example,
-   each observed attachment subtype and 2–3 missing-kind passports with their originating records.
-   Preserve field names, types, booleans and ID relationships while replacing private text.
-3. Identity: old/new normalized records for the same message (including attachment metadata and hashes),
-   plus one wiki citation marked stale. One example for capture_context-only and one for project selection.
-4. Performance/accounting: one slow run's final client JSON, server run summary, available per-batch
-   timestamps, unique blob counts/bytes and prepare report; project-folder run's mismatched receipt too.
-   Do not rerun a large import just to collect logs that do not yet exist; add instrumentation first.
-5. Discovery/legacy cleanup: sanitized cwd/relocatedCwd observations for the shared encoded directory;
-   legacy package directory listing and manifest headers only, without document contents.
+The four requested evidence groups have been reviewed: revision pairs/wiki citation, adapter examples,
+import timing/counter reports, discovery/legacy package listings. They are sufficient for the core 0.8 plan.
+Only the targeted fixtures listed above remain; private originals for migration verification must be
+read from an authorized consistent backup, not reconstructed from truncated diagnostic text.
 
-R1 does not need another production traceback to start: its cause is reproduced. R2's mechanism is
-also confirmed; paired records are needed to validate migration coverage, not to establish that it is a bug.
-Implementation can start with synthetic regressions while the missing adapter/measurement evidence is gathered.
+The review used local files and temporary adapter checks only. No live reimport, source migration,
+cleanup, access change or diagnostic upload to the public repository was performed.

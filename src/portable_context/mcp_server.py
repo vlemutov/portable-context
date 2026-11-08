@@ -132,10 +132,15 @@ def build_server(store: Store, allowed_roots=None):
         return report(store)
 
     @server.tool()
-    def forecast_import(original_bytes: int, source_bytes: int = 0) -> dict:
+    def forecast_import(original_bytes: int, source_bytes: int | None = None) -> dict:
         """Estimate import storage from a local prepare/discover report, including temporary peak space."""
         from .storage import forecast
         return forecast(store,original_bytes,source_bytes)
+
+    @server.tool()
+    def backup_after_import() -> dict:
+        """Create/reuse a current snapshot and fully verify recovery coverage before package cleanup."""
+        return backup_manager().post_import()
 
     @server.tool()
     def get_index_policy() -> list[dict]:

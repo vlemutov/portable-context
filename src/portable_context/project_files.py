@@ -145,6 +145,7 @@ def _prepare(profile,binding_id,destination,policy=None,accept_growth=False,agen
             'blobs':[{'path':'blobs/'+p.name,'sha256':p.name,'size':p.stat().st_size} for p in sorted((folder/'blobs').iterdir())],
             'capture_scopes':[],'executor':{'client':'portable-context','version':__version__,'agent':agent},
             'unique_bytes':sum(p.stat().st_size for p in (folder/'blobs').iterdir()),
+            'record_parts_bytes':2,'project_snapshot_bytes':len(canonical(snapshot).encode('utf-8')),
             'missing_occurrences':0,'excluded_occurrences':sum(bool(x['reason']) for x in entries)}
         if len(canonical(manifest).encode())>8*1024**2: raise ValueError('Project manifest exceeds 8 MiB; select narrower root')
         atomic_write(folder/'manifest.json',canonical(manifest))
@@ -178,60 +179,70 @@ def validate_snapshot(con,snapshot,workspace_id=None):
 
 def import_snapshot(store,directory,manifest,run_id,transfer_limit=None):
     from .catalog import Catalog,project_catalog,_audit
-    from .import_log import start,progress
+    from .import_log import start,progress,completed_batch,totals as run_totals
     from .restic_backup import protection
     snap=manifest['project_snapshot']; directory=Path(directory); package_id=digest(canonical(manifest))
     with store.connect() as con:
         wid=con.execute("SELECT value FROM metadata WHERE key='workspace_id'").fetchone()[0]
         validate_snapshot(con,snap,wid)
-    for a in snap['files']:
+        resumed=bool(run_id and completed_batch(con,run_id,snap['snapshot_id']))
+    verified=set()
+    for a in ([] if resumed else snap['files']):
         if a.get('sha256'):
             path=directory/'blobs'/a['sha256']
             from .backup import sha256
-            if not path.is_file() or sha256(path)!=a['sha256']: raise ValueError('Project blob missing or corrupt')
+            if a['sha256'] not in verified and (not path.is_file() or sha256(path)!=a['sha256']): raise ValueError('Project blob missing or corrupt')
+            verified.add(a['sha256'])
     run_id=run_id or str(uuid.uuid4()); protection(store.root,run_id)
     observed=set(); transfers=[]; counts={'inserted':0,'revised':0,'unchanged':0}
     with store.connect() as con:
         con.execute('BEGIN IMMEDIATE'); validate_snapshot(con,snap,wid)
         start(con,package_id,manifest.get('executor'),run_id,kind='project_folder')
-        old=con.execute('SELECT project_id FROM project_roots WHERE id=?',(snap['binding_id'],)).fetchone()
-        if old and old[0]!=snap['project_id']: raise ValueError('Folder binding project changed')
-        con.execute('INSERT OR IGNORE INTO project_roots VALUES (?,?,?,?)',
-            (snap['binding_id'],snap['project_id'],snap['instance'],canonical({'root':snap['root'],'basis':snap['basis']})))
-        replay=bool(con.execute('SELECT 1 FROM project_snapshots WHERE id=?',(snap['snapshot_id'],)).fetchone())
-        latest=con.execute('SELECT coalesce(max(sequence),0) FROM project_snapshots WHERE binding_id=?',(snap['binding_id'],)).fetchone()[0]
-        apply_current=not replay and snap['sequence']>latest
-        for a in snap['files']:
-            rel=a['relative_path']; observed.add(rel)
-            fid=key('project-file',snap['project_id'],snap['binding_id'],rel)
-            revision=digest(canonical(a)); oid=key('project-occurrence',fid,revision)
-            current=con.execute('SELECT occurrence_id,present FROM project_file_current WHERE binding_id=? AND path=?',(snap['binding_id'],rel)).fetchone()
-            counts['unchanged' if current and current[0]==oid and current[1] else 'revised' if current else 'inserted']+=1
-            con.execute('INSERT OR IGNORE INTO catalog_files VALUES (?,?,?)',(fid,a['name'],now()))
-            con.execute('''INSERT OR IGNORE INTO catalog_occurrences
-                (id,file_id,conversation,message_key,revision,position,metadata,sha256,availability,observed_at,category)
-                VALUES (?,?,'','',?,0,?,NULL,?,?,'document')''',
-                (oid,fid,revision,canonical(a),'excluded' if a['availability']=='excluded' else 'reference_only',now()))
-            con.execute('INSERT OR IGNORE INTO project_file_versions VALUES (?,?,?,?,?)',(oid,snap['project_id'],snap['binding_id'],rel,snap['snapshot_id']))
-            if apply_current: con.execute('INSERT OR REPLACE INTO project_file_current VALUES (?,?,?,1)',(snap['binding_id'],rel,oid))
-            from .graph import node,edge
-            node(con,'file:'+fid,'file',a['name'],{'file_id':fid,'basis':'project_folder_selection'})
-            node(con,'memory-project:'+snap['project_id'],'memory_project',
-                 con.execute('SELECT title FROM catalog_projects WHERE id=?',(snap['project_id'],)).fetchone()[0],{'project_id':snap['project_id']})
-            if apply_current: edge(con,'file:'+fid,'in_memory_project','memory-project:'+snap['project_id'],'structural',
-                 'project-file:'+fid,[{'file_occurrence':oid,'revision':revision}],'user_selection')
-            if a.get('sha256'): transfers.append((oid,a['sha256']))
-        # Absence is an observation, not destruction. Replaying an older snapshot must not regress current state.
-        for row in con.execute('SELECT path,occurrence_id FROM project_file_current WHERE binding_id=? AND present=1',(snap['binding_id'],)).fetchall():
-            covered=snap.get('coverage_complete',False) and not any(row['path'].startswith(p) for p in snap.get('unobserved_prefixes',[]))
-            if apply_current and covered and row['path'] not in observed:
-                con.execute('UPDATE project_file_current SET present=0 WHERE binding_id=? AND path=?',(snap['binding_id'],row['path']))
-                _audit(con,'project-capture','project_file_absent',{'binding_id':snap['binding_id'],'path':row['path'],'snapshot_id':snap['snapshot_id']})
-        con.execute('INSERT OR IGNORE INTO project_snapshots(id,binding_id,applied_at,sequence) VALUES (?,?,?,?)',(snap['snapshot_id'],snap['binding_id'],now(),snap['sequence']))
-        progress(con,run_id,dict(inserted=0,revised=0,unchanged=0),[],batch_key=snap['snapshot_id'])
-        details=json.loads(con.execute('SELECT details FROM import_runs WHERE id=?',(run_id,)).fetchone()[0])
-        if 'project_files' not in details: details.update(project_files=counts,projects=[snap['project_id']])
-        con.execute('UPDATE import_runs SET details=? WHERE id=?',(canonical(details),run_id))
+        if not completed_batch(con,run_id,snap['snapshot_id']):
+            old=con.execute('SELECT project_id FROM project_roots WHERE id=?',(snap['binding_id'],)).fetchone()
+            if old and old[0]!=snap['project_id']: raise ValueError('Folder binding project changed')
+            con.execute('INSERT OR IGNORE INTO project_roots VALUES (?,?,?,?)',
+                (snap['binding_id'],snap['project_id'],snap['instance'],canonical({'root':snap['root'],'basis':snap['basis']})))
+            replay=bool(con.execute('SELECT 1 FROM project_snapshots WHERE id=?',(snap['snapshot_id'],)).fetchone())
+            latest=con.execute('SELECT coalesce(max(sequence),0) FROM project_snapshots WHERE binding_id=?',(snap['binding_id'],)).fetchone()[0]
+            apply_current=not replay and snap['sequence']>latest
+            for a in snap['files']:
+                rel=a['relative_path']; observed.add(rel)
+                fid=key('project-file',snap['project_id'],snap['binding_id'],rel)
+                revision=digest(canonical(a)); oid=key('project-occurrence',fid,revision)
+                current=con.execute('SELECT occurrence_id,present FROM project_file_current WHERE binding_id=? AND path=?',(snap['binding_id'],rel)).fetchone()
+                counts['unchanged' if current and current[0]==oid and current[1] else 'revised' if current else 'inserted']+=1
+                con.execute('INSERT OR IGNORE INTO catalog_files VALUES (?,?,?)',(fid,a['name'],now()))
+                con.execute('''INSERT OR IGNORE INTO catalog_occurrences
+                    (id,file_id,conversation,message_key,revision,position,metadata,sha256,availability,observed_at,category)
+                    VALUES (?,?,'','',?,0,?,NULL,?,?,'document')''',
+                    (oid,fid,revision,canonical(a),'excluded' if a['availability']=='excluded' else 'reference_only',now()))
+                con.execute('INSERT OR IGNORE INTO project_file_versions VALUES (?,?,?,?,?)',(oid,snap['project_id'],snap['binding_id'],rel,snap['snapshot_id']))
+                if apply_current: con.execute('INSERT OR REPLACE INTO project_file_current VALUES (?,?,?,1)',(snap['binding_id'],rel,oid))
+                from .graph import node,edge
+                node(con,'file:'+fid,'file',a['name'],{'file_id':fid,'basis':'project_folder_selection'})
+                node(con,'memory-project:'+snap['project_id'],'memory_project',
+                     con.execute('SELECT title FROM catalog_projects WHERE id=?',(snap['project_id'],)).fetchone()[0],{'project_id':snap['project_id']})
+                if apply_current: edge(con,'file:'+fid,'in_memory_project','memory-project:'+snap['project_id'],'structural',
+                     'project-file:'+fid,[{'file_occurrence':oid,'revision':revision}],'user_selection')
+                if a.get('sha256'): transfers.append((oid,a['sha256']))
+            # Absence is an observation, not destruction. Replaying an older snapshot must not regress current state.
+            for row in con.execute('SELECT path,occurrence_id FROM project_file_current WHERE binding_id=? AND present=1',(snap['binding_id'],)).fetchall():
+                covered=snap.get('coverage_complete',False) and not any(row['path'].startswith(p) for p in snap.get('unobserved_prefixes',[]))
+                if apply_current and covered and row['path'] not in observed:
+                    con.execute('UPDATE project_file_current SET present=0 WHERE binding_id=? AND path=?',(snap['binding_id'],row['path']))
+                    _audit(con,'project-capture','project_file_absent',{'binding_id':snap['binding_id'],'path':row['path'],'snapshot_id':snap['snapshot_id']})
+            con.execute('INSERT OR IGNORE INTO project_snapshots(id,binding_id,applied_at,sequence) VALUES (?,?,?,?)',(snap['snapshot_id'],snap['binding_id'],now(),snap['sequence']))
+            progress(con,run_id,dict(inserted=0,revised=0,unchanged=0),[],batch_key=snap['snapshot_id'])
+            details=json.loads(con.execute('SELECT details FROM import_runs WHERE id=?',(run_id,)).fetchone()[0])
+            if 'project_files' not in details: details.update(project_files=counts,projects=[snap['project_id']])
+            con.execute('UPDATE import_runs SET details=? WHERE id=?',(canonical(details),run_id))
+        else:
+            counts=run_totals(con,run_id)['project_files']
+            for a in snap['files']:
+                if a.get('sha256'):
+                    fid=key('project-file',snap['project_id'],snap['binding_id'],a['relative_path'])
+                    transfers.append((key('project-occurrence',fid,digest(canonical(a))),a['sha256']))
     catalog=Catalog(store,[directory]); receipts=[]; pending=[]
     for oid,sha in transfers:
         o=catalog.occurrence(oid)
@@ -239,11 +250,13 @@ def import_snapshot(store,directory,manifest,run_id,transfer_limit=None):
         if o['availability']=='stored' and (not os.environ.get('PC_ATTACHMENT_S3_CONFIG') or blob and blob[0]):
             receipts.append({'occurrence_id':oid,'s3':{'status':'verified' if os.environ.get('PC_ATTACHMENT_S3_CONFIG') else 'not_configured'}})
         else: pending.append((oid,sha))
-    for oid,sha in pending[:transfer_limit] if transfer_limit else pending:
-        receipts.append(catalog.store_attachment(oid,server_path=str(directory/'blobs'/sha),expected_sha256=sha,project=False))
+    grouped={}
+    for oid,sha in pending: grouped.setdefault(sha,[]).append((oid,directory/'blobs'/sha))
+    selected=list(grouped.items())[:transfer_limit] if transfer_limit else list(grouped.items())
+    for sha,items in selected: receipts.extend(catalog.store_shared(items,sha))
     complete=len(receipts)==len(transfers) and all(r['s3']['status']!='failed' for r in receipts)
     result={'package_id':package_id,'run_id':run_id,'messages':dict(inserted=0,revised=0,unchanged=0),
-        'project_files':counts,'attachments':receipts,'complete':complete,'remaining_transfers':len(transfers)-len(receipts),
+        'project_files':counts,'attachments':receipts,'complete':complete,'remaining_transfers':len(transfers)-sum(r['s3']['status']!='failed' for r in receipts),
         'project_id':snap['project_id'],'completeness':{'excluded_occurrences':manifest.get('excluded_occurrences',0)}}
     with store.connect() as con:
         progress(con,run_id,result['messages'],[],complete=complete,receipt=result)

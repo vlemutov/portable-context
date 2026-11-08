@@ -13,34 +13,64 @@ def restic_verified(manager):
             for r in con.execute("SELECT details FROM events WHERE kind IN ('restore_verified','check_verified')"))
 
 def cleanup_preview(root):
-    root=Path(root).resolve(); memory=root/'memory'; candidates=[]
+    root=Path(root).resolve(); memory=root/'memory'; candidates=[]; kept=[]
     current=(root/'current').resolve() if (root/'current').exists() else None
     previous=(root/'previous').resolve() if (root/'previous').exists() else None
     releases=sorted((root/'releases').glob('*'),key=lambda p:p.stat().st_mtime,reverse=True)
-    keep={current,previous}
-    if previous is None:
-        keep.update(p.resolve() for p in releases[:2])
+    protected={current,previous}
+    if previous is None: protected.update(p.resolve() for p in releases[:2])
+    def item(path,kind,reason):
+        return {'path':str(path.absolute()),'kind':kind,'bytes':tree_bytes(path) if path.is_dir() else path.stat().st_size,
+                'timestamp_ns':path.stat().st_mtime_ns,'timestamp_basis':'filesystem_mtime', 'reason':reason}
     for path in releases:
-        if path.is_dir() and not path.is_symlink() and path.resolve() not in keep:
-            candidates.append({'path':str(path.resolve()),'kind':'old_release','bytes':tree_bytes(path)})
+        if path.is_symlink():
+            kept.append(item(path,'old_release','symlink_not_managed')); continue
+        if path.is_dir():
+            (kept if path.resolve() in protected else candidates).append(item(path,'old_release',
+                'active_or_rollback_release' if path.resolve() in protected else 'outside_release_retention'))
+    from .recovery_coverage import verified,inventory,package_requirements,covers
+    manager=configured(memory)
+    try: snapshots=verified(manager)
+    except (ValueError,OSError): snapshots=[]
+    roots=[root/'imports',root/'imports/uploads']
     if (memory/'context.sqlite3').exists():
         with closing(sqlite3.connect((memory/'context.sqlite3').as_uri()+'?mode=ro',uri=True)) as con:
-            for pid,report in con.execute('SELECT id,report FROM capture_receipts'):
-                if not json.loads(report).get('complete'): continue
-                active=con.execute("SELECT 1 FROM import_runs WHERE package_id=? AND status!='complete' LIMIT 1",(pid,)).fetchone()
-                if active: continue
-                path=root/'imports/uploads'/pid
-                if path.is_dir() and not path.is_symlink():
-                    candidates.append({'path':str(path.resolve()),'kind':'completed_upload','bytes':tree_bytes(path)})
-    manager=configured(memory)
-    verified=restic_verified(manager)
-    if verified:
-        for folder in (root/'backups',root/'memory-migration-backups'):
-            archives=sorted(folder.glob('*.zip'),key=lambda p:p.name,reverse=True)
-            for path in archives[2:]:
-                if path.is_file() and not path.is_symlink(): candidates.append({'path':str(path.resolve()),'kind':'legacy_zip','bytes':path.stat().st_size})
-    plan={'root':str(root),'items':sorted(candidates,key=lambda x:x['path']),'bytes':sum(c['bytes'] for c in candidates)}
-    return {**plan,'confirmation':digest(canonical(plan)),'scope':'Local files only; S3 objects are untouched'}
+            available=inventory(con)
+            for managed in roots:
+                if managed.is_symlink(): continue
+                for path in sorted(managed.glob('*')):
+                    if path==root/'imports/uploads': continue
+                    if not path.is_dir(): continue
+                    entry=item(path,'completed_upload','unknown_or_incomplete_package')
+                    if path.is_symlink():
+                        entry['reason']='symlink_not_managed'; kept.append(entry); continue
+                    try:
+                        manifest=json.loads((path/'manifest.json').read_text(encoding='utf-8'))
+                        pid=digest(canonical(manifest))
+                        receipt=con.execute('SELECT report FROM capture_receipts WHERE id=?',(pid,)).fetchone()
+                        active=con.execute("SELECT 1 FROM import_runs WHERE package_id=? AND status!='complete' LIMIT 1",(pid,)).fetchone()
+                        if not receipt or not json.loads(receipt[0]).get('complete') or active:
+                            entry['reason']='incomplete_or_active_import'
+                        else:
+                            required=package_requirements(path,con)
+                            covering=next((s for s in snapshots if covers(s,required)),None)
+                            if not covers(available,required): entry['reason']='contents_not_proven_in_memory'
+                            elif not covering:
+                                entry.update(reason='no_verified_snapshot_covering_contents',next='Run restic post-import, then preview again')
+                            else:
+                                entry.update(reason='contents_in_memory_and_verified_snapshot',snapshot_id=covering['snapshot_id'],
+                                             package_id=pid,manifest_sha256=digest(canonical(manifest)))
+                                candidates.append(entry); continue
+                    except (OSError,ValueError,KeyError,TypeError,sqlite3.Error):
+                        entry['reason']='unrecognized_or_unverifiable_package'
+                    kept.append(entry)
+    for folder in (root/'backups',root/'memory-migration-backups'):
+        for path in sorted(folder.glob('*.zip')):
+            kept.append(item(path,'legacy_zip','archive_recovery_coverage_not_proven'))
+    plan={'root':str(root),'items':sorted(candidates,key=lambda x:x['path']),
+          'kept':sorted(kept,key=lambda x:x['path']),'bytes':sum(c['bytes'] for c in candidates)}
+    return {**plan,'confirmation':digest(canonical(plan)),'scope':'Local managed files only; S3 objects untouched'}
+
 
 def cleanup(root,confirmation):
     root=Path(root).resolve()
@@ -51,8 +81,10 @@ def cleanup(root,confirmation):
             plan=cleanup_preview(root)
             if confirmation!=plan['confirmation']: raise ValueError('Cleanup preview changed; review and confirm the exact current plan')
             for item in plan['items']:
-                path=Path(item['path']).resolve()
-                allowed={'old_release':root/'releases','completed_upload':root/'imports/uploads',
+                original=Path(item['path'])
+                if original.is_symlink() or original.parent.is_symlink(): raise ValueError('Cleanup symlink refused')
+                path=original.resolve()
+                allowed={'old_release':root/'releases','completed_upload':path.parent if path.parent in (root/'imports',root/'imports/uploads') else root/'imports/uploads',
                     'legacy_zip':root/'backups' if path.parent==root/'backups' else root/'memory-migration-backups'}[item['kind']]
                 if path.parent!=allowed or path.is_symlink(): raise ValueError('Cleanup path escaped its approved directory')
                 if path.is_dir():

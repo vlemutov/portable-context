@@ -2,7 +2,7 @@
 import json
 from .core import canonical,now
 
-KINDS=('service_event','tool_use','tool_result','full_raw','full_text','thinking','redacted_thinking')
+KINDS=('service_event','tool_use','tool_result','full_raw','full_text','thinking','redacted_thinking','file_excerpt')
 
 def initialize(con):
     fresh=not con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='index_policy'").fetchone()

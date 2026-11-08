@@ -155,7 +155,7 @@ def project_for(con,r,override=None):
     if p:
         return key('native-project',r['source'],r['instance'],p['id'])
     p=r.get('memory_project')
-    return key('memory-project',p['id']) if p else None
+    return (p['id'] if p.get('existing') is True else key('memory-project',p['id'])) if p else None
 
 
 def check_record(con,r,project_id=None):
@@ -203,6 +203,12 @@ def check_manifest(con,manifest,project_id=None):
     if not isinstance(scopes,list) or not scopes and manifest.get('messages'):
         raise ValueError('Capture scope declarations missing')
     for scope in scopes:
+        selected=scope.get('memory_project') or {}
+        if selected.get('existing') is True:
+            if not con.execute('SELECT 1 FROM catalog_projects WHERE id=?',(selected.get('id'),)).fetchone():
+                raise ValueError('Unknown existing project in this memory')
+            if project_id and project_id!=selected['id']:
+                raise ValueError('Capture existing-project selection differs from upload target')
         p=permissions(con,project_for(con,scope,project_id))
         declared=axes(scope['permissions'])
         if not p['conversation'] or any(declared[k] and not p[k] for k in AXES):

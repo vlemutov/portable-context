@@ -67,7 +67,7 @@ class Uploads:
                     known[part['path']]=old
         from .storage import forecast
         estimate=forecast(self.workspace.store,sum(p['size'] for p in manifest.get('blobs',[]) if p['path'] not in known),
-            sum(p['size'] for p in manifest.get('parts',[])))
+            sum(p['size'] for p in manifest.get('parts',[]))+len(canonical(manifest).encode('utf-8')))
         if not estimate['fits_with_20_percent_reserve']:
             raise ValueError('Insufficient server space for this capture with reserve; inspect forecast_import and storage_report')
         with self.workspace.store.connect() as con:
