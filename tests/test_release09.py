@@ -104,6 +104,18 @@ class Release09(unittest.TestCase):
         self.assertEqual((report['unseen'],report['excluded']),(2,2))
         self.assertEqual(self.ws.review_coverage(scope='all')['conversations'][0]['unseen'],4)
 
+    def test_repeated_project_assignment_does_not_create_business_changes(self):
+        from portable_context.capture import capture,import_capture
+        catalog=Catalog(self.store);p=catalog.create_project('stable','Stable')
+        packet=self.root/'packet'
+        capture([record()],packet,memory_project={'id':p['id'],'existing':True,'basis':'user_selection'})
+        first=import_capture(self.store,packet,[self.root]);before=catalog.project(p['id'])
+        with self.store.connect() as c:assignments=[tuple(r) for r in c.execute('SELECT * FROM catalog_assignments')]
+        second=import_capture(self.store,packet,[self.root]);after=catalog.project(p['id'])
+        self.assertEqual(second['messages']['unchanged'],1)
+        self.assertEqual(before,after)
+        with self.store.connect() as c:self.assertEqual(assignments,[tuple(r) for r in c.execute('SELECT * FROM catalog_assignments')])
+
     def test_s3_proof_reuse_target_change_expiry_and_forced_repair(self):
         self.ingest([{**record(),'attachments':[{'name':'a.txt','path':'a.txt'}]}])
         catalog=Catalog(self.store,[self.root]);path=self.root/'a.txt';path.write_text('payload')

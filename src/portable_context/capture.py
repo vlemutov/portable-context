@@ -356,7 +356,8 @@ def import_capture(store, directory, allowed_roots, project_id=None, transfer_li
                 continue
             if project_id:
                 for r in records[start:start+100]:
-                    con.execute("INSERT OR REPLACE INTO catalog_assignments VALUES (?,?,'agent_assignment')",
+                    con.execute("INSERT INTO catalog_assignments VALUES (?,?,'agent_assignment') ON CONFLICT(conversation) DO UPDATE SET "
+                                "project_id=excluded.project_id,basis=excluded.basis WHERE catalog_assignments.project_id!=excluded.project_id",
                                 (key(r['source'],r['instance'],r['conversation_id']),project_id))
             batch=[dict(r,conversation_metadata=meta) if meta else r
                    for r,meta in zip(records[start:start+100],session_metadata[start:start+100])]

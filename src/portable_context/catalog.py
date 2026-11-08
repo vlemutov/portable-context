@@ -261,16 +261,20 @@ class Catalog:
             from .control import group
             group(con,group_id)
             selected_group=None if clear_group else (group_id if group_id is not None else previous['group_id'])
+            changed=(title,summary_text,selected_group)!=(previous['title'],previous['summary'],previous['group_id'])
             for cid in conversation_keys:
                 if not con.execute('SELECT 1 FROM messages WHERE conversation=?', (cid,)).fetchone():
                     raise ValueError('Unknown conversation')
-                con.execute('UPDATE catalog_assignments SET project_id=?,basis=? WHERE conversation=?',
-                            (project_id, 'agent_assignment', cid))
-            con.execute('UPDATE catalog_projects SET title=?,summary=?,basis=?,group_id=?,version=version+1,updated_at=? WHERE id=?',
-                        (title, summary_text, 'agent_assignment',selected_group, now(), project_id))
-            _audit(con, actor, 'update_project', {'previous': dict(previous), 'title': title,
-                                               'summary': summary_text, 'conversations': conversation_keys,'group_id':selected_group})
-        projection = project_catalog(self.store)
+                assignment=con.execute('SELECT project_id FROM catalog_assignments WHERE conversation=?',(cid,)).fetchone()
+                if not assignment or assignment[0]!=project_id:
+                    con.execute('INSERT OR REPLACE INTO catalog_assignments VALUES (?,?,?)',(cid,project_id,'agent_assignment'))
+                    changed=True
+            if changed:
+                con.execute('UPDATE catalog_projects SET title=?,summary=?,basis=?,group_id=?,version=version+1,updated_at=? WHERE id=?',
+                            (title, summary_text, 'agent_assignment',selected_group, now(), project_id))
+                _audit(con, actor, 'update_project', {'previous': dict(previous), 'title': title,
+                                                   'summary': summary_text, 'conversations': conversation_keys,'group_id':selected_group})
+        projection = project_catalog(self.store) if changed else {'written':0,'conflicts':[],'unchanged':True}
         return {'project': self.project(project_id), 'projection': projection}
 
     def files(self, project_id=None, query='', limit=30, offset=0, include_history=False, include_payloads=False):
