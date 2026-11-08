@@ -38,7 +38,7 @@ def evidence(store,con,cid,scope):
     for row in con.execute('SELECT id,revision,record FROM messages WHERE conversation=? ORDER BY seq',(cid,)):
         record=json.loads(row['record']); info=attribution(record,store)
         ref={'message_key':row['id'],'revision':row['revision']}
-        text=display_text(record,info)
+        text=display_text(record,info,store)
         substantive=re.sub(r'^\[Tool (?:call|result):[^\n]*\]\s*','',text,flags=re.MULTILINE).strip()
         included=scope=='all' or (info['effective_role']=='user' or info['effective_role']=='assistant' and bool(substantive))
         items.append({'ref':ref,'record':record,'info':info,'text':text,'included':included,'review_state':state(con,ref,scope)})
@@ -100,7 +100,7 @@ def batches(store,con,cid,scope,chunk_size,max_chars,include_reviewed):
              'chunk':n+1,'chunks':len(out),'excluded_records':sum(not i['included'] for i in items)} for n,group in enumerate(out)]
 
 
-def commit(con,payload,reviews,worker):
+def commit(con,payload,reviews,worker,store):
     """Called in the page transaction. Missing review declarations never imply read coverage."""
     if reviews is None: return {'declared':0,'legacy_unqualified':True}
     if not isinstance(reviews,list) or len(reviews)>len(payload['sources']): raise ValueError('Invalid evidence reviews')
@@ -114,6 +114,10 @@ def commit(con,payload,reviews,worker):
         if r.get('status') not in ('reviewed','partial') or not isinstance(r.get('detail'),str) or not r['detail'].strip():
             raise ValueError('Review requires reviewed/partial and a description of what was read')
         if len(r['detail'])>4000: raise ValueError('Review detail too long')
+        from .attribution import text_evidence
+        record=json.loads(con.execute('SELECT record FROM revisions WHERE id=? AND hash=?',ref).fetchone()[0])
+        if r['status']=='reviewed' and not text_evidence(record,store)['complete']:
+            raise ValueError('Full dialogue text is unavailable or unverified; declare partial review')
         old=state(con,r,scope)
         if old=='reviewed' and r['status']=='partial': continue
         con.execute('INSERT OR REPLACE INTO evidence_reviews VALUES (?,?,?,?,?,?,?,?,?)',

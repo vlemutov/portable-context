@@ -116,6 +116,28 @@ class Release09(unittest.TestCase):
         self.assertEqual(before,after)
         with self.store.connect() as c:self.assertEqual(assignments,[tuple(r) for r in c.execute('SELECT * FROM catalog_assignments')])
 
+    def test_archived_dialogue_text_is_paged_and_cited_from_verified_payload(self):
+        from portable_context.capture import capture,import_capture
+        text='<system-reminder>'+('context '*800)+'</system-reminder>'+('Human evidence. '*2500)
+        packet=self.root/'long'
+        capture([{**record(),'role':'system','text':text}],packet)
+        import_capture(self.store,packet,[self.root])
+        current=self.store.read(key('claude-code','fixture','chat','1'))
+        self.assertEqual(current['effective_role'],'user')
+        self.assertTrue(current['text_backing'])
+        ref={'message_key':current['key'],'revision':current['revision']}
+        read=self.ws.read_evidence(**ref,max_chars=1000)
+        self.assertTrue(read['text_complete']);self.assertIsNotNone(read['next_offset'])
+        self.assertGreater(read['total_chars'],30000)
+        self.assertNotIn('context',read['text'])
+        page={'id':'long','title':'Long user evidence','text':'Human evidence','kind':'user_statement',
+              'sources':[{**ref,'payload_range':read['payload_range']}]}
+        with self.store.connect() as c:apply_pages(self.ws,c,[page],'test')
+        self.assertFalse(read_page(self.ws,'long')['attribution_warnings'])
+        (self.store.root/'originals'/read['text_backing']['sha256']).write_text('corrupt')
+        broken=self.ws.read_evidence(**ref)
+        self.assertFalse(broken['text_complete']);self.assertEqual(broken['effective_role'],'unknown')
+
     def test_s3_proof_reuse_target_change_expiry_and_forced_repair(self):
         self.ingest([{**record(),'attachments':[{'name':'a.txt','path':'a.txt'}]}])
         catalog=Catalog(self.store,[self.root]);path=self.root/'a.txt';path.write_text('payload')

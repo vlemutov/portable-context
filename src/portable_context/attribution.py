@@ -21,17 +21,43 @@ def mixed_segments(text):
     return []
 
 
-def display_text(record, info):
+def text_evidence(record,store=None):
+    text=record.get('text','')
+    if not record.get('completeness',{}).get('text_archived'):
+        return {'text':text,'complete':True,'backing':None}
+    for a in record.get('attachments',[]):
+        if not isinstance(a,dict) or a.get('kind')!='full_text' or not text.endswith('[Full text archived as '+str(a.get('file_id'))+']'): continue
+        sha=a.get('sha256','')
+        if store is not None and isinstance(sha,str) and re.fullmatch('[0-9a-f]{64}',sha):
+            path=store.root/'originals'/sha
+            try:
+                if not path.is_symlink() and path.stat().st_size<=MAX_RAW_BYTES:
+                    data=path.read_bytes()
+                    if hashlib.sha256(data).hexdigest()==sha:
+                        value=json.loads(data)
+                        if isinstance(value,str): return {'text':value,'complete':True,'backing':{'sha256':sha,'file_id':a['file_id']}}
+            except (OSError,ValueError): pass
+    return {'text':text,'complete':False,'backing':None}
+
+
+def display_text(record, info, store=None):
+    text=text_evidence(record,store)['text']
     segments=info.get('content_segments')
-    return ''.join(record.get('text','')[s['start']:s['end']] for s in segments if s['role']=='user') if segments else record.get('text','')
+    return ''.join(text[s['start']:s['end']] for s in segments if s['role']=='user') if segments else text
 
 
 def attribution(record, store=None):
     role = record.get('role', 'unknown')
     result = {'source_role': role, 'effective_role': role, 'content_kind': 'source_message',
               'attribution_basis': 'source_role', 'attribution_version': 1}
+    evidence=text_evidence(record,store)
+    result.update(text_complete=evidence['complete'],text_backing=evidence['backing'])
     if record.get('source') != 'claude-code':
         return result
+    if not evidence['complete']:
+        return {**result,'effective_role':'unknown','content_kind':'unverified_source',
+                'attribution_basis':'archived_text_unavailable_or_unverified',
+                'attribution_warning':'Only a shortened text is available; retrieve and verify the declared full_text original.'}
     raw = record.get('raw')
     raw = raw if isinstance(raw, dict) else {}
     if raw.get('archived_payload'):
@@ -74,7 +100,7 @@ def attribution(record, store=None):
                 'attribution_basis': 'claude-code.isCompactSummary',
                 'attribution_warning': 'Model-generated context summary, not a user statement or verbatim user quote.'}
     if raw.get('type')=='user' and not raw.get('isMeta'):
-        segments=mixed_segments(record.get('text',''))
+        segments=mixed_segments(evidence['text']) if evidence['complete'] else []
         if segments:
             return {**result,'effective_role':'user','content_kind':'mixed_user_context',
                     'source_envelope_role':'user',
@@ -87,7 +113,7 @@ def attribution(record, store=None):
 def view(record, store=None):
     """A recall view, not a serialization suitable for reimport as source evidence."""
     info = attribution(record, store)
-    return {**record, **info, 'role': info['effective_role'], 'display_text':display_text(record,info)}
+    return {**record, **info, 'role': info['effective_role'], 'display_text':display_text(record,info,store)}
 
 
 def citation_warnings(store, con, refs, kind):
@@ -100,8 +126,9 @@ def citation_warnings(store, con, refs, kind):
         if row:
             info = attribution(json.loads(row[0]), store)
             if info['content_kind']=='mixed_user_context':
-                span=ref.get('text_range',{})
+                span=ref.get('payload_range' if info.get('text_backing') else 'text_range',{})
                 if not isinstance(span,dict): span={}
+                if info.get('text_backing') and span.get('sha256')!=info['text_backing']['sha256']: span={}
                 if not any(s['role']=='user' and type(span.get('start')) is int and type(span.get('end')) is int
                            and s['start']<=span['start']<span['end']<=s['end'] for s in info['content_segments']):
                     warnings.append({**ref,'issue':'user_statement_attribution_needs_review',

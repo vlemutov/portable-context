@@ -67,13 +67,13 @@ def search_pages(workspace, query='', limit=20, offset=0):
     return {'pages': results[max(0, offset):max(0, offset) + max(1, min(limit, 100))], 'total': len(results)}
 
 
-def validate_refs(con, refs):
+def validate_refs(con, refs, store=None):
     if not isinstance(refs, list) or not refs:
         raise ValueError('Knowledge pages and semantic relations need source revision citations')
     result = []
     for ref in refs:
-        if not isinstance(ref, dict) or not {'message_key','revision'}<=set(ref) or set(ref)-{'message_key','revision','text_range'}:
-            raise ValueError('A citation must have exactly message_key and revision')
+        if not isinstance(ref, dict) or not {'message_key','revision'}<=set(ref) or set(ref)-{'message_key','revision','text_range','payload_range'} or 'text_range' in ref and 'payload_range' in ref:
+            raise ValueError('A citation requires message_key/revision and at most one exact range')
         if not con.execute('SELECT 1 FROM revisions WHERE id=? AND hash=?', (ref['message_key'], ref['revision'])).fetchone():
             raise ValueError('Unknown source revision; never invent citations')
         if 'text_range' in ref:
@@ -81,6 +81,14 @@ def validate_refs(con, refs):
             text=json.loads(con.execute('SELECT record FROM revisions WHERE id=? AND hash=?',(ref['message_key'],ref['revision'])).fetchone()[0]).get('text','')
             if not isinstance(span,dict) or set(span)!={'start','end'} or any(type(span[k]) is not int for k in span) or not 0<=span['start']<span['end']<=len(text):
                 raise ValueError('Invalid exact source text_range')
+        if 'payload_range' in ref:
+            from .attribution import text_evidence
+            record=json.loads(con.execute('SELECT record FROM revisions WHERE id=? AND hash=?',(ref['message_key'],ref['revision'])).fetchone()[0])
+            evidence=text_evidence(record,store);span=ref['payload_range']
+            if (not isinstance(span,dict) or set(span)!={'sha256','start','end'} or not evidence['backing']
+                or span['sha256']!=evidence['backing']['sha256'] or type(span['start']) is not int or type(span['end']) is not int
+                or not 0<=span['start']<span['end']<=len(evidence['text'])):
+                raise ValueError('Invalid or unverified archived-text payload_range')
         if ref not in result:
             result.append(ref)
     return result
@@ -110,7 +118,7 @@ def apply_pages(workspace, con, pages, author):
             raise ValueError('Page title and text must be strings')
         if page.get('kind') not in KINDS:
             raise ValueError('Use user_statement, assistant_statement, inference or user_note')
-        sources = validate_refs(con, page.get('sources'))
+        sources = validate_refs(con, page.get('sources'),workspace.store)
         if citation_warnings(workspace.store,con,sources,page['kind']):
             raise ValueError('Generated summaries or unverified author attribution cannot support a user_statement; cite direct user evidence or use inference/assistant_statement')
         links = page.get('relations', [])
@@ -122,7 +130,7 @@ def apply_pages(workspace, con, pages, author):
             target = relation['target']
             if target not in {'wiki:' + i for i in ids} and not con.execute('SELECT 1 FROM graph_nodes WHERE id=?', (target,)).fetchone():
                 raise ValueError('Relation target does not exist; create related pages in the same commit')
-            validate_refs(con, relation.get('sources', sources))
+            validate_refs(con, relation.get('sources', sources),workspace.store)
         prepared.append((page, sources, previous, row, path))
         node(con, 'wiki:' + pid, 'wiki', page['title'], {'page_id': pid})
     versions = {}
@@ -142,7 +150,7 @@ def apply_pages(workspace, con, pages, author):
         if page.get('relations'):
             body.extend(['', '## Related', ''])
             for relation in page['relations']:
-                refs = validate_refs(con, relation.get('sources', sources))
+                refs = validate_refs(con, relation.get('sources', sources),workspace.store)
                 edge(con, owner, relation['type'], relation['target'], 'semantic', owner, refs, author)
                 body.append('- ' + relation['type'] + ': ' + wiki_link(con, relation['target'])
                             + (' — ' + relation['reason'] if relation.get('reason') else ''))

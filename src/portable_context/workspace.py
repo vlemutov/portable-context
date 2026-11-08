@@ -381,12 +381,14 @@ class Workspace:
                     (key(r['source'],r['instance'],r['conversation_id'],r.get('parent_id')),)).fetchone() if r.get('parent_id') else None
                 if parent: parent_ref={'message_key':parent['id'],'revision':parent['revision']}
         if not row: raise ValueError('Unknown source revision')
-        record=json.loads(row[0]); info=attribution(record,self.store); text=display_text(record,info)
+        record=json.loads(row[0]); info=attribution(record,self.store); text=display_text(record,info,self.store)
         start=min(len(text),max(0,offset)); end=min(len(text),start+max(1,min(max_chars,32000)))
         base=next((s['start'] for s in info.get('content_segments',[]) if s['role']=='user'),0)
+        citation_range=({'payload_range':{'sha256':info['text_backing']['sha256'],'start':base+start,'end':base+end}}
+                        if info.get('text_backing') else {'text_range':{'start':base+start,'end':base+end}})
         return {**info,'message_key':message_key,'revision':revision,'text':text[start:end],
                 'offset':start,'total_chars':len(text),'next_offset':end if end<len(text) else None,
-                'text_range':{'start':base+start,'end':base+end},'attachments':record.get('attachments',[])[:20],
+                **citation_range,'attachments':record.get('attachments',[])[:20],
                 'attachment_count':len(record.get('attachments',[])), 'attachment_manifest_truncated':len(record.get('attachments',[]))>20,
                 'scope':'dialogue','raw_and_attachment_bytes_reviewed':False,'parent_id':record.get('parent_id'),
                 'current_parent_reference':parent_ref}
@@ -417,7 +419,7 @@ class Workspace:
                 from .attribution import attribution
                 info=attribution(item,self.store)
                 from .attribution import display_text
-                text=display_text(item,info) if payload.get('scope')=='dialogue' else item['text']
+                text=display_text(item,info,self.store) if payload.get('scope')=='dialogue' else item['text']
                 count=max(0,min(1000,budget)); budget-=min(len(text),count)
                 previews.append({**ref, **info, 'role': info['effective_role'], 'timestamp': item['timestamp'], 'title': item['title'],
                                  'text': text[:count], 'text_truncated': len(text)>count,
@@ -459,7 +461,7 @@ class Workspace:
             if not summary.strip() or (not pages and not (no_change_reason or '').strip()):
                 raise ValueError('Provide a summary and pages, or an explicit no_change_reason')
             from .review import commit as record_review
-            review_result=record_review(con,json.loads(item['payload']),reviews,item['worker'])
+            review_result=record_review(con,json.loads(item['payload']),reviews,item['worker'],self.store)
             result = apply_pages(self, con, pages, item['worker'])
             receipt = {'job_id': job_id, 'position': position, 'receipt_hash': receipt_hash,
                        'page_versions': result, 'summary': summary, 'no_change_reason': no_change_reason,'review':review_result}
