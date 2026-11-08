@@ -1,8 +1,8 @@
 # Backlog after the 0.7 pilot
 
-Status: 0.9 implementation and end-to-end validation in progress, 2026-11-09. At the owner's request,
+Status: 0.9 shipped and the two-conversation end-to-end pilot verified, 2026-11-09. At the owner's request,
 return to data/import stabilization as the next release; the access/authentication proposal is deferred.
-0.8 is shipped; 0.9 is authorized for the two-conversation memory/wiki pilot. Destructive cleanup still requires its concrete preview.
+0.8 and 0.9 are shipped. Destructive cleanup still requires its concrete preview.
 R-numbers refer to the sixteen-item pilot. Raw diagnostics and personal source examples remain private.
 
 ## Findings verified against 0.7
@@ -32,7 +32,7 @@ R-numbers refer to the sixteen-item pilot. Raw diagnostics and personal source e
 |---|---|---|
 | 0.7.1 hotfix — shipped | R1, R3, R9a/b | Recall, summary attribution and workspace ambiguity fixes are already delivered; new diagnostic summary fixtures also pass current classification. |
 | 0.8 stabilization — shipped | R2, R4–R8, R10–R14 | Re-exports preserve content identity; imports resume without repeated ingestion; operation totals and verified recovery coverage are trustworthy. |
-| 0.9 memory/wiki stabilization — implementation | R15/R16 minimum plus proposed 0.8.1 fixes | Correct mixed-message authorship, selective review/resume, repeat-delivery performance and verified recovery. |
+| 0.9 memory/wiki stabilization — shipped | R15/R16 minimum plus proposed 0.8.1 fixes | Mixed-message authorship, selective review/resume, repeat-delivery performance and full S3 restore verified. 166 tests; all 13 platform/Python and 6 deployment CI jobs passed. |
 | Deferred, no release assigned | HTTPS/device credentials/OAuth, local installation tiers, domain onboarding | Keep [the access proposal](access-and-installation-plan.md) for later review; do not change the live access path as part of stabilization. |
 | Later | Marketplace packaging, background delivery, offline multi-writer sync, optional tunnels | Separate decisions after the core workflow is reliable. |
 
