@@ -404,11 +404,23 @@ def build_server(store: Store, allowed_roots=None):
 
     @server.tool()
     def start_enrichment(conversation_keys: list[str] | None = None, chunk_size: int = 20,
-                         request_id: str | None = None) -> dict:
+                         request_id: str | None = None, scope: str = 'dialogue', max_chars: int = 12000,
+                         include_reviewed: bool = False) -> dict:
         """Create agent work from imported source revisions. Null means all changed/unprocessed
-        conversations; explicit keys force review. Does not call a model or mark work finished.
+        conversations; explicit keys restrict selection. Use include_reviewed for an intentional re-review.
+        Does not call a model or mark work finished.
         """
-        return workspace.start_enrichment(conversation_keys, chunk_size, request_id)
+        return workspace.start_enrichment(conversation_keys, chunk_size, request_id, scope, max_chars, include_reviewed)
+
+    @server.tool()
+    def review_coverage(conversation_keys: list[str] | None = None, scope: str = 'dialogue') -> dict:
+        """Per-message agent-declared reviewed/partial/unseen/changed and excluded counts. Scope completion is not whole-conversation completion."""
+        return workspace.review_coverage(conversation_keys,scope)
+
+    @server.tool()
+    def finish_enrichment(job_id: str, reason: str) -> dict:
+        """Close a selective review without pretending deferred evidence was read. Commit active leases first."""
+        return workspace.finish_enrichment(job_id,reason)
 
     @server.tool()
     def claim_enrichment(job_id: str, worker: str, lease_seconds: int = 300) -> dict:
@@ -439,7 +451,7 @@ def build_server(store: Store, allowed_roots=None):
 
     @server.tool()
     def commit_enrichment(job_id: str, position: int, lease_token: str, pages: list[dict],
-                          summary: str, no_change_reason: str | None = None) -> dict:
+                          summary: str, no_change_reason: str | None = None, reviews: list[dict] | None = None) -> dict:
         """Commit a task and all its wiki/graph changes atomically. Retry identical requests safely.
         Page: {id,title,text,kind,sources:[{message_key,revision}],expected_version,expected_hash,
         relations:[{type,target,reason,sources}]}. New pages use version 0 and omit hash.
@@ -447,8 +459,23 @@ def build_server(store: Store, allowed_roots=None):
         related_to|about|supports|contradicts|supersedes|same_as. Targets are graph node IDs
         (wiki:page-id or IDs from inspect_graph). Relation sources default to page sources.
         Empty pages requires no_change_reason. A receipt proves persistence, not semantic truth.
+        reviews entries: {message_key,revision,status:reviewed|partial,detail:what was read}.
+        Omitted reviews never imply reading coverage. Dialogue scope does not cover raw/tool bytes.
         """
-        return workspace.commit_enrichment(job_id, position, lease_token, pages, summary, no_change_reason)
+        return workspace.commit_enrichment(job_id, position, lease_token, pages, summary, no_change_reason, reviews)
+
+    @server.tool()
+    def verify_s3_original(sha256: str) -> dict:
+        """Force a fresh byte-level S3 integrity check/repair using the local original, bypassing cached proof."""
+        from .catalog import Catalog
+        return Catalog(workspace.store).sync_blob(sha256,force=True)
+
+    @server.tool()
+    def read_evidence(message_key: str, revision: str, offset: int = 0, max_chars: int = 8000) -> dict:
+        """Read the dialogue text view with exact citation ranges, provenance and attachment manifest.
+        This does not assert full raw/tool-payload reading. Use read_source_revision for that evidence.
+        """
+        return workspace.read_evidence(message_key,revision,offset,max_chars)
 
     @server.tool()
     def inspect_graph(node_id: str | None = None, layer: str | None = None,

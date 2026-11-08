@@ -73,6 +73,9 @@ class Workspace:
             con.execute("INSERT OR IGNORE INTO metadata VALUES ('workspace_id',?)", (str(uuid.uuid4()),))
             from .import_log import backfill
             backfill(con)
+        with store.connect() as con:
+            from .review import initialize
+            initialize(con)
         if reconcile: self.reconcile_sources()
 
     def reconcile_sources(self):
@@ -104,14 +107,15 @@ class Workspace:
         with self.store.connect() as con:
             workspace_id = con.execute("SELECT value FROM metadata WHERE key='workspace_id'").fetchone()[0]
             processed = {r[0]: r[1] for r in con.execute('SELECT * FROM coverage')}
-            dirty = sum(processed.get(cid) != fp for cid, fp in fingerprints(con).items())
+            from .review import coverage
+            dirty=sum(not r['scope_complete'] for r in coverage(self.store)['conversations'])
             pages = con.execute('SELECT count(*) FROM wiki_pages').fetchone()[0]
-            jobs = [dict(r) for r in con.execute("SELECT id,kind,status FROM jobs WHERE status!='completed' ORDER BY created_at LIMIT 50")]
+            jobs = [dict(r) for r in con.execute("SELECT id,kind,status FROM jobs WHERE status NOT IN ('completed','completed_selective') ORDER BY created_at LIMIT 50")]
         return {'workspace_id': workspace_id, 'version': __version__, 'stats': self.store.stats(),
                 'skill':{'recommended_version':'0.8.0','minimum_version':'0.7.0',
                          'compatibility':'Capabilities govern write operations; older skills can still perform legacy reads.'},
                 'capabilities':['capture_policy_v1','file_categories_v1','project_groups_v1','import_log_v1','native_sessions_v1',
-                    'project_folders_v1','restic_backups_v1','storage_report_v1','index_policy_v1','effective_attribution_v1','workspace_observations_v1','content_identity_v1','resumable_capture_phases_v1','recovery_coverage_v1','claude_record_taxonomy_v1'],
+                    'project_folders_v1','restic_backups_v1','storage_report_v1','index_policy_v1','selective_review_v1','mixed_authorship_v1','effective_attribution_v1','workspace_observations_v1','content_identity_v1','resumable_capture_phases_v1','recovery_coverage_v1','claude_record_taxonomy_v1'],
                 'backup':backup_manager.status() if backup_manager else {'configured':False,'note':'Managed pre-import protection requires backup setup'},
                 'recent_imports':list_imports(self.store,3),
                 'capture_protocol': {'versions':[1,2],'chunk_bytes':1024*1024,'max_blob_bytes':512*1024*1024,
@@ -325,27 +329,33 @@ class Workspace:
         result['completion_scope'] = 'Source records and file passports. Check missing_originals separately; this does not transfer client files.'
         return result
 
-    def start_enrichment(self, conversation_keys=None, chunk_size=20, request_id=None):
-        spec = {'operation': 'enrichment', 'conversation_keys': sorted(conversation_keys) if conversation_keys is not None else None,
-                'chunk_size': max(1, min(chunk_size, 50))}
-        if existing := self._existing(request_id, spec):
-            return existing
-        payloads, targets = [], {}
+    def start_enrichment(self, conversation_keys=None, chunk_size=20, request_id=None,
+                         scope='dialogue', max_chars=12000, include_reviewed=False):
+        from .review import batches,SCOPES
+        if scope not in SCOPES: raise ValueError('scope must be dialogue or all')
+        spec = {'operation':'enrichment','conversation_keys':sorted(conversation_keys) if conversation_keys is not None else None,
+                'chunk_size':max(1,min(chunk_size,50)),'scope':scope,'max_chars':max(1000,min(max_chars,32000)),
+                'include_reviewed':bool(include_reviewed),'review_protocol':1}
+        if existing := self._existing(request_id,spec): return existing
+        payloads=[]; targets={}
         with self.store.connect() as con:
             con.execute('BEGIN')
-            current = fingerprints(con)
-            covered = {r[0]: r[1] for r in con.execute('SELECT * FROM coverage')}
-            selected = set(conversation_keys) if conversation_keys is not None else {cid for cid in current if covered.get(cid) != current[cid]}
-            if not selected.issubset(current):
-                raise ValueError('Unknown conversation in enrichment selection')
+            current=fingerprints(con)
+            selected=set(current) if conversation_keys is None else set(conversation_keys)
+            if not selected.issubset(current): raise ValueError('Unknown conversation in enrichment selection')
             for cid in sorted(selected):
-                refs = [{'message_key': r[0], 'revision': r[1]} for r in con.execute('SELECT id,revision FROM messages WHERE conversation=? ORDER BY seq', (cid,))]
-                targets[cid] = current[cid]
-                for pos in range(0, len(refs), spec['chunk_size']):
-                    payloads.append({'conversation_key': cid, 'sources': refs[pos:pos + spec['chunk_size']],
-                                     'chunk': pos // spec['chunk_size'] + 1, 'chunks': (len(refs) + spec['chunk_size'] - 1) // spec['chunk_size']})
-        jid = self._create_job('enrichment', None, spec, payloads, {'target_fingerprints': targets}, request_id)
+                targets[cid]=current[cid]
+                payloads+=batches(self.store,con,cid,scope,spec['chunk_size'],spec['max_chars'],include_reviewed)
+        jid=self._create_job('enrichment',None,spec,payloads,{'target_fingerprints':targets},request_id)
         return self.job(jid)
+
+    def review_coverage(self, conversation_keys=None, scope='dialogue'):
+        from .review import coverage
+        return coverage(self.store,conversation_keys,scope)
+
+    def finish_enrichment(self,job_id,reason):
+        from .review import finish
+        return finish(self,job_id,reason)
 
     def read_revision(self, message_key, revision, offset=0, max_chars=8000):
         with self.store.connect() as con:
@@ -359,6 +369,20 @@ class Workspace:
         from .attribution import attribution
         return {**attribution(record,self.store),'message_key': message_key, 'revision': revision, 'json_fragment': blob[offset:offset + count],
                 'offset': offset, 'total_chars': len(blob), 'next_offset': offset + count if offset + count < len(blob) else None}
+
+    def read_evidence(self,message_key,revision,offset=0,max_chars=8000):
+        from .attribution import attribution,display_text
+        with self.store.connect() as con:
+            row=con.execute('SELECT record FROM revisions WHERE id=? AND hash=?',(message_key,revision)).fetchone()
+        if not row: raise ValueError('Unknown source revision')
+        record=json.loads(row[0]); info=attribution(record,self.store); text=display_text(record,info)
+        start=max(0,offset); end=min(len(text),start+max(1,min(max_chars,32000)))
+        base=next((s['start'] for s in info.get('content_segments',[]) if s['role']=='user'),0)
+        return {**info,'message_key':message_key,'revision':revision,'text':text[start:end],
+                'offset':start,'total_chars':len(text),'next_offset':end if end<len(text) else None,
+                'text_range':{'start':base+start,'end':base+end},'attachments':record.get('attachments',[])[:20],
+                'attachment_count':len(record.get('attachments',[])), 'attachment_manifest_truncated':len(record.get('attachments',[]))>20,
+                'scope':'dialogue','raw_and_attachment_bytes_reviewed':False,'parent_id':record.get('parent_id')}
 
     def claim_enrichment(self, job_id, worker, lease_seconds=300):
         if not worker.strip():
@@ -380,13 +404,18 @@ class Workspace:
                         (token, worker, expires, job_id, row['position']))
             con.execute("UPDATE jobs SET status='running',updated_at=? WHERE id=?", (now(), job_id))
             payload = json.loads(row['payload'])
-            previews = []
+            previews = []; budget=payload.get("max_chars",12000)
             for ref in payload['sources']:
                 item = json.loads(con.execute('SELECT record FROM revisions WHERE id=? AND hash=?', (ref['message_key'], ref['revision'])).fetchone()[0])
                 from .attribution import attribution
                 info=attribution(item,self.store)
+                from .attribution import display_text
+                text=display_text(item,info) if payload.get('scope')=='dialogue' else item['text']
+                count=max(0,min(1000,budget)); budget-=min(len(text),count)
                 previews.append({**ref, **info, 'role': info['effective_role'], 'timestamp': item['timestamp'], 'title': item['title'],
-                                 'text': item['text'][:1000], 'text_truncated': len(item['text']) > 1000,
+                                 'text': text[:count], 'text_truncated': len(text)>count,
+                                 'text_chars':len(text),'attachments':[{'file_id':a.get('file_id'),'kind':a.get('kind'),'sha256':a.get('sha256')} for a in item.get('attachments',[])[:8] if isinstance(a,dict)],
+                                 'attachment_count':len(item.get('attachments',[])),
                                  'has_raw_fields': bool(item.get('raw')), 'parent_id': item.get('parent_id')})
         return {'job_id': job_id, 'task': {'position': row['position'], 'lease_token': token, 'lease_until': expires,
                                          'worker': worker, **payload, 'previews': previews},
@@ -403,9 +432,10 @@ class Workspace:
             con.execute('UPDATE job_items SET lease_until=? WHERE job_id=? AND position=?', (expires, job_id, position))
         return {'lease_until': expires}
 
-    def commit_enrichment(self, job_id, position, token, pages, summary, no_change_reason=None):
+    def commit_enrichment(self, job_id, position, token, pages, summary, no_change_reason=None, reviews=None):
         from .wiki import apply_pages
         request = {'pages': pages, 'summary': summary, 'no_change_reason': no_change_reason}
+        if reviews is not None: request['reviews']=reviews
         receipt_hash = digest(canonical(request))
         with self.store.connect() as con:
             con.execute('BEGIN IMMEDIATE')
@@ -421,19 +451,21 @@ class Workspace:
                 raise ValueError('Lease expired or superseded; claim work again')
             if not summary.strip() or (not pages and not (no_change_reason or '').strip()):
                 raise ValueError('Provide a summary and pages, or an explicit no_change_reason')
+            from .review import commit as record_review
+            review_result=record_review(con,json.loads(item['payload']),reviews,item['worker'])
             result = apply_pages(self, con, pages, item['worker'])
             receipt = {'job_id': job_id, 'position': position, 'receipt_hash': receipt_hash,
-                       'page_versions': result, 'summary': summary, 'no_change_reason': no_change_reason}
+                       'page_versions': result, 'summary': summary, 'no_change_reason': no_change_reason,'review':review_result}
             con.execute("UPDATE job_items SET state='completed',result=? WHERE job_id=? AND position=?",
                         (canonical(receipt), job_id, position))
             remaining = con.execute("SELECT 1 FROM job_items WHERE job_id=? AND state!='completed' LIMIT 1", (job_id,)).fetchone()
             if not remaining:
                 job = con.execute('SELECT details FROM jobs WHERE id=?', (job_id,)).fetchone()
-                current = fingerprints(con)
-                for cid, fp in json.loads(job[0])['target_fingerprints'].items():
-                    if current.get(cid) == fp:
-                        con.execute('INSERT OR REPLACE INTO coverage VALUES (?,?)', (cid, fp))
-                con.execute("UPDATE jobs SET status='completed',updated_at=? WHERE id=?", (now(), job_id))
+                # Completion of allocated tasks does not assert complete reading of their evidence.
+                from .review import state
+                payloads=[json.loads(r[0]) for r in con.execute('SELECT payload FROM job_items WHERE job_id=?',(job_id,))]
+                complete=all(state(con,ref,p.get('scope','all'))=='reviewed' for p in payloads for ref in p['sources'])
+                con.execute("UPDATE jobs SET status=?,updated_at=? WHERE id=?", ('completed' if complete else 'completed_selective',now(),job_id))
             self.activity(con, 'wiki_updated', item['worker'], {'job_id': job_id, 'position': position,
                                                              'summary': summary, 'page_versions': result})
         # Projection is repairable after a crash. DB commit is the acknowledgement boundary.

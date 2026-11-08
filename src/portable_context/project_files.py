@@ -246,9 +246,8 @@ def import_snapshot(store,directory,manifest,run_id,transfer_limit=None):
     catalog=Catalog(store,[directory]); receipts=[]; pending=[]
     for oid,sha in transfers:
         o=catalog.occurrence(oid)
-        with store.connect() as con: blob=con.execute('SELECT s3_verified_at FROM catalog_blobs WHERE sha256=?',(sha,)).fetchone()
-        if o['availability']=='stored' and (not os.environ.get('PC_ATTACHMENT_S3_CONFIG') or blob and blob[0]):
-            receipts.append({'occurrence_id':oid,'s3':{'status':'verified' if os.environ.get('PC_ATTACHMENT_S3_CONFIG') else 'not_configured'}})
+        if o['availability']=='stored':
+            receipts.append({'occurrence_id':oid,'s3':catalog.sync_blob(sha)})
         else: pending.append((oid,sha))
     grouped={}
     for oid,sha in pending: grouped.setdefault(sha,[]).append((oid,directory/'blobs'/sha))

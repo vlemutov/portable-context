@@ -150,7 +150,7 @@ class CatalogTests(unittest.TestCase):
     def test_s3_reads_back_bytes_and_failed_sync_keeps_backup_original(self):
         self.store.ingest([event()])
         config = self.root / 's3.json'
-        config.write_text(json.dumps({'bucket': 'test'}))
+        config.write_text(json.dumps({'bucket': 'test','endpoint':'https://test.invalid','verification_reuse_seconds':0}))
         os.environ['PC_ATTACHMENT_S3_CONFIG'] = str(config)
         class S3:
             def __init__(self):

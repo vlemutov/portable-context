@@ -280,6 +280,8 @@ def convert(paths, instance, title=None, thinking='exclude', subagent=False, ses
                     parts.append('[Tool result: '+str(b.get('tool_use_id','unknown'))+']')
                 elif kind not in ('thinking','redacted_thinking'):
                     parts.append('['+kind+': archived payload]')
+        # Keep the historical serialized envelope stable. Mixed human/context attribution is
+        # corrected by attribution.view for both existing archives and new captures.
         role=typ if typ in ('user','assistant') else 'system'
         if typ=='user' and kinds and kinds <= {'tool_result'}:
             role='tool'

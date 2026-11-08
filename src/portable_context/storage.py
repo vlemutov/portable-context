@@ -7,6 +7,18 @@ def tree_bytes(root):
     root=Path(root)
     return sum(p.stat().st_size for p in root.rglob('*') if p.is_file() and not p.is_symlink()) if root.exists() else 0
 
+
+def allocated_bytes(root):
+    """Filesystem allocation where st_blocks exists; never silently equate logical and physical size."""
+    root=Path(root); total=0; seen=set()
+    for p in root.rglob('*') if root.exists() else []:
+        if p.is_symlink() or not p.is_file(): continue
+        st=p.stat()
+        if not hasattr(st,'st_blocks'): return None
+        identity=(st.st_dev,st.st_ino)
+        if identity not in seen: total+=st.st_blocks*512;seen.add(identity)
+    return total
+
 def report(store):
     with store.connect() as con:
         try:
@@ -30,6 +42,8 @@ def report(store):
         'migration_backups_bytes':tree_bytes(root/(store.root.name+'-migration-backups')),
         'imports_bytes':tree_bytes(root/'imports'),'releases_bytes':tree_bytes(root/'releases'),
         'restic_local_state_bytes':tree_bytes(state),'restic_breakdown':restic,
+        'restic_allocated_bytes':allocated_bytes(state),
+        'staging_policy':'Regenerable staging is removed after successful checkpoint; failed staging is kept until retry. Temporary backup/restore peaks still require free space.',
         'size_basis':'Logical file lengths; shared hard links can be counted in multiple directories, not allocated disk usage.',
         'restic_local_repository_bytes':tree_bytes(root/'restic-repository'),
         'disk_free_bytes':shutil.disk_usage(store.root).free,

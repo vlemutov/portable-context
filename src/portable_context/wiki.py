@@ -72,10 +72,15 @@ def validate_refs(con, refs):
         raise ValueError('Knowledge pages and semantic relations need source revision citations')
     result = []
     for ref in refs:
-        if not isinstance(ref, dict) or set(ref) != {'message_key', 'revision'}:
+        if not isinstance(ref, dict) or not {'message_key','revision'}<=set(ref) or set(ref)-{'message_key','revision','text_range'}:
             raise ValueError('A citation must have exactly message_key and revision')
         if not con.execute('SELECT 1 FROM revisions WHERE id=? AND hash=?', (ref['message_key'], ref['revision'])).fetchone():
             raise ValueError('Unknown source revision; never invent citations')
+        if 'text_range' in ref:
+            span=ref['text_range']
+            text=json.loads(con.execute('SELECT record FROM revisions WHERE id=? AND hash=?',(ref['message_key'],ref['revision'])).fetchone()[0]).get('text','')
+            if not isinstance(span,dict) or set(span)!={'start','end'} or any(type(span[k]) is not int for k in span) or not 0<=span['start']<span['end']<=len(text):
+                raise ValueError('Invalid exact source text_range')
         if ref not in result:
             result.append(ref)
     return result

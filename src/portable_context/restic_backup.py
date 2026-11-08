@@ -233,8 +233,46 @@ class Manager:
                     (now(),'policy_changed',canonical({'actor':actor,'previous':json.loads(old),'new':new,'preview':plan})))
         return self.policy()
 
+    def source_signature(self):
+        """Consistent business rows and verified files, excluding delivery bookkeeping.
+
+        This is cheaper than staging SQLite/pages/copies. It does not bypass original integrity.
+        """
+        h=hashlib.sha256()
+        with closing(sqlite3.connect((self.home/'context.sqlite3').as_uri()+'?mode=ro',uri=True)) as con:
+            con.execute('BEGIN')
+            tables={r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            names=('messages','revisions','imports','catalog_projects','catalog_assignments','catalog_annotations',
+                   'project_groups','capture_policies','source_sessions','wiki_pages','wiki_history','note_history',
+                   'project_roots','project_file_current','project_file_versions','index_policy','metadata',
+                   'content_identity','export_observations','evidence_reviews','graph_nodes','graph_edges')
+            for table in names:
+                if table not in tables: continue
+                cols=[r[1] for r in con.execute('PRAGMA table_info('+table+')') if table not in ('graph_nodes','graph_edges') or r[1]!='updated_at']
+                h.update(table.encode())
+                for row in con.execute('SELECT '+','.join(cols)+' FROM '+table+' ORDER BY rowid'):
+                    h.update(canonical(row).encode())
+            for checksum,size in con.execute('SELECT hash,size FROM imports ORDER BY hash'):
+                path=self.home/'originals'/checksum
+                if not re.fullmatch('[0-9a-f]{64}',checksum) or path.is_symlink() or not path.is_file() or path.stat().st_size!=size or sha256(path)!=checksum:
+                    raise ValueError('Original missing or corrupt; backup refused')
+        for path in sorted((self.home/'vault').rglob('*')):
+            if path.is_symlink(): raise ValueError('Vault symlinks cannot be backed up')
+            if path.is_file() and not path.name.startswith('.pc-'):
+                h.update(path.relative_to(self.home).as_posix().encode()); h.update(bytes.fromhex(sha256(path)))
+        h.update(canonical(self.policy()['values']).encode())
+        return h.hexdigest()
+
+    def discard_stage(self):
+        stage=self.state/'stage'
+        if stage.is_symlink() or stage.resolve().parent!=self.state.resolve():
+            raise ValueError('Unexpected staging location')
+        if stage.exists(): shutil.rmtree(stage)
+
     def stage(self):
-        stage=self.state/'stage'; stage.mkdir(exist_ok=True)
+        stage=self.state/'stage'
+        if stage.is_symlink() or stage.resolve().parent!=self.state.resolve(): raise ValueError('Unexpected staging location')
+        stage.mkdir(exist_ok=True)
         source=self.home/'context.sqlite3'
         from .storage import tree_bytes
         required=2*source.stat().st_size+tree_bytes(self.home/'originals')+tree_bytes(self.home/'vault')
@@ -252,7 +290,7 @@ class Manager:
             for table in ('messages','revisions','imports','catalog_projects','catalog_assignments','catalog_annotations',
                           'project_groups','capture_policies','source_sessions','wiki_pages','wiki_history','note_history',
                           'project_roots','project_file_current','project_file_versions','index_policy','metadata',
-                          'content_identity','export_observations'):
+                          'content_identity','export_observations','evidence_reviews'):
                 if table not in tables: continue
                 h.update(table.encode())
                 for row in dst.execute('SELECT * FROM '+table+' ORDER BY rowid'):
@@ -308,6 +346,7 @@ class Manager:
             'files':{p.relative_to(stage).as_posix():sha256(p) for p in stage.rglob('*')
                 if p.is_file() and p.name not in ('manifest.json','context.sqlite3')}}
         atomic_write(stage/'manifest.json',canonical(manifest))
+        (stage/'context.sqlite3').unlink()  # Restic stores validated page parts; this assembled copy is redundant.
         return stage,manifest
 
     def checkpoint(self,reason='scheduled',run_id=None):
@@ -325,8 +364,20 @@ class Manager:
                 if prior:
                     return {'status':'reused','snapshot_id':prior['snapshot'],'run_id':run_id}
             try:
-                stage,manifest=self.stage()
+                signature=self.source_signature()
                 snapshots=self.snapshots()
+                memo_path=self.state/'checkpoint-reuse.json'
+                memo=json.loads(memo_path.read_text()) if memo_path.exists() else {}
+                if reason=='before_import' and memo.get('signature')==signature and any(x['id']==memo.get('snapshot_id') for x in snapshots):
+                    sid=memo['snapshot_id']
+                    if run_id:
+                        with self.connect() as con:
+                            con.execute('INSERT INTO operations VALUES (?,?,?,?)',(run_id,sid,now(),reason))
+                    result={'status':'reused_unchanged','snapshot_id':sid,'run_id':run_id,'reason':reason,
+                            'workspace_id':memo['workspace_id'],'staging_skipped':True}
+                    self.event('skipped',result)
+                    return result
+                stage,manifest=self.stage()
                 existing=next((s for s in snapshots if 'content:'+manifest['fingerprint'] in s.get('tags',[])),None)
                 if existing:
                     sid=existing['id']; status='skipped'; added=0
@@ -342,7 +393,10 @@ class Manager:
                         con.execute('INSERT INTO operations VALUES (?,?,?,?)',(run_id,sid,now(),reason))
                 result={'status':status,'snapshot_id':sid,'run_id':run_id,'reason':reason,'added_bytes':added,
                         'fingerprint':manifest['fingerprint'],'workspace_id':manifest['workspace_id']}
+                if self.source_signature()==signature:
+                    atomic_write(memo_path,canonical({'signature':signature,'snapshot_id':sid,'workspace_id':manifest['workspace_id']}))
                 self.event('snapshot' if status=='created' else 'skipped',result)
+                self.discard_stage()
                 return result
             except Exception:
                 self.event('checkpoint_failed',{'reason':reason,'run_id':run_id})

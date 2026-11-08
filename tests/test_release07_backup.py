@@ -50,6 +50,20 @@ class ResticTests(unittest.TestCase):
         self.assertTrue(restored['verified'])
         self.assertEqual((self.root/'restored/originals'/original).read_text(),'original content')
 
+    def test_unchanged_checkpoint_skips_stage_and_manual_edits_invalidate(self):
+        first=self.manager.checkpoint()
+        self.assertFalse((self.manager.state/'stage').exists())
+        with patch.object(self.manager,'stage',side_effect=AssertionError('must not stage unchanged memory')):
+            replay=self.manager.checkpoint('before_import','unchanged-run')
+        self.assertEqual(replay['status'],'reused_unchanged')
+        self.assertEqual(replay['snapshot_id'],first['snapshot_id'])
+        note=self.store.root/'vault/memory/manual.md';note.parent.mkdir(parents=True,exist_ok=True);note.write_text('User edit')
+        changed=self.manager.checkpoint('before_import','manual-edit')
+        self.assertEqual(changed['status'],'created')
+        self.assertFalse((self.manager.state/'stage').exists())
+        self.manager.restore(changed['snapshot_id'],self.root/'verified')
+        self.assertEqual((self.root/'verified/vault/memory/manual.md').read_text(),'User edit')
+
     def test_corrupt_original_blocks_snapshot(self):
         f=self.root/'document.txt'; f.write_text('original')
         checksum=self.store.archive(f)

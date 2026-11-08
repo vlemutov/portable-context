@@ -20,6 +20,10 @@ from .core import canonical, digest, key, now
 
 def initialize(con):
     con.executescript('''
+        CREATE TABLE IF NOT EXISTS blob_verifications (
+            target TEXT NOT NULL, sha256 TEXT NOT NULL, size INTEGER NOT NULL,
+            verified_at TEXT NOT NULL, object_version TEXT, etag TEXT,
+            PRIMARY KEY(target,sha256));
         CREATE TABLE IF NOT EXISTS catalog_projects (
             id TEXT PRIMARY KEY, title TEXT NOT NULL, basis TEXT NOT NULL,
             summary TEXT NOT NULL, version INTEGER NOT NULL, updated_at TEXT NOT NULL);
@@ -457,7 +461,7 @@ class Catalog:
         return {'occurrence_id': occurrence_id, 'sha256': sha, 'size': size, 'local_stored': True,
                 's3': s3, 'projection': projection,'timings_seconds':timings}
 
-    def sync_blob(self, sha):
+    def sync_blob(self, sha, force=False):
         config_path = os.environ.get('PC_ATTACHMENT_S3_CONFIG')
         if not config_path:
             return {'status': 'not_configured'}
@@ -469,11 +473,22 @@ class Catalog:
         try:
             from .backup import s3_client, sha256
             config = json.loads(Path(config_path).read_text(encoding='utf-8'))
-            client = s3_client(config)
             path = self.store.root / 'originals' / sha
             if sha256(path) != sha:
                 raise ValueError('Local blob integrity failure')
             object_key = 'attachments/' + sha
+            from datetime import datetime,timezone
+            target=digest(canonical([config['endpoint'].rstrip('/'),config['bucket'],config.get('region'),object_key]))
+            with self.store.connect() as con:
+                proof=con.execute('SELECT * FROM blob_verifications WHERE target=? AND sha256=?',(target,sha)).fetchone()
+            ttl=max(0,min(int(config.get('verification_reuse_seconds',86400)),604800))
+            if proof and not force and proof['size']==row['size']:
+                age=(datetime.now(timezone.utc)-datetime.fromisoformat(proof['verified_at'])).total_seconds()
+                if 0<=age<ttl:
+                    return {'status':'previously_verified','key':object_key,'sha256':sha,
+                            'verified_at':proof['verified_at'],'object_version':proof['object_version'],
+                            'reuse_seconds':ttl,'remote_checked_now':False}
+            client = s3_client(config)
             try:
                 head = client.head_object(Bucket=config['bucket'], Key=object_key)
                 exists = head['ContentLength'] == row['size'] and head.get('Metadata', {}).get('sha256') == sha
@@ -500,11 +515,15 @@ class Catalog:
                     raise ValueError('S3 checksum mismatch')
                 client.upload_file(str(path), config['bucket'], object_key, ExtraArgs={'Metadata': {'sha256': sha}})
             with self.store.connect() as con:
-                con.execute('UPDATE catalog_blobs SET s3_key=?,s3_verified_at=? WHERE sha256=?', (object_key, now(), sha))
-            return {'status': 'verified', 'key': object_key, 'sha256': sha}
+                checked=now()
+                con.execute('UPDATE catalog_blobs SET s3_key=?,s3_verified_at=? WHERE sha256=?', (object_key, checked, sha))
+                con.execute('INSERT OR REPLACE INTO blob_verifications VALUES (?,?,?,?,?,?)',
+                            (target,sha,row['size'],checked,response.get('VersionId'),response.get('ETag')))
+            return {'status': 'verified', 'key': object_key, 'sha256': sha,'verified_at':checked,'remote_checked_now':True}
         except Exception:
             with self.store.connect() as con:
                 con.execute('UPDATE catalog_blobs SET s3_verified_at=NULL WHERE sha256=?', (sha,))
+                con.execute('DELETE FROM blob_verifications WHERE sha256=?',(sha,))
             return {'status': 'failed', 'retry': 'Repeat store_attachment with identical bytes; local original remains in backups.'}
 
     def _extract_text(self, sha, name, size):

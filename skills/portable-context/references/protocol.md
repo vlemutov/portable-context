@@ -104,6 +104,12 @@ On a lost response, retry the exact commit with the same token. A changed retry 
 The receipt proves storage, not factual correctness. Source changes mark citations stale;
 new messages arriving during analysis remain eligible for the next enrichment run.
 
+## Review protocol 0.9
+
+The enrichment calls above also accept explicit per-message review declarations. Read
+[review.md](review.md) for scopes, bounded evidence, citation ranges, selective completion and resume.
+An explicit conversation selection no longer forces re-review; pass include_reviewed=true for that.
+
 ## Useful status tools
 
 - `memory_status`: workspace identity, connected sources, pending conversations and jobs.

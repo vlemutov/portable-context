@@ -317,7 +317,9 @@ def import_capture(store, directory, allowed_roots, project_id=None, transfer_li
     import uuid
     run_id=run_id or str(uuid.uuid4())
     from .restic_backup import protection
+    checkpoint_started=monotonic()
     protection(store.root,run_id)
+    checkpoint_elapsed=monotonic()-checkpoint_started
     with store.connect() as con:
         con.execute('BEGIN IMMEDIATE')
         check_manifest(con,manifest,project_id)
@@ -325,7 +327,8 @@ def import_capture(store, directory, allowed_roots, project_id=None, transfer_li
             check_record(con,r,project_id)
         if not cached: records=[record_session(con,r) for r in records]
         run_id=start(con,package_id,manifest.get('executor'),run_id)
-        metrics(con,run_id,'validate',monotonic()-clock)
+        metrics(con,run_id,'checkpoint',checkpoint_elapsed)
+        metrics(con,run_id,'validate',monotonic()-clock-checkpoint_elapsed)
     # A bundle may reference ONLY its own hashed blobs, never arbitrary source paths.
     transfers = []
     for r in ([] if cached else records):
