@@ -138,6 +138,23 @@ class Release09(unittest.TestCase):
         broken=self.ws.read_evidence(**ref)
         self.assertFalse(broken['text_complete']);self.assertEqual(broken['effective_role'],'unknown')
 
+    def test_identical_package_new_run_rechecks_target_proofs_but_resume_does_not(self):
+        from portable_context.capture import capture,import_capture
+        files=[self.root/'one.txt',self.root/'two.txt']
+        for p in files:p.write_text(p.name)
+        packet=self.root/'packet'
+        capture([{**record(),'attachments':[{'path':str(p),'name':p.name} for p in files]}],packet,allowed_roots=[self.root])
+        def proof(sha,force=False):return {'status':'previously_verified','sha256':sha,'verified_at':'2026-11-09T00:00:00+00:00','remote_checked_now':False}
+        with patch.object(Catalog,'sync_blob',side_effect=proof) as sync:
+            first=import_capture(self.store,packet,[self.root],transfer_limit=1,run_id='first')
+            self.assertFalse(first['complete']);self.assertEqual(sync.call_count,1)
+            resumed=import_capture(self.store,packet,[self.root],transfer_limit=1,run_id='first')
+            self.assertTrue(resumed['complete']);self.assertEqual(sync.call_count,2)
+            repeated=import_capture(self.store,packet,[self.root],run_id='new-target-or-expired-proof')
+            self.assertTrue(repeated['complete']);self.assertEqual(sync.call_count,4)
+            self.assertEqual(repeated['messages']['unchanged'],1)
+            self.assertTrue(all(a['s3']['status']=='previously_verified' for a in repeated['attachments']))
+
     def test_s3_proof_reuse_target_change_expiry_and_forced_repair(self):
         self.ingest([{**record(),'attachments':[{'name':'a.txt','path':'a.txt'}]}])
         catalog=Catalog(self.store,[self.root]);path=self.root/'a.txt';path.write_text('payload')

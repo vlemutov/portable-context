@@ -383,7 +383,10 @@ def import_capture(store, directory, allowed_roots, project_id=None, transfer_li
             state={'policy_records':list(policy_records.values()),'transfers':[(oid,sha) for oid,_,sha in transfers]}
             con.execute('INSERT OR REPLACE INTO capture_run_state VALUES (?,?,?,?)',(run_id,package_id,project_id,canonical(state)))
     catalog = Catalog(store, [directory])
-    receipts={r['occurrence_id']:r for r in previous.get('attachments',[])} if previous else {}
+    # A previous run's receipt is not a current proof for this S3 target. New runs
+    # traverse sync_blob (cheap while its scoped proof is valid); only resume the
+    # same run without repeating transfers already committed by that run.
+    receipts={r['occurrence_id']:r for r in previous.get('attachments',[])} if previous and previous.get('run_id')==run_id else {}
     pending=[t for t in transfers if t[0] not in receipts or receipts[t[0]]['s3']['status']=='failed']
     from concurrent.futures import ThreadPoolExecutor
     grouped={}
