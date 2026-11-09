@@ -59,6 +59,7 @@ def edge_config(public_host, origin_ip, secrets='/tmp/pc-edge', listen_port=8080
         header X-Robots-Tag "noindex, nofollow"
         reverse_proxy https://{address}:{port(origin_port)} {{
             flush_interval -1
+            header_down -Alt-Svc
             header_up Host {public_host}
             header_up X-Forwarded-Host {public_host}
             header_up X-Forwarded-Proto https

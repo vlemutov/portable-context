@@ -25,14 +25,14 @@ class GatewayInputTests(unittest.TestCase):
     def test_cloud_request_keeps_memory_and_private_key_out_of_container_spec(self):
         payload = container_request('00000000-0000-0000-0000-000000000001', 'memory-edge',
             'owner.cr.cloud.ru/edge@sha256:' + 'a' * 64, config=b'config', certificate=b'cert', ca=b'ca',
-            key_secret='edge/client-g1')
+            key_secret='edge-client-g1')
         template = payload['template']
         self.assertNotIn('volumes', template)
         self.assertEqual(template['scaling']['maxInstanceCount'], 1)
         container = template['containers'][0]
         self.assertNotIn('\n', container['args'][0])
         key = next(e for e in container['env'] if e['name'] == 'PC_EDGE_KEY_B64')
-        self.assertEqual(key, {'name': 'PC_EDGE_KEY_B64', 'type': 'secret', 'value': 'edge/client-g1'})
+        self.assertEqual(key, {'name': 'PC_EDGE_KEY_B64', 'type': 'secret', 'value': 'edge-client-g1'})
 
     def test_provider_bare_host_normalized_but_insecure_or_ambiguous_urls_rejected(self):
         def response(uri):
@@ -138,6 +138,7 @@ class GatewayIntegrationTests(unittest.TestCase):
     def test_preserves_auth_challenge_and_credential(self):
         status, headers, _ = self.request('/mcp')
         self.assertEqual(status, 401)
+        self.assertNotIn('Alt-Svc', headers)
         self.assertIn('resource_metadata=', headers['Www-Authenticate'])
         status, _, body = self.request('/mcp', headers={'Authorization': 'Bearer test-credential'})
         self.assertEqual(status, 200)

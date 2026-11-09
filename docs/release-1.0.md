@@ -44,6 +44,32 @@ Private key generations have at most 90-day validity. **Automatic rotation and
 restart/overlap recovery are a release gate**, not implemented by `prepare`.
 Never overwrite a live key generation during a repeated installation.
 
+## Prototype evidence (2026-11-10)
+
+- Eight gateway tests passed on native Windows ARM64 and on the Linux VM with
+  real Caddy processes. GitHub Actions also passed on Linux x64/ARM64, Windows
+  x64, macOS Intel and macOS ARM64 at commit `181996d`.
+- Existing deployment CI and the complete Python test matrix passed at that commit.
+- A real Cloud.ru HTTPS request reached the synthetic VM origin through mTLS.
+  Direct connections to the origin without the client certificate were rejected.
+  The production memory was not connected to that probe.
+- The provider URL survived replacement of the failed stateless prototype and a
+  subsequent normal revision update. A 1,100,988-byte binary payload round-tripped
+  exactly; three SSE events arrived separately at approximately 0.1/1.1/2.1 s.
+  The temporary diagnostic container was deleted; one main edge remains.
+- Provider `publicUri` is a bare hostname; normalize to HTTPS and validate it.
+  Startup arguments cannot contain literal newlines. Secret references must be
+  root-level names; configuration contains a reference, never the private key.
+- A custom HTTP liveness probe accepted by the API left publication in `creating`
+  / `for_patch`. The same runtime without that probe published successfully.
+  Omit custom probes until their full contract is verified; the `/_pc/health`
+  endpoint remains available for installer diagnostics. Do not claim a precise
+  provider root cause from this isolation test alone.
+- The provider overwrites `metadata.createdByProduct`; retain resource IDs from
+  creation receipts for ownership checks. Never delete by a guessed name alone.
+- A firewall rule reporting `CREATED` did not immediately pass traffic. Probe
+  the actual authenticated connection before declaring networking ready.
+
 ## Remaining 1.0 gates
 
 1. Real Cloud.ru test: stable HTTPS URL through revision update/restart, unprivileged

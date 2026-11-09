@@ -62,8 +62,8 @@ def container_request(project_id, name, image, *, config, certificate, ca, key_s
         raise ValueError('Invalid container name')
     if not re.fullmatch(r'[a-z0-9-]+\.cr\.cloud\.ru/[a-z0-9/_-]+@sha256:[a-f0-9]{64}', image):
         raise ValueError('Use an immutable image digest in the owner Cloud.ru registry')
-    if not re.fullmatch(r'[a-zA-Z0-9/_-]+', key_secret):
-        raise ValueError('Expected a Secret Management name/path')
+    if not re.fullmatch(r'[a-zA-Z][a-zA-Z0-9_-]*', key_secret):
+        raise ValueError('Container Apps currently requires a root-level Secret Management name')
     def variable(name, raw):
         return {'name': name, 'value': base64.b64encode(raw).decode()}
     startup = (Path(__file__).parent / 'edge/entrypoint.sh').read_text(encoding='utf-8')
@@ -80,9 +80,7 @@ def container_request(project_id, name, image, *, config, certificate, ca, key_s
                 'args': ['umask 077; printf \'%s\' "$PC_EDGE_STARTUP_B64" | base64 -d > /tmp/pc-edge-start; exec /bin/sh /tmp/pc-edge-start'],
                 'env': [variable('PC_EDGE_CONFIG_B64', config), variable('PC_EDGE_CA_B64', ca),
                         variable('PC_EDGE_CERT_B64', certificate), variable('PC_EDGE_STARTUP_B64', startup.encode()),
-                        {'name': 'PC_EDGE_KEY_B64', 'type': 'secret', 'value': key_secret}],
-                'livenessProbe': {'httpProbe': {'path': '/_pc/health', 'port': 8080, 'scheme': 'HTTP'},
-                                  'initialDelaySeconds': 2, 'periodSeconds': 30, 'timeoutSeconds': 3}}]},
+                        {'name': 'PC_EDGE_KEY_B64', 'type': 'secret', 'value': key_secret}]}]},
         'metadata': {'createdByProduct': 'portable-context'}}
 
 
