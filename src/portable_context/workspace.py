@@ -112,7 +112,7 @@ class Workspace:
             pages = con.execute('SELECT count(*) FROM wiki_pages').fetchone()[0]
             jobs = [dict(r) for r in con.execute("SELECT id,kind,status FROM jobs WHERE status NOT IN ('completed','completed_selective') ORDER BY created_at LIMIT 50")]
         return {'workspace_id': workspace_id, 'version': __version__, 'stats': self.store.stats(),
-                'skill':{'recommended_version':'0.8.0','minimum_version':'0.7.0',
+                'skill':{'recommended_version':__version__,'minimum_version':'0.7.0',
                          'compatibility':'Capabilities govern write operations; older skills can still perform legacy reads.'},
                 'capabilities':['capture_policy_v1','file_categories_v1','project_groups_v1','import_log_v1','native_sessions_v1',
                     'project_folders_v1','restic_backups_v1','storage_report_v1','index_policy_v1','selective_review_v1','mixed_authorship_v1','effective_attribution_v1','workspace_observations_v1','content_identity_v1','resumable_capture_phases_v1','recovery_coverage_v1','claude_record_taxonomy_v1'],
@@ -125,7 +125,7 @@ class Workspace:
                             'placement': 'On the machine running this MCP process; not necessarily the client.',
                             'country': None, 'country_detection': 'Not available; verify the deployment region with the owner.',
                             'managed_hosting': False, 'native_remote_backends': [],
-                            'backup': 'SQLite snapshot + verified ZIP restore; optional S3 delivery via backup CLI.',
+                            'backup': 'Managed restic snapshots include SQLite and originals; see backup status for configuration and verification.',
                             'deployment_guide': 'https://github.com/vlemutov/portable-context/blob/main/skills/portable-context/references/deployment.md',
                             'setup_guide': 'https://github.com/vlemutov/portable-context/blob/main/skills/portable-context/references/storage.md'},
                 'wiki_pages': pages, 'conversations_needing_enrichment': dirty, 'unfinished_jobs': jobs,

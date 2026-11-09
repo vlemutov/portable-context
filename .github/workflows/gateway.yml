@@ -1,0 +1,19 @@
+name: gateway
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  mtls:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, windows-latest, macos-latest, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -e '.[deployment]'
+      - run: python deploy/edge_tools.py caddy --directory '${{ runner.temp }}/pc-edge-tools' --ci
+      - run: python -m unittest discover -s tests -p test_gateway.py -v
