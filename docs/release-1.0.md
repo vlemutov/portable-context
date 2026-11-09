@@ -50,6 +50,8 @@ Never overwrite a live key generation during a repeated installation.
   real Caddy processes. GitHub Actions also passed on Linux x64/ARM64, Windows
   x64, macOS Intel and macOS ARM64 at commit `181996d`.
 - Existing deployment CI and the complete Python test matrix passed at that commit.
+- The gateway, deployment and Python CI suites also passed at `a56bbfa` after
+  incorporating the observed Cloud.ru API and revision-publication constraints.
 - A real Cloud.ru HTTPS request reached the synthetic VM origin through mTLS.
   Direct connections to the origin without the client certificate were rejected.
   The production memory was not connected to that probe.
@@ -69,6 +71,44 @@ Never overwrite a live key generation during a repeated installation.
   creation receipts for ownership checks. Never delete by a guessed name alone.
 - A firewall rule reporting `CREATED` did not immediately pass traffic. Probe
   the actual authenticated connection before declaring networking ready.
+
+## Identity-provider experiment (not production integration)
+
+Pocket ID v2.19.2 was exercised on the existing Linux VM in a separate loopback
+lab, with synthetic users, clients, grants and its own database. The downloaded
+Linux amd64 binary was checksum-verified. Both the provider and a local Caddy
+HTTPS listener were stopped after each experiment. Neither was routed through
+the public edge or connected to the memory database.
+
+Observed with a registered public client and an explicit API resource:
+
+- S256 PKCE authorization-code exchange produced access and refresh tokens.
+- Refresh succeeded; OIDC userinfo returned the expected synthetic owner.
+- Revoking that user's client authorization immediately made userinfo return
+  HTTP 401 and refresh return HTTP 400 `invalid_grant`.
+- Self-introspection using the access token as bearer authentication returned
+  HTTP 401 `request_unauthorized`. Do not assume this endpoint is available to
+  the MCP resource server merely because it appears in discovery.
+- Userinfo can be investigated as an additional online revocation check when
+  `openid` and the provider audience are granted. It cannot replace validation
+  of the MCP token's signature, issuer, API audience, expiry, subject and scopes.
+  An unavailable provider must not silently turn into an accepted token.
+- The local test must use HTTPS: the provider sets secure session cookies even
+  with an HTTP localhost application URL. The experiment trusted its generated
+  localhost certificate explicitly; TLS verification was not disabled.
+
+This is evidence for continuing the evaluation, not a final provider selection
+or a claim of supported Claude/ChatGPT/Codex OAuth connections. Remaining tests
+include invalid PKCE and code replay, real client registration/discovery,
+per-operation read/write/admin enforcement, owner enrollment/recovery and
+revocation across active MCP requests. Synthetic setup used an administrative
+API key and a one-time login; production must not expose a reusable bootstrap
+key or rely on the first public visitor becoming the owner.
+
+Provider references used for this experiment:
+- https://github.com/pocket-id/pocket-id/tree/v2.19.2
+- https://pocket-id.org/docs/guides/client-id-metadata-documents
+- https://pocket-id.org/docs/configuration/environment-variables
 
 ## Remaining 1.0 gates
 
