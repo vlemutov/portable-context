@@ -146,3 +146,60 @@ symlink to the system interpreter, which would lose application dependencies.
 References:
 - [Caddy signals and graceful reload](https://caddyserver.com/docs/command-line#signals)
 - [Cloud.ru Container Apps API](https://cloud.ru/docs/container-apps-evolution/ug/topics/api-ref)
+
+## Safe continuity diagnostics
+
+Run finite, read-only probes from the client before starting a separately authorized
+rotation. The output filename must be new; old evidence is never overwritten:
+
+```sh
+python deploy/gateway_diagnostics.py --public-origin https://YOUR-EDGE.containerapps.ru \
+  --output /PRIVATE/probe-run/public.jsonl --seconds 2400
+```
+
+On the VM, use the controller's installed Python and `gateway_diagnostics.py` from
+the same release directory. Add `--state /SERVER/gateway-rotation` and another
+output file. This mode probes the origin over mTLS and the loopback MCP process,
+independently of the public Cloud.ru route. It uses existing private transport
+credentials locally; credentials are not copied into the trace.
+
+The four public probes check edge health, the complete mTLS path, static MCP
+resource metadata, and the expected unauthenticated OAuth challenge. Each probe
+is one fixed-path GET: no arbitrary URL paths, bearer tokens, redirects, memory
+mutations or automatic request retries. Regular probes keep a cold container
+active while the test runs; they do not change its scaling settings. Stop them
+after the acceptance window instead of running an unrequested permanent monitor.
+
+JSONL contains UTC request start/end, duration, status, result of fixed-response
+validation, TLS peer certificate fingerprint, and a positive allowlist of headers:
+known transport revision markers, the fixed failure layer, strictly shaped
+provider request IDs, and known server names. No body, body hash, cookies,
+authorization headers, raw exception message, query string, source IP or memory
+content is recorded. Unknown header values are discarded. Files are created
+privately, capped at 16 MiB, and the summary reports dropped records or write
+failure; a truncated trace must not be called complete evidence. Windows inherits
+the destination directory ACL, so use the private deployment directory.
+
+Versioned proxy configurations now return `X-PC-Edge-Revision` and
+`X-PC-Origin-Revision`. An internal proxy failure adds `X-PC-Failure-Layer: edge`
+or `origin` with a fixed generic body and the original HTTP error status. An
+application-generated 503 is forwarded unchanged, without a proxy-failure marker.
+General Caddy request/error logging remains off: capturing arbitrary requests
+would undermine the diagnostic privacy boundary.
+
+Interpret simultaneous evidence, not one missing header:
+
+- Edge health fails while the independent VM probes remain healthy: investigate
+  the public route or edge runtime, not memory recovery.
+- Edge health succeeds, but the transport probe fails with the edge-failure
+  marker: investigate the edge-to-VM connection, including TLS.
+- Transport succeeds, but metadata fails with an origin-failure marker: investigate
+  the VM proxy-to-MCP connection and compare the direct loopback probe.
+- An upstream HTTP error with both revision markers and no proxy-failure marker
+  is distinct from a proxy exception. Correlate it with the direct MCP probe.
+- Missing markers alone do not prove a provider fault: older revisions and header
+  processing can also omit them. Preserve the provider request ID for investigation.
+
+Record cloud publication status and controller stage timestamps alongside these
+traces. Do not infer an outage duration from the time between two sampled errors,
+or equate the provider's operation-complete flag with verified request readiness.

@@ -33,12 +33,23 @@ def _path(directory, name):
     return json.dumps((Path(directory) / name).as_posix())
 
 
+def diagnostic_errors(layer, revision):
+    """Fixed response markers only; never expose exception text or request data."""
+    if revision is None:
+        return ''
+    return f'''handle_errors {{
+        header X-PC-Failure-Layer {layer}
+        header X-PC-{layer.title()}-Revision {rotation_revision(revision)}
+        respond "Portable Context transport error" {{err.status_code}}
+    }}'''
+
+
 def edge_config(public_host, origin_ip, secrets='/tmp/pc-edge', listen_port=8080, origin_port=9443, revision=None):
     """The destination is fixed by the owner, never by an HTTP header or URL."""
     public_host = hostname(public_host)
     address = ipaddress.ip_address(origin_ip)
     address = '[' + str(address) + ']' if address.version == 6 else str(address)
-    stamp = '' if revision is None else 'header X-PC-Edge-Revision '+rotation_revision(revision)
+    stamp = '' if revision is None else 'header >X-PC-Edge-Revision '+rotation_revision(revision)
     return f'''{{
     admin off
     auto_https off
@@ -49,6 +60,7 @@ def edge_config(public_host, origin_ip, secrets='/tmp/pc-edge', listen_port=8080
 }}
 :{port(listen_port)} {{
     {stamp}
+    {diagnostic_errors('edge', revision)}
     @health path /_pc/health
     handle @health {{
         respond "edge alive; not a memory readiness check" 200
@@ -136,6 +148,8 @@ def origin_config(public_host, secrets, listen_port=9443, application_port=8766,
     }}
 }}
 https://:{port(listen_port)} {{
+    {'' if revision is None else 'header >X-PC-Origin-Revision '+rotation_revision(revision)}
+    {diagnostic_errors('origin', revision)}
     tls {_path(secrets, 'origin.pem')} {_path(secrets, 'origin-key.pem')} {{
         client_auth {{
             mode require_and_verify

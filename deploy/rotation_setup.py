@@ -86,7 +86,7 @@ def install(state,config,generation):
     if set(options)-ALLOWED:raise ValueError('Unsupported rotation options')
     credentials_info(generation,options['public_host'])
     env=command_env(state)
-    names=('rotation_setup.py','gateway_rotation.py','gateway_rotation_cloud.py','gateway.py','cloud_gateway.py','setup.py','edge/entrypoint.sh')
+    names=('rotation_setup.py','gateway_rotation.py','gateway_rotation_cloud.py','gateway_diagnostics.py','gateway.py','cloud_gateway.py','setup.py','edge/entrypoint.sh')
     payload={'root':installed['root'],'workspace_id':installed['memory']['workspace_id'],'options':options,
         'credentials':{k:env[k] for k in ('AUTH_KEY_ID','AUTH_SECRET')},
         'generation':{name:base64.b64encode((generation/name).read_bytes()).decode() for name in FILES},

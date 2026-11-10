@@ -82,6 +82,9 @@ class GatewayIntegrationTests(unittest.TestCase):
                 self.wfile.write(body)
 
             def do_GET(self):
+                if self.path == '/disconnect':
+                    self.close_connection = True
+                    return
                 if self.path == '/mcp' and self.headers.get('Authorization') != 'Bearer test-credential':
                     self.send_response(401)
                     self.send_header('WWW-Authenticate', 'Bearer resource_metadata="https://memory.example/.well-known/oauth-protected-resource"')
@@ -116,14 +119,20 @@ class GatewayIntegrationTests(unittest.TestCase):
         cls.edge_port = free_port()
         origin = gateway.origin_config('memory.example', cls.secrets, cls.origin_port, cls.app.server_port,
                                        identity_port=identity_port, revision='origin-test')
-        edge = gateway.edge_config('memory.example', '127.0.0.1', cls.secrets, cls.edge_port, cls.origin_port)
+        edge = gateway.edge_config('memory.example', '127.0.0.1', cls.secrets, cls.edge_port, cls.origin_port, revision='edge-test')
         for name, config, listener in [('origin', origin, cls.origin_port), ('edge', edge, cls.edge_port)]:
             path = cls.root / (name + '.Caddyfile')
-            path.write_text(config, encoding='utf-8')
+            # Synthetic fixture only: retain startup errors for platform diagnosis.
+            # These tests use TCP only. Reserving a free TCP port does not reserve
+            # its UDP counterpart (QUIC), including excluded Windows UDP ports.
+            config = config.replace('persist_config off', 'persist_config off\n    servers {\n        protocols h1 h2\n    }')
+            path.write_text(config.replace('output discard', 'output stderr'), encoding='utf-8')
             subprocess.run([os.environ['PC_TEST_CADDY'], 'validate', '--adapter', 'caddyfile', '--config', str(path)],
                            capture_output=True, check=True)
+            startup_log = (cls.root / (name + '.startup.log')).open('w+b')
+            cls.addClassCleanup(startup_log.close)
             process = subprocess.Popen([os.environ['PC_TEST_CADDY'], 'run', '--adapter', 'caddyfile', '--config', str(path)],
-                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                       stdout=subprocess.DEVNULL, stderr=startup_log)
             def stop(process=process):
                 process.terminate()
                 process.wait(timeout=10)
@@ -135,7 +144,8 @@ class GatewayIntegrationTests(unittest.TestCase):
                         break
                 except OSError:
                     if time.monotonic() > deadline or process.poll() is not None:
-                        raise RuntimeError('Caddy did not start')
+                        startup_log.seek(0)
+                        raise RuntimeError('Caddy did not start: '+startup_log.read().decode(errors='replace')[-3000:])
                     time.sleep(.05)
 
     def request(self, path, *, method='GET', body=None, headers=None):
@@ -155,9 +165,49 @@ class GatewayIntegrationTests(unittest.TestCase):
         self.assertEqual(json.loads(body)['Authorization'], 'Bearer test-credential')
 
     def test_rotation_probe_precedes_identity_and_application_routes(self):
-        status, _, body = self.request('/_pc/transport')
+        status, headers, body = self.request('/_pc/transport')
         self.assertEqual(status, 200)
         self.assertEqual(body, b'origin-test')
+        self.assertEqual(headers['X-Pc-Edge-Revision'], 'edge-test')
+        self.assertEqual(headers['X-Pc-Origin-Revision'], 'origin-test')
+
+    def test_proxy_error_is_marked_without_leaking_request_or_exception(self):
+        status, headers, body = self.request('/disconnect', headers={'Authorization':'Bearer NEVER-LOG-THIS'})
+        self.assertEqual(status, 502)
+        self.assertEqual(headers['X-Pc-Failure-Layer'], 'origin')
+        self.assertEqual(headers['X-Pc-Edge-Revision'], 'edge-test')
+        self.assertEqual(headers['X-Pc-Origin-Revision'], 'origin-test')
+        self.assertEqual(body, b'Portable Context transport error')
+
+    def test_edge_connection_failure_is_distinct_from_origin_failure(self):
+        with socket.socket() as unavailable, socket.socket() as reserved:
+            unavailable.bind(('127.0.0.1', 0))  # Bound but not listening.
+            reserved.bind(('127.0.0.1', 0));listen = reserved.getsockname()[1]
+            config = gateway.edge_config('memory.example', '127.0.0.1', self.secrets,
+                listen, unavailable.getsockname()[1], revision='edge-test')
+            path = self.root/'failing-edge.Caddyfile';path.write_text(config)
+            reserved.close()
+            process = subprocess.Popen([os.environ['PC_TEST_CADDY'], 'run', '--adapter', 'caddyfile', '--config', str(path)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                deadline = time.monotonic()+10
+                while True:
+                    try:
+                        with socket.create_connection(('127.0.0.1',listen), timeout=.2): break
+                    except OSError:
+                        if time.monotonic()>deadline or process.poll() is not None: raise
+                        time.sleep(.05)
+                conn = http.client.HTTPConnection('127.0.0.1',listen,timeout=5)
+                try:
+                    conn.request('GET','/_pc/transport',headers={'Host':'memory.example'})
+                    response = conn.getresponse();body = response.read()
+                    self.assertEqual(response.status,502)
+                    self.assertEqual(response.getheader('X-PC-Failure-Layer'),'edge')
+                    self.assertEqual(response.getheader('X-PC-Edge-Revision'),'edge-test')
+                    self.assertIsNone(response.getheader('X-PC-Origin-Revision'))
+                    self.assertEqual(body,b'Portable Context transport error')
+                finally: conn.close()
+            finally: process.terminate();process.wait(timeout=10)
 
     def test_drops_spoofed_proxy_headers(self):
         status, _, body = self.request('/headers', headers={'Forwarded': 'host=evil', 'X-Forwarded-For': '1.2.3.4',
@@ -173,8 +223,9 @@ class GatewayIntegrationTests(unittest.TestCase):
     def test_body_transmitted_exactly_and_failed_mutation_not_retried(self):
         body = b'\x00\xff' * 4096
         before = len(self.calls)
-        status, _, returned = self.request('/mutation-fails', method='POST', body=body)
+        status, headers, returned = self.request('/mutation-fails', method='POST', body=body)
         self.assertEqual(status, 503)
+        self.assertNotIn('X-Pc-Failure-Layer', headers)
         self.assertEqual(body, returned)
         self.assertEqual(len(self.calls), before + 1)
 
