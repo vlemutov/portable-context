@@ -210,3 +210,40 @@ Interpret simultaneous evidence, not one missing header:
 Record cloud publication status and controller stage timestamps alongside these
 traces. Do not infer an outage duration from the time between two sampled errors,
 or equate the provider's operation-complete flag with verified request readiness.
+
+### Instrumented pilot repeat (2026-11-10)
+
+The repeat kept min/max instances at 0/1, CPU at 0.1 and memory at 256 MiB.
+Rotation recovered the same generation after an actual controller exit immediately
+following a successful cloud PATCH. It completed at 18:09:03 UTC, and the real
+scheduled service subsequently returned `not_due` with an enabled, active timer.
+The authenticated OAuth workspace remained accessible with unchanged message,
+original and wiki counts. Both finite monitors were stopped after the test.
+
+Public probes ran from 17:41:16 to 18:10:05 UTC: **4,234 requests, three failures**:
+
+- A 504 on `/mcp` at 17:45:50 UTC coincided with the first observed new edge
+  revision. It had no allowlisted diagnostic headers. Concurrent edge, transport
+  and metadata probes succeeded, including responses from both edge revisions.
+- Two public TLS-handshake failures started at 18:09:32 and 18:09:33 UTC, after
+  rotation completed. Concurrent edge and OAuth-challenge probes succeeded;
+  independent origin-mTLS and MCP-loopback probes also succeeded. These failures
+  occurred before HTTP and do not establish whether the cause was the client's
+  network path or the provider's public TLS endpoint.
+
+Coverage limitations are retained in the evidence. The first VM monitor failed
+to start because of an unnecessary application dependency (removed and covered by
+a standard-library-only subprocess test); independent VM coverage began at
+17:46:33, after the 504. Its first TLS implementation then produced 178 false
+verification failures after the origin switched certificates: the historical
+same-subject CA ambiguity described above was reproduced with synthetic TLS and
+fixed. The corrected probe ran from 17:59:37 through 18:10:19 UTC, covering final
+publication and both public TLS failures: **1,255 VM checks, zero failures**.
+Original and corrected traces remain separate. No records were dropped.
+
+The provider system-log API still returned only previous-day events. Therefore
+the 504's internal cause is unresolved; no claim that paid warm instances would
+fix it is justified. The next diagnostic comparison should use a second public
+observer on an independent network, alongside the existing VM probes, and obtain
+current provider ingress/revision events. Never replay memory mutations to hide
+these failures. This pilot still does **not** establish uninterrupted public access.
