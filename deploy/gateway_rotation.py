@@ -224,7 +224,9 @@ def schedule(state, python, script):
         if confirmed.stdout.strip()!='yes':raise ValueError('Enable owner user lingering before scheduling')
     unit='pc-gateway-rotation-'+hashlib.sha256(str(state).encode()).hexdigest()[:12]
     def quoted(value):
-        value=str(Path(value).resolve())
+        # Resolving a venv's python symlink selects the system interpreter and
+        # loses the installed dependencies. Keep its absolute invocation path.
+        value=os.path.abspath(value)
         if any(c in value for c in ('%','\n','\r','"','\\')): raise ValueError('Unsupported service path')
         return '"'+value+'"'
     folder=Path.home()/'.config/systemd/user';folder.mkdir(parents=True,exist_ok=True)

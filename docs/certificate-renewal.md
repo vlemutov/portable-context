@@ -129,6 +129,20 @@ It uses a local edge to isolate the protocol. Real Cloud.ru publication and its
 availability monitoring are verified separately on the pilot; local tests must
 not be reported as a cloud rolling-deployment guarantee.
 
+Pilot result (2026-11-10): a real Cloud.ru rotation completed after the controller
+was killed immediately after a successful container PATCH, before recording the
+reply. The resumed operation reused the generation, retired the old certificate
+and preserved the OAuth workspace. Out of 1,311 public checks, two returned HTTP
+503 during the final revision switch. Thus automatic renewal and recovery passed,
+but **uninterrupted public access did not pass** with the pilot's 0–1 instance
+configuration. Do not advertise zero downtime. A warm-instance configuration is a
+separate paid availability experiment, not an established fix. The controller
+must not conceal this with automatic retries of memory mutations.
+
+The real systemd timer was also started explicitly after installation. Its command
+must preserve the virtual environment's Python path rather than resolving its
+symlink to the system interpreter, which would lose application dependencies.
+
 References:
 - [Caddy signals and graceful reload](https://caddyserver.com/docs/command-line#signals)
 - [Cloud.ru Container Apps API](https://cloud.ru/docs/container-apps-evolution/ug/topics/api-ref)

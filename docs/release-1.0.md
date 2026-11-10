@@ -148,12 +148,17 @@ Provider references used for this experiment:
 ## Remaining 1.0 gates
 
 1. All current CI matrices must pass. The path fixture correction at `a4ed412`
-   passed every test/deployment/gateway matrix. Repeat the checks for the renewal
-   controller and complete the real Cloud.ru publication acceptance.
+   passed every test/deployment/gateway matrix. Repeat the checks for the final
+   renewal-controller fixes. Local 214-test regression and Linux interruption
+   acceptance passed; the corrected timer was verified through real systemd.
 2. Automatic mTLS renewal is implemented with overlap, readiness, durable stages,
    interrupted-controller recovery, expiry diagnostics and a VM timer. Keep its
    acceptance coverage and include its private configuration in coordinated
    installation/update/recovery instructions.
+   Real Cloud.ru renewal recovered from a lost PATCH reply, but 2 of 1,311 public
+   checks returned 503 during the final revision switch. Zero-downtime public
+   publication remains an open acceptance item; do not conflate it with successful
+   certificate rotation. Warm instances are an unverified paid experiment.
 3. One reproducible HTTPS/OAuth install/update flow, replacing pilot-only scripts:
    private owner enrollment, client configuration, recovery kit, coordinated service
    stop/start and actual readiness, safe retry of interrupted operations, and useful

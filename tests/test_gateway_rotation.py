@@ -97,6 +97,17 @@ class RotationTests(unittest.TestCase):
         self.assertFalse((self.state/'failure.json').exists())
         self.assertEqual(self.controller().tick()['status'],'not_due')
 
+    @unittest.skipUnless(sys.platform=='linux','Linux systemd and venv symlink')
+    def test_schedule_preserves_virtualenv_interpreter_symlink(self):
+        config=rotation.read(self.state/'config.json');config.update(backend='cloudru',cloud_state=str(self.root/'cloud'))
+        rotation.write(self.state/'config.json',config);rotation.write(self.root/'cloud/credentials.json',{})
+        python=self.root/'venv/bin/python';python.parent.mkdir(parents=True)
+        python.symlink_to(Path(sys.executable).resolve())
+        with patch.object(Path,'home',return_value=self.root),patch.object(subprocess,'run',return_value=subprocess.CompletedProcess([],0,stdout='yes\n')):
+            result=rotation.schedule(self.state,python,__file__)
+        service=self.root/'.config/systemd/user'/result['unit'].replace('.timer','.service')
+        self.assertIn('ExecStart="'+str(python)+'"',service.read_text())
+
     def test_overlap_is_retained_during_drain(self):
         self.controller().tick(force=True)
         self.controller().tick();self.controller().tick()
