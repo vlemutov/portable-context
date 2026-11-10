@@ -1,5 +1,6 @@
 import json
 import os
+import ssl
 from pathlib import Path
 import sys
 import subprocess
@@ -13,6 +14,41 @@ import gateway_diagnostics as diagnostics
 
 
 class DiagnosticsTests(unittest.TestCase):
+    def test_vm_overlap_verifies_both_exact_leaves_and_rejects_unrelated_or_retired(self):
+        from gateway import issue_credentials
+        with tempfile.TemporaryDirectory() as tmp:
+            state=Path(tmp);roots=state/'generations'
+            names=['g-'+c*32 for c in 'abc']
+            for name in names: issue_credentials(roots/name,'memory.example')
+            (state/'active.json').write_text(json.dumps({'generation':names[0]}))
+            journal={'old':names[0],'new':names[1],'stage':'drain','complete':False}
+            (state/'rotation.json').write_text(json.dumps(journal))
+            class Handler(BaseHTTPRequestHandler):
+                def log_message(self,*_):pass
+                def do_GET(self):
+                    self.send_response(200);self.end_headers();self.wfile.write(b'origin-test')
+            for name in names:
+                server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
+                context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+                context.load_cert_chain(roots/name/'origin.pem',roots/name/'origin-key.pem')
+                context.verify_mode=ssl.CERT_REQUIRED
+                context.load_verify_locations(roots/names[1]/'edge-ca.pem')
+                server.socket=context.wrap_socket(server.socket,server_side=True)
+                thread=threading.Thread(target=server.serve_forever);thread.start()
+                try:
+                    result=diagnostics.probe('127.0.0.1',server.server_port,'memory.example','transport',context=diagnostics.vm_context(state))
+                    self.assertEqual(result['ok'],name in names[:2],result)
+                    wrong_host=diagnostics.probe('127.0.0.1',server.server_port,'other.example','transport',context=diagnostics.vm_context(state))
+                    self.assertEqual(wrong_host.get('error'),'tls_verification')
+                    if name==names[0]:
+                        (state/'active.json').write_text(json.dumps({'generation':names[1]}))
+                        (state/'rotation.json').write_text(json.dumps({**journal,'complete':True}))
+                        retired=diagnostics.probe('127.0.0.1',server.server_port,'memory.example','transport',context=diagnostics.vm_context(state))
+                        self.assertEqual(retired.get('error'),'tls_verification')
+                        (state/'active.json').write_text(json.dumps({'generation':names[0]}))
+                        (state/'rotation.json').write_text(json.dumps(journal))
+                finally:server.shutdown();server.server_close();thread.join()
+
     def test_vm_probes_run_with_only_standard_library(self):
         from gateway import issue_credentials
         import gateway_rotation

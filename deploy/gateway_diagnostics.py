@@ -139,8 +139,14 @@ def vm_context(state):
     roots = state/'generations'
     names = [rotation_revision(name) for name in names]
     # During atomic preparation the new generation may not yet exist.
-    ca = ''.join((roots/name/'origin-ca.pem').read_text() for name in names if (roots/name/'origin-ca.pem').exists())
-    ctx = ssl.create_default_context(cadata=ca)
+    # Pin the issued leaves during overlap. Historical roots share the same
+    # subject without authority-key identifiers; OpenSSL can select the wrong
+    # root from a bundle and reject the new leaf. Partial-chain verification
+    # accepts only these exact issued certificates, still checking hostname,
+    # validity and TLS proof of key possession. Never disable verification.
+    leaves = ''.join((roots/name/'origin.pem').read_text() for name in names if (roots/name/'origin.pem').exists())
+    ctx = ssl.create_default_context(cadata=leaves)
+    ctx.verify_flags |= ssl.VERIFY_X509_PARTIAL_CHAIN
     ctx.load_cert_chain(roots/client/'edge.pem', roots/client/'edge-key.pem')
     return ctx
 

@@ -163,6 +163,13 @@ output file. This mode probes the origin over mTLS and the loopback MCP process,
 independently of the public Cloud.ru route. It uses existing private transport
 credentials locally; credentials are not copied into the trace.
 
+The independent Python VM probe pins the exact issued origin leaf certificates
+for the active/pending generations using OpenSSL partial-chain verification.
+Hostname, expiry and TLS key-possession checks remain enabled; unrelated and
+retired certificates are rejected. This avoids ambiguous issuer selection in
+historical CA bundles whose generations share a subject name. It does not change
+the production Caddy trust configuration or disable TLS verification.
+
 The four public probes check edge health, the complete mTLS path, static MCP
 resource metadata, and the expected unauthenticated OAuth challenge. Each probe
 is one fixed-path GET: no arbitrary URL paths, bearer tokens, redirects, memory
