@@ -402,6 +402,8 @@ def install(state):
             time.sleep(10)
         wait_cloud_init(ssh)
     payload = bundle()
+    payload['https_helpers'] = {name:(ROOT/'deploy'/name).read_text(encoding='utf-8')
+        for name in ('https_runtime.py','gateway.py','pocketid.py','setup.py')}
     backup_file = state / 'backup-config.json'
     if config['mode'] == 'cloudru' and not backup_file.exists():
         # Recover outputs if apply completed before the local result was saved.
@@ -428,11 +430,15 @@ def install(state):
     args = ssh[1:] + [command]
     client = {'mcpServers': {'portable-context': {'command': ssh[0], 'args': args}}}
     save(state / 'client-config.json', client)
+    if (result.get('https') or {}).get('rotation_configured'):
+        from rotation_setup import refresh
+        refresh(state)
     kit = recovery_kit(state)
     return {'installed': True, 'workspace_id': result['memory']['workspace_id'], 'backup': result['backup'],
             'client_config': str(state / 'client-config.json'),
             'recovery_password_file':str(recovery),
             'recovery_kit':kit,
+            'https':result.get('https'),
             'next': 'Save the recovery password privately outside the server (e.g. password manager); never paste it in chat. Reconnect MCP and check.'}
 
 
@@ -507,7 +513,14 @@ def main(argv=None):
     sub.add_parser('plan')
     p = sub.add_parser('apply')
     p.add_argument('--approve-plan', required=True, help='Exact SHA-256 of reviewed paid infrastructure plan')
-    sub.add_parser('install')
+    p=sub.add_parser('install')
+    p.add_argument('--https',action='store_true',help='Use the reviewed resumable Cloud.ru HTTPS/OAuth installer')
+    p.add_argument('--approve-plan',help='Reviewed HTTPS plan SHA-256; approval persists for resume')
+    sub.add_parser('update',help='Update the same memory and its managed HTTPS/OAuth services')
+    p=sub.add_parser('https-plan',help='Review additional Cloud.ru HTTPS resources and costs')
+    p.add_argument('--file',type=Path,help='Optional non-secret edge options')
+    sub.add_parser('owner-login',help='Write a new private one-time owner enrollment code locally')
+    sub.add_parser('https-check',help='Check public authentication boundary and server identity')
     p = sub.add_parser('recovery-kit', help='Verify OAuth backups and save an offline secret kit locally')
     p.add_argument('--runtime', help='Explicit OAuth runtime directory on the server, if detection is ambiguous')
     p.add_argument('--output', type=Path, help='New private local directory; defaults inside --state')
@@ -566,7 +579,25 @@ def main(argv=None):
     elif args.command == 'apply':
         result = apply(state, args.approve_plan)
     elif args.command == 'install':
-        result = install(state)
+        if args.https:
+            from https_setup import install as https_install
+            result=https_install(state,args.approve_plan)
+        else: result = install(state)
+    elif args.command == 'update':
+        if (state/'https-journal.json').exists():
+            from https_setup import install as https_install
+            result=https_install(state)
+        else: result=install(state)
+    elif args.command == 'https-plan':
+        from https_setup import plan as https_plan
+        result=https_plan(state,read(args.file) if args.file else None)
+    elif args.command == 'owner-login':
+        from https_setup import owner_login
+        result=owner_login(state)
+    elif args.command == 'https-check':
+        from https_setup import check_public,remote
+        receipt=read(state/'https-installed.json')
+        result={'server':remote(state,'check',receipt['origin']),'public':check_public(receipt['origin'])}
     elif args.command == 'recovery-kit':
         result = recovery_kit(state,args.runtime,args.output)
     elif args.command == 'rotation-setup':

@@ -53,3 +53,5 @@ jobs:
         run: python deploy/smoke_recovery_installation.py --provider "$RUNNER_TEMP/pocket-id" --caddy "$PC_TEST_CADDY" --restic "$PC_TEST_RESTIC"
       - name: Rotate mTLS while killing the controller at every stage
         run: python deploy/smoke_gateway_rotation.py --caddy "$PC_TEST_CADDY"
+      - name: Install HTTPS and resume a killed package update
+        run: python deploy/smoke_https_install.py --provider "$RUNNER_TEMP/pocket-id" --caddy "$PC_TEST_CADDY" --restic "$PC_TEST_RESTIC"

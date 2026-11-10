@@ -172,6 +172,7 @@ resource "cloudru_evolution_iam_access_key" "backup" {
   ttl                = "0"
 }
 output "host" { value = cloudru_evolution_compute_external_ip.memory.ip_address }
+output "security_group_id" { value = cloudru_evolution_compute_security_group.memory.id }
 output "backup" {
   sensitive = true
   value = {

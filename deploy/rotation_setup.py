@@ -16,6 +16,10 @@ ALLOWED={'public_host','origin_ip','project_id','container_name','container_id',
 
 REMOTE='''import sys,json,pathlib,base64,hashlib,subprocess
 p=json.load(sys.stdin);root=pathlib.Path(p['root']).resolve();state=root/'gateway-rotation'
+if p.get('refresh'):
+ config=json.loads((state/'config.json').read_text())
+ p['options']={k:v for k,v in config.items() if k in p['allowed']}
+ p['credentials']=json.loads((pathlib.Path(config['cloud_state'])/'credentials.json').read_text())
 state.mkdir(exist_ok=True,mode=0o700)
 source=state/'releases'/hashlib.sha256(json.dumps(p['files'],sort_keys=True).encode()).hexdigest()
 source.mkdir(parents=True,exist_ok=True,mode=0o700)
@@ -23,8 +27,8 @@ for name,text in p['files'].items():
  if not ((pathlib.Path(name).name==name and name.endswith('.py')) or name=='edge/entrypoint.sh'):raise ValueError('Invalid source name')
  (source/name).parent.mkdir(parents=True,exist_ok=True,mode=0o700)
  (source/name).write_text(text,encoding='utf-8');(source/name).chmod(0o600)
-python=root/'oauth10/venv/bin/python'
-if not python.exists():python=root/'current/venv/bin/python'
+python=root/'current/venv/bin/python'
+if not python.exists():python=root/'oauth10/venv/bin/python'
 program="import sys,json;sys.path.insert(0,sys.argv[1]);from rotation_setup import configure_server;p=json.load(sys.stdin);print(json.dumps(configure_server(p)))"
 r=subprocess.run([str(python),'-c',program,str(source)],input=json.dumps(p),text=True,capture_output=True)
 if r.returncode:raise RuntimeError('Rotation installation failed; private diagnostics withheld')
@@ -95,3 +99,14 @@ def install(state,config,generation):
         input=json.dumps({'script':REMOTE,'payload':payload}),capture_output=True,text=True,encoding='utf-8')
     receipt=json.loads(result.stdout);save(state/'rotation-installed.json',receipt)
     return receipt
+
+
+def refresh(state):
+    """Update controller code using its existing server-bound config and keys."""
+    state=Path(state);installed=read(state/'installed.json')
+    names=('rotation_setup.py','gateway_rotation.py','gateway_rotation_cloud.py','gateway_diagnostics.py','gateway.py','cloud_gateway.py','setup.py','edge/entrypoint.sh')
+    payload={'root':installed['root'],'workspace_id':installed['memory']['workspace_id'],'refresh':True,'allowed':sorted(ALLOWED),
+        'files':{name:(ROOT/'deploy'/name).read_text(encoding='utf-8') for name in names}}
+    response=checked(ssh_args(state,read(state/'deployment.json'))+['python3 -c '+shlex.quote(INSTALL_BOOTSTRAP)],
+        input=json.dumps({'script':REMOTE,'payload':payload}),capture_output=True,text=True,encoding='utf-8')
+    result=json.loads(response.stdout);save(state/'rotation-installed.json',result);return result

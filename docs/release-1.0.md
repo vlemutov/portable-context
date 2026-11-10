@@ -145,36 +145,60 @@ Provider references used for this experiment:
 - https://pocket-id.org/docs/guides/client-id-metadata-documents
 - https://pocket-id.org/docs/configuration/environment-variables
 
-## Remaining 1.0 gates
+## Remaining 1.0 gates — scope reset, 2026-11-10
 
-1. All current CI matrices must pass. The path fixture correction at `a4ed412`
-   passed every test/deployment/gateway matrix. Repeat the checks for the final
-   renewal-controller fixes. Local 214-test regression and Linux interruption
-   acceptance passed; the corrected timer was verified through real systemd.
-2. Automatic mTLS renewal is implemented with overlap, readiness, durable stages,
-   interrupted-controller recovery, expiry diagnostics and a VM timer. Keep its
-   acceptance coverage and include its private configuration in coordinated
-   installation/update/recovery instructions.
-   Real Cloud.ru renewal recovered from a lost PATCH reply, but 2 of 1,311 public
-   checks returned 503 during the final revision switch. Zero-downtime public
-   publication remains an open acceptance item; do not conflate it with successful
-   certificate rotation. Warm instances are an unverified paid experiment.
-3. One reproducible HTTPS/OAuth install/update flow, replacing pilot-only scripts:
+The owner explicitly deferred further investigation of isolated Cloud.ru public
+errors. Zero-downtime cloud publication is NOT a 1.0 release gate. Retain the
+measured limitations in [certificate renewal](certificate-renewal.md), working
+automatic renewal/recovery and safe diagnostics. Keep min/max instances at 0/1;
+do not enable paid warm instances as part of release preparation.
+
+The 1.0 goal is a reproducible owner-operated product: a new user can start from
+the repository with an assistant, connect or create memory, authenticate, import
+and recall it from another supported client, update it, and recover access/data.
+Remaining work is ordered as follows:
+
+1. One reproducible HTTPS/OAuth install/update flow, replacing pilot-only scripts:
    private owner enrollment, client configuration, recovery kit, coordinated service
    stop/start and actual readiness, safe retry of interrupted operations, and useful
    diagnostics. Exercise a clean installation, an existing-memory upgrade and a
    network change from supported Windows/macOS/Linux clients. Explain replacement-VM
    recovery and actual Cloud.ru costs, including registry and secrets.
-4. Public client compatibility and an actual cross-agent memory journey: selected
+2. Public client compatibility and an actual cross-agent memory journey: selected
    capture with files over HTTPS, interruption/resume, duplicate-free reimport,
    cited wiki enrichment, then recall by another supported agent. Validate actual
    callback/registration, consent, refresh and revocation for each advertised client.
-   Add a browser check for fresh passkey enrollment after recovery; protocol tests
-   do not substitute for it. Do not claim untested web clients are supported.
-5. Release packaging: consistent 1.0 versions and skill recommendations, current
+   Start with Codex and Claude Code as the target tested pair, not every agent or
+   web client. Add a browser check for fresh passkey enrollment after recovery;
+   protocol tests do not substitute for it. Publish tested capabilities and gaps;
+   untested clients are experimental, not blockers for the supported pair.
+3. User-facing onboarding and recovery: refresh the skill and entry guide around
+   existing vs new memory, cost review, owner login, first import and second-client
+   connection. Integrate the already-tested private recovery kit and restore flow;
+   complete fresh passkey enrollment after recovery and explain replacement-VM
+   recovery. Normal HTTPS use must not require recurring SSH/firewall adjustments;
+   infrastructure administration may still need the documented recovery path.
+4. Release packaging and final regression: consistent 1.0 versions and skill recommendations, current
    START-HERE/onboarding instructions, supported-platform/client matrix, changelog,
-   pinned release artifacts and upgrade/rollback instructions. Merge/tag only after
-   the acceptance gates pass; keep the SSH recovery path available.
+   pinned release artifacts and upgrade/rollback instructions. All required CI
+   checks for the final supported Windows/macOS/Linux matrix must pass. Merge/tag
+   only after these scoped acceptance gates pass; keep SSH recovery available.
+
+## After 1.0
+
+- Investigate isolated provider/public-network 503/504/TLS failures, optionally
+  using independent public observers and current provider ingress events.
+- Evaluate zero-downtime cloud revisions, warm instances and other availability
+  options only as separately scoped work with cost review; no availability guarantee.
+- Expand actual OAuth/client coverage, web clients and marketplace packaging.
+  Do not require all originally named agents to pass before shipping the tested subset.
+- Broader provider optimization, high availability and new memory features are
+  not part of this release's final stretch.
+
+Transient connection failures remain a documented limitation, not permission to
+lose data, bypass authentication or blindly repeat writes. Existing durable jobs
+must remain resumable; reproducible data-loss, authorization and recovery defects
+remain release blockers.
 
 Already closed: basic HTTPS/mTLS transport (stable provider URL, streaming and
 approximately 1 MiB binary probe), Codex OAuth read/write, separate S3 identity

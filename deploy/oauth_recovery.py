@@ -425,7 +425,8 @@ def restore_config(kit, config, runtime, memory_home, binary, expected_origin):
 
 
 def cron_lines(previous, script, python, config, state):
-    paths = [str(Path(p).resolve()) for p in (script, python, config, state)]
+    # Preserve venv invocation; resolving its symlink loses installed dependencies.
+    paths = [os.path.abspath(p) for p in (script, python, config, state)]
     if any(any(c in p for c in ('%', '\n', '\r')) for p in paths):
         raise ValueError('Paths incompatible with cron')
     script, python, config, state = paths

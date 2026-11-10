@@ -130,7 +130,8 @@ if runtime is None:
  candidates=[root/name for name in ('oauth','oauth10') if (root/name/'oauth.json').is_file()]
  if len(candidates)==1:runtime=candidates[0]
 if runtime is not None and runtime.parent!=root:raise ValueError('Runtime outside this installation')
-python=runtime/'venv/bin/python' if runtime is not None and (runtime/'venv/bin/python').is_file() else root/'current/venv/bin/python'
+python=root/'current/venv/bin/python'
+if not python.is_file() and runtime is not None:python=runtime/'venv/bin/python'
 r=subprocess.run([str(python),'-c',program,str(tools)],input=json.dumps(p),text=True,capture_output=True)
 if r.returncode:raise RuntimeError('Recovery setup failed; secret output withheld')
 sys.stdout.write(r.stdout)
