@@ -57,6 +57,23 @@ class RotationTests(unittest.TestCase):
         self.assertEqual(self.controller().tick()['status'],'not_due')
         self.assertFalse((self.state/'rotation.json').exists());self.assertFalse(self.backend.calls)
 
+    def test_concurrent_controller_does_not_change_the_journal(self):
+        with rotation.file_lock(self.state/'rotation.lock'):
+            self.assertEqual(self.controller().tick(force=True)['status'],'busy')
+        self.assertFalse((self.state/'rotation.json').exists())
+
+    def test_schedule_does_not_claim_success_without_logout_persistence(self):
+        config=rotation.read(self.state/'config.json');config.update(backend='cloudru',cloud_state=str(self.root/'cloud'))
+        rotation.write(self.state/'config.json',config);rotation.write(self.root/'cloud/credentials.json',{})
+        def run(args,**kwargs):
+            if args[0]=='sudo':raise subprocess.CalledProcessError(1,args)
+            return subprocess.CompletedProcess(args,0,stdout='no\n')
+        with patch('sys.platform','linux'),patch.object(os,'getuid',return_value=1000,create=True), \
+             patch.object(subprocess,'run',side_effect=run):
+            with self.assertRaises(subprocess.CalledProcessError):
+                rotation.schedule(self.state,sys.executable,__file__)
+        self.assertFalse((self.state/'schedule.json').exists())
+
     def test_restarts_before_and_after_every_effect_preserve_connectivity(self):
         # Each simulated interruption occurs after the remote side may have changed,
         # while the local completion record has not yet been written.

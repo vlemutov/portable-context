@@ -7,8 +7,9 @@ memory workspace, migrate files or replace the VM.
 
 The controller runs on the Linux VM. The owner's computer can be offline. A
 systemd user timer checks every ten minutes and catches up after a missed timer
-event. Enable user lingering as part of server setup so the timer remains active
-without an SSH session. Certificates last at most 90 days; renewal starts 30 days
+event. The installer verifies user lingering and enables it for the current owner
+with noninteractive sudo when needed; without that prerequisite it reports failure,
+not a ready timer. Certificates last at most 90 days; renewal starts 30 days
 before the earliest expiry. Status requests attention below 14 remaining days or
 after an operation failure. Before the renewal window, the timer performs only a
 local status check, with no Cloud.ru API request.

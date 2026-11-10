@@ -4,6 +4,7 @@ Never remove old trust until the new client/server pair has been observed live.
 Journal intent before effects; replay a stage after interruption, not a rotation.
 """
 import argparse
+from contextlib import ExitStack
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -134,7 +135,9 @@ class Rotation:
         return self.generation(journal['new'])
 
     def tick(self,force=False,interrupt=None):
-        with file_lock(self.state/'rotation.lock'):
+        with ExitStack() as stack:
+            try:stack.enter_context(file_lock(self.state/'rotation.lock'))
+            except ValueError:return {'status':'busy','next':'Another controller owns the journal; retry later'}
             try:
                 return self._tick(force,interrupt)
             except Exception:
@@ -211,6 +214,14 @@ def schedule(state, python, script):
     state=Path(state).resolve();config=read(state/'config.json')
     if config.get('backend')!='cloudru': raise ValueError('Automatic timer requires the Cloud.ru backend')
     if not (Path(config['cloud_state'])/'credentials.json').is_file(): raise ValueError('Private cloud credentials required on controller host')
+    user=str(os.getuid())
+    linger=subprocess.run(['loginctl','show-user',user,'--property=Linger','--value'],check=True,capture_output=True,text=True)
+    if linger.stdout.strip()!='yes':
+        # A user timer is not autonomous if its manager dies after SSH logout.
+        # This changes only the current owner, never root or another account.
+        subprocess.run(['sudo','-n','loginctl','enable-linger',user],check=True,capture_output=True)
+        confirmed=subprocess.run(['loginctl','show-user',user,'--property=Linger','--value'],check=True,capture_output=True,text=True)
+        if confirmed.stdout.strip()!='yes':raise ValueError('Enable owner user lingering before scheduling')
     unit='pc-gateway-rotation-'+hashlib.sha256(str(state).encode()).hexdigest()[:12]
     def quoted(value):
         value=str(Path(value).resolve())
@@ -222,8 +233,8 @@ def schedule(state, python, script):
     (folder/(unit+'.timer')).write_text('[Unit]\nDescription=Check Portable Context transport certificates\n[Timer]\nOnCalendar=*-*-* *:00/10:00\nPersistent=true\nRandomizedDelaySec=45\n[Install]\nWantedBy=timers.target\n',encoding='utf-8')
     subprocess.run(['systemctl','--user','daemon-reload'],check=True,capture_output=True)
     subprocess.run(['systemctl','--user','enable','--now',unit+'.timer'],check=True,capture_output=True)
-    write(state/'schedule.json',{'unit':unit,'every_minutes':10,'renew_days_before_expiry':30})
-    return {'scheduled':True,'unit':unit+'.timer','every_minutes':10}
+    write(state/'schedule.json',{'unit':unit,'every_minutes':10,'renew_days_before_expiry':30,'linger':True})
+    return {'scheduled':True,'unit':unit+'.timer','every_minutes':10,'survives_logout':True}
 
 
 def main():
