@@ -1,11 +1,36 @@
 # Portable Context 1.0 — implementation and release gates
 
-Status: in development. The production memory remains on 0.9.0. Do not advertise
+Status: in development. The memory package remains on 0.9.0 with a personal
+1.0-preview HTTPS/OAuth deployment. Do not advertise
 OAuth or the new HTTPS installation as released until the acceptance gates pass.
 
 OAuth resource-server code and per-operation capabilities are now implemented in
-the branch; see [the OAuth preview contract](oauth-preview.md). Production
-activation and real browser/client enrollment are separate acceptance steps.
+the branch; see [the OAuth preview contract](oauth-preview.md). The personal
+pilot completed owner passkey enrollment, native Codex OAuth login, and project
+create/update/read/archive over HTTPS on 2026-11-10.
+
+## Recovery acceptance (2026-11-10)
+
+- Separate encrypted restic repository for identity state is installed on the
+  pilot VM. The first S3 snapshot and full isolated restore passed (nine files).
+  Identity backup runs every six hours; full restore verification and retention
+  run weekly. Memory backup schedules remain separate.
+- `deploy/oauth_recovery.py` provides private owner login codes, backup/check,
+  quarantined restore, fresh identity bootstrap and explicit existing-server
+  activation. [Recovery instructions](oauth-recovery.md) explain the owner kit,
+  lost-device revocation and fresh login on every device after disaster recovery.
+- The isolated real-provider test took a snapshot before revocation, then
+  revoked access and restored the older snapshot through the recovery path.
+  The fresh provider rejected old access/refresh tokens and browser cookies,
+  generated different signing keys, omitted a deleted historical passkey record,
+  and accepted the new owner's one-time login.
+- Live identity replacement was deliberately not performed on the owner's
+  working memory. Activation failure is tested with mocked service management;
+  a complete service cutover drill on a disposable installation remains part of
+  the coordinated lifecycle/installer gate.
+- An MCP restart exposed a readiness gap: systemd can report `active` before MCP
+  accepts connections. Recovery activation now waits for protected-resource
+  metadata. General updates still need coordinated readiness and client retry.
 
 ## Agreed deployment
 
@@ -121,8 +146,9 @@ Provider references used for this experiment:
    no public bypass, cost report including registry and secrets. Do not alter SSH.
 2. Tested maintained OAuth provider, PKCE/discovery, application capability checks
    for every MCP operation, device fallback, revocation including existing sessions.
-3. Owner setup/recovery, no public first-visitor-wins registration. Auth state
-   backup/restore must not resurrect revoked credentials.
+3. Recovery backup and fresh identity path are implemented and provider-tested.
+   Finish disposable service-cutover acceptance and integrate the owner recovery
+   kit into the new-server installer. Never restore historical credentials live.
 4. Friendly repeatable install/update/status/diagnostics and existing-vs-new memory
    onboarding on Windows/macOS/Linux. No claim of a platform test without execution.
 5. First useful import, wiki evidence and cross-agent recall over the new connection;

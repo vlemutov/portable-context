@@ -17,3 +17,29 @@ jobs:
       - run: python -m pip install -e '.[deployment]'
       - run: python deploy/edge_tools.py caddy --directory '${{ runner.temp }}/pc-edge-tools' --ci
       - run: python -m unittest discover -s tests -p test_gateway.py -v
+  oauth-recovery:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -e '.[mcp,deployment]'
+      - run: python deploy/edge_tools.py caddy --directory '${{ runner.temp }}/pc-edge-tools' --ci
+      - run: python deploy/restic_tools.py --ci
+      - name: Fetch and verify pinned identity provider
+        run: |
+          python - <<'PY'
+          import hashlib, os, pathlib, sys, urllib.request
+          sys.path.insert(0, 'deploy')
+          from pocketid import VERSION, LINUX_AMD64_SHA256
+          url = f'https://github.com/pocket-id/pocket-id/releases/download/v{VERSION}/pocket-id_linux_amd64'
+          with urllib.request.urlopen(url, timeout=120) as response:
+              data = response.read()
+          assert hashlib.sha256(data).hexdigest() == LINUX_AMD64_SHA256
+          path = pathlib.Path(os.environ['RUNNER_TEMP'])/'pocket-id'
+          path.write_bytes(data)
+          path.chmod(0o700)
+          PY
+      - name: Recover older snapshot without reviving credentials
+        run: python deploy/smoke_oauth_recovery.py --provider "$RUNNER_TEMP/pocket-id" --caddy "$PC_TEST_CADDY" --restic "$PC_TEST_RESTIC"

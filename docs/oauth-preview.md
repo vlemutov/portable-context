@@ -130,9 +130,18 @@ blocking public initial setup. A separate VM experiment with actual Pocket ID
 tokens passed S256 exchange, read MCP calls, denied write, refresh, revoked-token
 rejection, rejected code replay and wrong-PKCE rejection.
 
-Release gates remain: real host/browser enrollment, automated certificate rotation,
-owner recovery, auth-state backup/restore without resurrecting revoked grants,
-reproducible setup/update and the published client compatibility matrix.
+The personal Codex pilot completed browser/passkey enrollment and native HTTPS
+read/write tool calls on 2026-11-10. Project create/update/read/archive passed;
+this does not certify capture uploads or other hosts. Recovery commands and
+separate encrypted identity backups are described in [OAuth recovery](oauth-recovery.md).
+
+Recovery was exercised against real Pocket ID and restic, including a snapshot
+taken before revocation, new signing keys, and rejection of old sessions after
+recovery. A separate S3 identity backup and full restore passed on the pilot VM.
+
+Release gates remain: disposable full service cutover, automated
+certificate rotation, reproducible setup/update, full capture/wiki over HTTPS
+and the published client compatibility matrix.
 
 References checked 2026-11-10:
 - [MCP authorization](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization)
