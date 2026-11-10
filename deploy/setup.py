@@ -428,10 +428,27 @@ def install(state):
     args = ssh[1:] + [command]
     client = {'mcpServers': {'portable-context': {'command': ssh[0], 'args': args}}}
     save(state / 'client-config.json', client)
+    kit = recovery_kit(state)
     return {'installed': True, 'workspace_id': result['memory']['workspace_id'], 'backup': result['backup'],
             'client_config': str(state / 'client-config.json'),
             'recovery_password_file':str(recovery),
+            'recovery_kit':kit,
             'next': 'Save the recovery password privately outside the server (e.g. password manager); never paste it in chat. Reconnect MCP and check.'}
+
+
+def recovery_kit(state, runtime=None, output=None):
+    from recovery_setup import REMOTE, receive_kit
+    config = read(state/'deployment.json')
+    installed = read(state/'installed.json')
+    names = ('recovery_setup.py','oauth_recovery.py','pocketid.py','setup.py','gateway.py')
+    payload = {'root':installed['root'], 'workspace':installed['memory']['workspace_id'],
+        'runtime':runtime, 'schedule':config.get('schedule_backup',True),
+        'files':{name:(ROOT/'deploy'/name).read_text(encoding='utf-8') for name in names}}
+    envelope = {'script':REMOTE,'payload':payload}
+    completed = checked(ssh_args(state,config)+['python3 -c '+shlex.quote(INSTALL_BOOTSTRAP)],
+        input=json.dumps(envelope),capture_output=True,text=True,encoding='utf-8')
+    # Contains credentials: consume in memory, never print the remote response.
+    return receive_kit(json.loads(completed.stdout),state,output)
 
 def maintenance(state,args):
     config=read(state/'deployment.json'); ssh=ssh_args(state,config)
@@ -491,6 +508,9 @@ def main(argv=None):
     p = sub.add_parser('apply')
     p.add_argument('--approve-plan', required=True, help='Exact SHA-256 of reviewed paid infrastructure plan')
     sub.add_parser('install')
+    p = sub.add_parser('recovery-kit', help='Verify OAuth backups and save an offline secret kit locally')
+    p.add_argument('--runtime', help='Explicit OAuth runtime directory on the server, if detection is ambiguous')
+    p.add_argument('--output', type=Path, help='New private local directory; defaults inside --state')
     sub.add_parser('check')
     p=sub.add_parser('restore'); group=p.add_mutually_exclusive_group(required=True)
     group.add_argument('--snapshot'); group.add_argument('--archive',help='Existing ZIP path on the server'); p.add_argument('--target',required=True)
@@ -544,6 +564,8 @@ def main(argv=None):
         result = apply(state, args.approve_plan)
     elif args.command == 'install':
         result = install(state)
+    elif args.command == 'recovery-kit':
+        result = recovery_kit(state,args.runtime,args.output)
     elif args.command in ('restore','activate','cleanup','cleanup-s3'):
         result=maintenance(state,args)
     else:

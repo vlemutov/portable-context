@@ -22,15 +22,32 @@ not paste recovery files, login codes, keys or tokens into an agent chat or Git.
 The recovery authority is control of the owner's server/cloud account, not a
 public "reset password" endpoint.
 
-Export a private kit once the repository is configured, retrieve it through
-SSH/SFTP, and keep another copy offline or in a password manager:
+The local installer now checks for an existing OAuth runtime after `install`.
+When present, it configures a separate identity repository, verifies a full
+restore, installs the backup schedule, and saves the kit privately on the owner's
+computer. If OAuth has not been installed yet, the result explicitly says
+`oauth_not_installed`; it does not claim that access recovery is ready.
+After setting up OAuth (or rotating S3 credentials), run on your computer:
+
+```sh
+python deploy/setup.py --state /PRIVATE/deployment recovery-kit
+```
+
+The command prints only the local path and a verification receipt. No manual
+SFTP copying is required. It detects `oauth` or the pilot's `oauth10` runtime;
+use `--runtime /SERVER/ROOT/oauth` if both exist. An unchanged kit is reused.
+Changed credentials go into a new directory, preserving the old kit. An explicit
+`--output /PRIVATE/new-kit` must be new or contain the same verified kit.
+Keep another protected copy outside both server and computer.
+
+For manual server administration, the lower-level export remains available:
 
 ```sh
 python deploy/oauth_recovery.py export-kit --config /PRIVATE/identity-backup-config.json \
   --output /PRIVATE/new-recovery-kit
 ```
 
-It contains the repository address/password and S3 credentials. **It is secret,
+It contains both repository addresses, memory workspace ID, password and S3 credentials. **It is secret,
 not an attachment for an agent.** After server loss, opening the existing archive
 does not require the old runtime or its disks:
 
@@ -43,6 +60,20 @@ python deploy/oauth_recovery.py restore-config --kit /PRIVATE/recovery-kit \
 Then use `list` and `restore` below. Do not run `init` on the recovered repository.
 Obtain the pinned Pocket ID/restic binaries separately. The kit grants backup
 access; the cloud account or SSH/console access is still needed to replace services.
+
+To reopen memory backups from the same kit after losing all server files:
+
+```sh
+python deploy/oauth_recovery.py restore-memory-config --kit /PRIVATE/recovery-kit \
+  --config /NEW/restic-config.json --memory-home /NEW/memory \
+  --binary /TOOLS/restic --expected-origin https://YOUR-ORIGIN
+python -m portable_context.restic_backup --home /NEW/memory --config /NEW/restic-config.json list
+```
+
+Restore the selected memory snapshot to a new directory using that configuration,
+check its workspace ID against `kit.json`, and activate it with MCP stopped.
+Old kits without memory metadata still restore OAuth; retrieve a new kit before
+depending on one package for both repositories.
 
 ## Lost passkey; server still available
 
@@ -143,9 +174,17 @@ also exposes only redacted identity backup receipts for the standard deployment.
    switches the identity and pinned owner, then restarts services. If it fails,
    HTTP stays stopped; it does not roll back to old credentials. The old identity
    directory is retained privately as `identity-retired-*`, not served. Memory
-   and SSH/stdio are not replaced. Service lifecycle and a new-server installer
-   remain separate 1.0 work: for a new machine, install the services pointing to
-   the recovered runtime before exposing HTTPS; never point them at quarantine.
+   and SSH/stdio are not replaced. Service definitions are checked against the
+   selected runtime before any stop command. Readiness waits for the MCP listener,
+   not only systemd's `active` state.
+
+   For complete runtime loss, install stopped service definitions pointing to
+   the new runtime and restored memory, then add `--lost-runtime`. This mode
+   refuses an existing identity or OAuth configuration and does not require a
+   backup of missing files. `--expected-owner` is the previous owner from the
+   verified quarantine manifest. The new owner comes from the fresh candidate.
+   Custom installations can explicitly set `--identity-service`, `--mcp-service`,
+   `--provider-port` and `--mcp-port`. Never point a service at quarantine.
 
 5. Use `owner-login` on the active runtime, enroll a **new** passkey and reconnect
    every client. Check the memory workspace ID. Take and verify a fresh OAuth
@@ -156,6 +195,20 @@ This deliberately logs everyone out after disaster recovery, including the
 owner. An old snapshot cannot prove which credentials were revoked afterward.
 Changing issuer/domain is not part of this operation: restore requires the exact
 expected HTTPS origin. Domain migration needs its own owner-reviewed plan.
+
+## Acceptance test
+
+`deploy/smoke_recovery_installation.py` creates unique temporary Linux user
+services, real Pocket ID and MCP processes, and a loopback HTTPS Caddy endpoint.
+It writes synthetic messages over HTTPS, backs up memory, a registered original,
+a manual wiki file and OAuth, and creates the kit through the installer helper.
+It then removes the entire active installation from its expected location,
+restores using the offline kit, activates fresh authentication through real
+systemd, rejects old access/refresh tokens and cookies, obtains new consent,
+reads the same workspace/messages and writes again. Test services and temporary
+files are removed even on failure. The test uses local encrypted restic
+repositories; S3 backup/restore has a separate pilot check. Physical passkey
+enrollment and provisioning a replacement VM are not simulated by this test.
 
 References checked 2026-11-10:
 - [Pocket ID account recovery](https://pocket-id.org/docs/troubleshooting/account-recovery)

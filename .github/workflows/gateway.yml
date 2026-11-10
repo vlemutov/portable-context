@@ -43,3 +43,11 @@ jobs:
           PY
       - name: Recover older snapshot without reviving credentials
         run: python deploy/smoke_oauth_recovery.py --provider "$RUNNER_TEMP/pocket-id" --caddy "$PC_TEST_CADDY" --restic "$PC_TEST_RESTIC"
+      - name: Start isolated runner user service manager
+        run: |
+          sudo loginctl enable-linger "$(id -un)"
+          sudo systemctl start "user@$(id -u).service"
+          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"
+      - name: Restore complete disposable installation and reconnect over HTTPS
+        run: python deploy/smoke_recovery_installation.py --provider "$RUNNER_TEMP/pocket-id" --caddy "$PC_TEST_CADDY" --restic "$PC_TEST_RESTIC"

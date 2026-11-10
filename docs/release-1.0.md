@@ -146,9 +146,12 @@ Provider references used for this experiment:
    no public bypass, cost report including registry and secrets. Do not alter SSH.
 2. Tested maintained OAuth provider, PKCE/discovery, application capability checks
    for every MCP operation, device fallback, revocation including existing sessions.
-3. Recovery backup and fresh identity path are implemented and provider-tested.
-   Finish disposable service-cutover acceptance and integrate the owner recovery
-   kit into the new-server installer. Never restore historical credentials live.
+3. Recovery backup, fresh identity and full disposable systemd service cutover
+   are tested, including HTTPS read/write after losing the active installation.
+   The installer verifies backups and saves the offline owner kit locally;
+   a fresh-server infrastructure wizard remains separate work. Never restore
+   historical credentials live. Physical passkey recovery enrollment remains
+   a manual client check, not an assertion of the synthetic service test.
 4. Friendly repeatable install/update/status/diagnostics and existing-vs-new memory
    onboarding on Windows/macOS/Linux. No claim of a platform test without execution.
 5. First useful import, wiki evidence and cross-agent recall over the new connection;

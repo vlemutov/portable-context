@@ -1,7 +1,7 @@
 """Owner-operated OAuth backups and recovery. Never restore old credentials live.
 
 Run with the server's Python environment. All output is a receipt, never a key.
-Recovery prepares a separate, stopped identity runtime; it does not switch services.
+Recovery prepares a separate identity runtime; activation explicitly switches bound services.
 """
 import argparse
 from contextlib import closing
@@ -109,10 +109,13 @@ def configure(runtime, memory_config, config_path, repository):
         raise ValueError('Backup state must be outside the identity runtime')
     result = {k: base[k] for k in ('binary', 'password_file', 's3_config') if k in base}
     result.update(repository=repository, state=str(state), runtime=str(runtime),
-                  memory_home=base['home'], issuer=oauth.issuer, format=FORMAT)
+                  memory_home=base['home'], memory_repository=base['repository'], issuer=oauth.issuer, format=FORMAT)
     private_directory(path.parent)
-    if path.exists() and read(path) != result:
-        raise ValueError('Existing identity backup configuration differs; review migration')
+    if path.exists():
+        previous = read(path)
+        previous.setdefault('memory_repository', base['repository'])
+        if previous != result:
+            raise ValueError('Existing identity backup configuration differs; review migration')
     write(path, result)
     return {'configured': True, 'issuer': oauth.issuer, 'initialized': False,
             'next': 'Initialize the distinct repository once, then run backup and check.'}
@@ -360,11 +363,41 @@ def export_kit(config, output):
     if manager.config.get('s3_config'): files['s3-config.json'] = manager.config['s3_config']
     for name, path in files.items():
         shutil.copyfile(path, output/name); (output/name).chmod(0o600)
+    memory = None
+    db = Path(manager.config['memory_home'])/'context.sqlite3'
+    if manager.config.get('memory_repository') and db.is_file():
+        with closing(sqlite3.connect(db.as_uri()+'?mode=ro', uri=True)) as con:
+            workspace = con.execute("SELECT value FROM metadata WHERE key='workspace_id'").fetchone()[0]
+        memory = {'repository': manager.config['memory_repository'], 'workspace_id': workspace}
     write(output/'kit.json', {'format': FORMAT, 'issuer': manager.config['issuer'],
           'repository': manager.config['repository'], 'provider_version': VERSION,
+          'memory': memory,
           'files': {name: checksum(output/name) for name in files},
           'warning': 'Contains repository password and storage credentials. Keep private and outside the server.'})
     return {'created': True, 'private_directory': str(output), 'contains_secrets': True}
+
+
+def restore_memory_config(kit, config, memory_home, binary, expected_origin):
+    """Rebuild memory backup access using the same offline kit, without creating a repo."""
+    kit = Path(kit).resolve()
+    manifest = read(regular(kit/'kit.json', kit))
+    memory = manifest.get('memory')
+    if not memory or not memory.get('repository') or not memory.get('workspace_id'):
+        raise ValueError('Kit has no memory repository metadata; use a current installer kit')
+    uuid.UUID(memory['workspace_id'])
+    # Shared validation of file allowlist, hashes and issuer; temporary config is never activated.
+    with tempfile.TemporaryDirectory(prefix='kit-validate-') as tmp:
+        proof = Path(tmp)/'config.json'
+        restore_config(kit, proof, Path(tmp)/'unused', memory_home, binary, expected_origin)
+        value = read(proof)
+    config = Path(config).resolve()
+    if config.exists(): raise ValueError('Use a new memory backup configuration')
+    private_directory(config.parent)
+    value = {k: value[k] for k in ('binary', 'password_file', 's3_config') if k in value}
+    value.update(home=str(Path(memory_home).resolve()), repository=memory['repository'],
+                 state=str(private_directory(config.parent/'backup-state')))
+    write(config, value)
+    return {'configured': True, 'workspace_id': memory['workspace_id'], 'initialize_repository': False}
 
 
 def restore_config(kit, config, runtime, memory_home, binary, expected_origin):
@@ -386,6 +419,7 @@ def restore_config(kit, config, runtime, memory_home, binary, expected_origin):
              'binary': str(Path(binary).resolve()), 'password_file': str(kit/'restic-password'),
              'state': str(state), 'runtime': str(Path(runtime).resolve()), 'memory_home': str(Path(memory_home).resolve())}
     if 's3-config.json' in files: value['s3_config'] = str(kit/'s3-config.json')
+    if manifest.get('memory'): value['memory_repository'] = manifest['memory']['repository']
     write(config, value)
     return {'configured': True, 'initialize_repository': False, 'next': 'list, restore to quarantine, prepare-recovery'}
 
@@ -419,7 +453,9 @@ def install_schedule(config):
     return result
 
 
-def activate_recovery(target, backup_config, expected_owner, confirmation):
+def activate_recovery(target, backup_config, expected_owner, confirmation, *,
+                      identity_service='pc-identity.service', mcp_service='pc-mcp-http.service',
+                      mcp_port=8767, provider_port=14120, lost_runtime=False):
     """Explicit Linux owner action; resets login only, keeps memory and stdio intact.
 
     If activation fails, HTTP stays stopped. Never automatically roll back to
@@ -430,8 +466,22 @@ def activate_recovery(target, backup_config, expected_owner, confirmation):
     manager = IdentityBackups(backup_config)
     target = Path(target).resolve()
     marker = read(target/'recovery.json')
-    runtime, _, _, old = runtime_info(manager.runtime)
     candidate, env, receipt, new = runtime_info(target)
+    for unit in (identity_service, mcp_service):
+        if not re.fullmatch(r'pc-[a-zA-Z0-9_-]+\.service', unit):
+            raise ValueError('Invalid Portable Context service name')
+    if identity_service == mcp_service or any(type(p) is not int or not 1024 <= p < 65535 for p in (mcp_port, provider_port)):
+        raise ValueError('Invalid service ports or names')
+    runtime = manager.runtime
+    if lost_runtime:
+        # Disaster recovery: the previous installation must actually be absent.
+        # Never reinstall archived credentials just to satisfy an activation precondition.
+        if (runtime/'identity').exists() or (runtime/'oauth.json').exists():
+            raise ValueError('Lost-runtime recovery requires absent identity and OAuth configuration')
+        old = OAuthConfig(manager.config['issuer'], manager.config['issuer']+'/mcp',
+                          f'http://127.0.0.1:{provider_port}', expected_owner)
+    else:
+        runtime, _, _, old = runtime_info(runtime)
     if (confirmation != 'RESET ACCESS '+old.issuer or marker.get('state') != 'bootstrapped'
             or marker.get('previous_owner_subject') != expected_owner or old.owner_subject != expected_owner
             or new.owner_subject != marker.get('new_owner_subject') or new.owner_subject == expected_owner
@@ -443,12 +493,22 @@ def activate_recovery(target, backup_config, expected_owner, confirmation):
     with socket.socket() as sock:
         if sock.connect_ex(('127.0.0.1', int(env['PORT']))) == 0:
             raise ValueError('Stop the candidate identity process before activation')
-    manager.backup()
+    # Verify systemd really points at this installation before stopping anything.
+    for unit, required in ((identity_service, str(runtime/'identity/run.py')),
+                           (mcp_service, str(runtime/'oauth.json'))):
+        shown = subprocess.run(['systemctl', '--user', 'show', unit, '--property=ExecStart', '--value'],
+                               check=True, capture_output=True, text=True).stdout
+        if required not in shown:
+            raise ValueError('Service is not bound to this recovery runtime')
+    if lost_runtime:
+        private_directory(runtime)
+    else:
+        manager.backup()
     with file_lock(manager.state/'recovery.lock'):
         def service(*args):
             return subprocess.run(['systemctl', '--user', *args], check=True, capture_output=True)
-        service('stop', 'pc-mcp-http.service')
-        service('stop', 'pc-identity.service')
+        service('stop', mcp_service)
+        service('stop', identity_service)
         generation = uuid.uuid4().hex
         pending = runtime/('identity-pending-'+generation)
         retired = runtime/('identity-retired-'+generation)
@@ -458,11 +518,11 @@ def activate_recovery(target, backup_config, expected_owner, confirmation):
             port = int(old.provider_origin.rsplit(':', 1)[1])
             env['PORT'] = str(port); env['ACTORS_PORT'] = str(port+1)
             write(pending/'environment.json', env)
-            (runtime/'identity').rename(retired)
+            if not lost_runtime: (runtime/'identity').rename(retired)
             pending.rename(runtime/'identity')
             write(runtime/'oauth.json', {'issuer': new.issuer, 'resource': new.resource,
                   'provider_origin': old.provider_origin, 'owner_subject': new.owner_subject})
-            service('start', 'pc-identity.service')
+            service('start', identity_service)
             api = Bootstrap(port, env['STATIC_API_KEY'])
             for _ in range(100):
                 try:
@@ -471,14 +531,14 @@ def activate_recovery(target, backup_config, expected_owner, confirmation):
                     break
                 except (OSError, RuntimeError): time.sleep(.1)
             else: raise ValueError('Recovered identity did not become ready')
-            service('start', 'pc-mcp-http.service')
+            service('start', mcp_service)
             # systemctl active does not mean Python has finished opening the memory.
             ready = False
             host = urlsplit(old.issuer).netloc
             opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
             for _ in range(180):
                 try:
-                    req = urllib.request.Request('http://127.0.0.1:8767/.well-known/oauth-protected-resource/mcp', headers={'Host': host})
+                    req = urllib.request.Request(f'http://127.0.0.1:{mcp_port}/.well-known/oauth-protected-resource/mcp', headers={'Host': host})
                     with opener.open(req, timeout=2) as response:
                         metadata = json.load(response)
                     if metadata.get('authorization_servers') == [new.issuer]: ready = True; break
@@ -490,7 +550,7 @@ def activate_recovery(target, backup_config, expected_owner, confirmation):
             write(manager.state/'activation.json', result)
             return result
         except Exception:
-            subprocess.run(['systemctl', '--user', 'stop', 'pc-mcp-http.service'], capture_output=True)
+            subprocess.run(['systemctl', '--user', 'stop', mcp_service], capture_output=True)
             write(manager.state/'activation-failed.json', {'generation': generation, 'http_stopped': True, 'at': now()})
             raise
 
@@ -513,8 +573,15 @@ def main():
     p = sub.add_parser('export-kit'); p.add_argument('--config', required=True); p.add_argument('--output', required=True)
     p = sub.add_parser('restore-config')
     for name in ('kit', 'config', 'runtime', 'memory-home', 'binary', 'expected-origin'): p.add_argument('--'+name, required=True)
+    p = sub.add_parser('restore-memory-config')
+    for name in ('kit', 'config', 'memory-home', 'binary', 'expected-origin'): p.add_argument('--'+name, required=True)
     p = sub.add_parser('activate-recovery')
     for name in ('target', 'config', 'expected-owner', 'confirm'): p.add_argument('--'+name, required=True)
+    p.add_argument('--identity-service', default='pc-identity.service')
+    p.add_argument('--mcp-service', default='pc-mcp-http.service')
+    p.add_argument('--mcp-port', type=int, default=8767)
+    p.add_argument('--provider-port', type=int, default=14120)
+    p.add_argument('--lost-runtime', action='store_true')
     args = parser.parse_args()
     if args.command == 'configure': result = configure(args.runtime, args.memory_config, args.config, args.repository)
     elif args.command == 'prepare-recovery': result = prepare_recovery(args.quarantine, args.target, args.binary, args.expected_origin, args.port)
@@ -523,7 +590,10 @@ def main():
     elif args.command == 'schedule': result = install_schedule(args.config)
     elif args.command == 'export-kit': result = export_kit(args.config, args.output)
     elif args.command == 'restore-config': result = restore_config(args.kit, args.config, args.runtime, args.memory_home, args.binary, args.expected_origin)
-    elif args.command == 'activate-recovery': result = activate_recovery(args.target, args.config, args.expected_owner, args.confirm)
+    elif args.command == 'restore-memory-config': result = restore_memory_config(args.kit, args.config, args.memory_home, args.binary, args.expected_origin)
+    elif args.command == 'activate-recovery': result = activate_recovery(args.target, args.config, args.expected_owner, args.confirm,
+        identity_service=args.identity_service, mcp_service=args.mcp_service, mcp_port=args.mcp_port,
+        provider_port=args.provider_port, lost_runtime=args.lost_runtime)
     else:
         manager = IdentityBackups(args.config)
         try:

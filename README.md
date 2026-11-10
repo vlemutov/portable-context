@@ -278,6 +278,14 @@ version is a deployment task. No native integration is claimed tested in this re
 
 ## Portability and recovery
 
+For HTTPS/OAuth installations, the local installer also verifies a separate
+identity backup and saves a private offline recovery kit on your computer.
+After enabling OAuth, run `python deploy/setup.py --state /PRIVATE/deployment recovery-kit`.
+The kit includes memory/identity repository locations, the encryption password and
+S3 credentials; keep a protected copy outside both server and computer. Never
+paste it into an agent chat. See [OAuth recovery](docs/oauth-recovery.md) for lost
+passkeys, server loss, and fresh login after restoration.
+
 ```sh
 portable-context --home /private/memory export /private/current-events.jsonl
 portable-context --home /private/memory export /private/all-revisions.jsonl --revisions

@@ -151,6 +151,8 @@ class RecoveryTests(unittest.TestCase):
         real_run = recovery.subprocess.run
         def service(args, **kwargs):
             if args[0] != "systemctl": return real_run(args, **kwargs)
+            if args[2] == 'show':
+                return subprocess.CompletedProcess(args,0,stdout=str(self.runtime/'identity/run.py')+' '+str(self.runtime/'oauth.json'))
             calls.append(args[2:])
             if args[2:] == ['start','pc-identity.service']:
                 raise subprocess.CalledProcessError(1,args)
@@ -166,4 +168,12 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(recovery.read(self.runtime/'identity/environment.json')['ENCRYPTION_KEY'],'fresh-secret')
         self.assertTrue(list(self.runtime.glob('identity-retired-*')))
         self.assertTrue(recovery.read(self.manager.state/'activation-failed.json')['http_stopped'])
+
+    def test_lost_runtime_never_replaces_an_existing_identity(self):
+        target = self.root/'candidate'; target.mkdir()
+        recovery.write(target/'recovery.json', {'state':'bootstrapped'})
+        with patch('sys.platform','linux'), patch.object(recovery,'runtime_info',return_value=recovery.runtime_info(self.runtime)):
+            with self.assertRaisesRegex(ValueError,'requires absent'):
+                recovery.activate_recovery(target,self.config,self.owner,'RESET ACCESS '+self.origin,lost_runtime=True)
+        self.assertTrue((self.runtime/'identity/data/pocket-id.db').is_file())
 
