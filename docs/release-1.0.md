@@ -24,10 +24,14 @@ create/update/read/archive over HTTPS on 2026-11-10.
   The fresh provider rejected old access/refresh tokens and browser cookies,
   generated different signing keys, omitted a deleted historical passkey record,
   and accepted the new owner's one-time login.
-- Live identity replacement was deliberately not performed on the owner's
-  working memory. Activation failure is tested with mocked service management;
-  a complete service cutover drill on a disposable installation remains part of
-  the coordinated lifecycle/installer gate.
+- A complete disposable installation passed HTTPS writes, loss of the entire
+  active directory, restoration from the offline kit, real systemd cutover,
+  fresh consent, old-token rejection and new HTTPS reads/writes. Originals and
+  a manual wiki file survived. This also passed the Linux GitHub CI job.
+  Live identity replacement was not performed on the owner's working memory;
+  physical passkey enrollment remains a separate browser acceptance check.
+- The installer handed off a verified offline kit on the pilot over SSH;
+  its second run reused the kit. Credentials never appeared in command output.
 - An MCP restart exposed a readiness gap: systemd can report `active` before MCP
   accepts connections. Recovery activation now waits for protected-resource
   metadata. General updates still need coordinated readiness and client retry.
@@ -126,13 +130,12 @@ Observed with a registered public client and an explicit API resource:
   with an HTTP localhost application URL. The experiment trusted its generated
   localhost certificate explicitly; TLS verification was not disabled.
 
-This is evidence for continuing the evaluation, not a final provider selection
-or a claim of supported Claude/ChatGPT/Codex OAuth connections. Remaining tests
-include invalid PKCE and code replay, real client registration/discovery,
-per-operation read/write/admin enforcement, owner enrollment/recovery and
-revocation across active MCP requests. Synthetic setup used an administrative
-API key and a one-time login; production must not expose a reusable bootstrap
-key or rely on the first public visitor becoming the owner.
+This section records the early experiment. Subsequent preview tests verified
+invalid PKCE/code replay rejection, per-operation capabilities, recovery and
+revocation; the personal Codex browser connection also passed. It is not evidence
+of compatibility with every other client. Synthetic setup used a private API
+key and one-time login; production must not expose a reusable bootstrap key or
+rely on the first public visitor becoming the owner.
 
 Provider references used for this experiment:
 - https://github.com/pocket-id/pocket-id/tree/v2.19.2
@@ -141,21 +144,33 @@ Provider references used for this experiment:
 
 ## Remaining 1.0 gates
 
-1. Real Cloud.ru test: stable HTTPS URL through revision update/restart, unprivileged
-   execution, streaming, 1 MiB capture chunks, timeouts, cold starts, mTLS to VM,
-   no public bypass, cost report including registry and secrets. Do not alter SSH.
-2. Tested maintained OAuth provider, PKCE/discovery, application capability checks
-   for every MCP operation, device fallback, revocation including existing sessions.
-3. Recovery backup, fresh identity and full disposable systemd service cutover
-   are tested, including HTTPS read/write after losing the active installation.
-   The installer verifies backups and saves the offline owner kit locally;
-   a fresh-server infrastructure wizard remains separate work. Never restore
-   historical credentials live. Physical passkey recovery enrollment remains
-   a manual client check, not an assertion of the synthetic service test.
-4. Friendly repeatable install/update/status/diagnostics and existing-vs-new memory
-   onboarding on Windows/macOS/Linux. No claim of a platform test without execution.
-5. First useful import, wiki evidence and cross-agent recall over the new connection;
-   old SSH path remains recoverable until the replacement is verified.
+1. All current CI matrices must pass. At `ba052c2` deployment and gateway passed;
+   one mocked activation test failed on Windows/macOS because its temporary path
+   was unresolved. The fixture correction must pass the whole matrix before release.
+2. Automatic mTLS certificate renewal: overlapping trust, edge/VM rollout,
+   readiness, interrupted-rotation recovery and expiry diagnostics. Certificates
+   currently expire within 90 days; generating them once is not sufficient.
+3. One reproducible HTTPS/OAuth install/update flow, replacing pilot-only scripts:
+   private owner enrollment, client configuration, recovery kit, coordinated service
+   stop/start and actual readiness, safe retry of interrupted operations, and useful
+   diagnostics. Exercise a clean installation, an existing-memory upgrade and a
+   network change from supported Windows/macOS/Linux clients. Explain replacement-VM
+   recovery and actual Cloud.ru costs, including registry and secrets.
+4. Public client compatibility and an actual cross-agent memory journey: selected
+   capture with files over HTTPS, interruption/resume, duplicate-free reimport,
+   cited wiki enrichment, then recall by another supported agent. Validate actual
+   callback/registration, consent, refresh and revocation for each advertised client.
+   Add a browser check for fresh passkey enrollment after recovery; protocol tests
+   do not substitute for it. Do not claim untested web clients are supported.
+5. Release packaging: consistent 1.0 versions and skill recommendations, current
+   START-HERE/onboarding instructions, supported-platform/client matrix, changelog,
+   pinned release artifacts and upgrade/rollback instructions. Merge/tag only after
+   the acceptance gates pass; keep the SSH recovery path available.
+
+Already closed: basic HTTPS/mTLS transport (stable provider URL, streaming and
+approximately 1 MiB binary probe), Codex OAuth read/write, separate S3 identity
+backup/restore, fresh identity recovery, disposable full service cutover and
+private installer kit handoff. These need regression coverage, not reinvention.
 
 Sources checked 2026-11-09:
 - https://cloud.ru/docs/container-apps-evolution/ug/topics/guides__container-create

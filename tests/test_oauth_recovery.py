@@ -152,7 +152,10 @@ class RecoveryTests(unittest.TestCase):
         def service(args, **kwargs):
             if args[0] != "systemctl": return real_run(args, **kwargs)
             if args[2] == 'show':
-                return subprocess.CompletedProcess(args,0,stdout=str(self.runtime/'identity/run.py')+' '+str(self.runtime/'oauth.json'))
+                # Runtime paths are resolved before querying systemd. Temporary
+                # roots may be aliases (/var -> /private/var, Windows short names).
+                runtime = self.runtime.resolve()
+                return subprocess.CompletedProcess(args,0,stdout=str(runtime/'identity/run.py')+' '+str(runtime/'oauth.json'))
             calls.append(args[2:])
             if args[2:] == ['start','pc-identity.service']:
                 raise subprocess.CalledProcessError(1,args)

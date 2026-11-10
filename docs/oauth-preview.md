@@ -139,9 +139,10 @@ Recovery was exercised against real Pocket ID and restic, including a snapshot
 taken before revocation, new signing keys, and rejection of old sessions after
 recovery. A separate S3 identity backup and full restore passed on the pilot VM.
 
-Release gates remain: disposable full service cutover, automated
-certificate rotation, reproducible setup/update, full capture/wiki over HTTPS
-and the published client compatibility matrix.
+Disposable full service cutover and installer kit handoff have also passed.
+Release gates remain: automated certificate rotation, reproducible HTTPS/OAuth
+setup/update, full capture/wiki over HTTPS, browser recovery enrollment and the
+published client compatibility matrix. See the current [release gates](release-1.0.md).
 
 References checked 2026-11-10:
 - [MCP authorization](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization)
