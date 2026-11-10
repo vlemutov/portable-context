@@ -33,11 +33,12 @@ def _path(directory, name):
     return json.dumps((Path(directory) / name).as_posix())
 
 
-def edge_config(public_host, origin_ip, secrets='/tmp/pc-edge', listen_port=8080, origin_port=9443):
+def edge_config(public_host, origin_ip, secrets='/tmp/pc-edge', listen_port=8080, origin_port=9443, revision=None):
     """The destination is fixed by the owner, never by an HTTP header or URL."""
     public_host = hostname(public_host)
     address = ipaddress.ip_address(origin_ip)
     address = '[' + str(address) + ']' if address.version == 6 else str(address)
+    stamp = '' if revision is None else 'header X-PC-Edge-Revision '+rotation_revision(revision)
     return f'''{{
     admin off
     auto_https off
@@ -47,6 +48,7 @@ def edge_config(public_host, origin_ip, secrets='/tmp/pc-edge', listen_port=8080
     }}
 }}
 :{port(listen_port)} {{
+    {stamp}
     @health path /_pc/health
     handle @health {{
         respond "edge alive; not a memory readiness check" 200
@@ -82,7 +84,13 @@ def edge_config(public_host, origin_ip, secrets='/tmp/pc-edge', listen_port=8080
 '''
 
 
-def origin_config(public_host, secrets, listen_port=9443, application_port=8766, identity_port=None):
+def rotation_revision(value):
+    if not re.fullmatch(r'[a-zA-Z0-9_-]{1,80}', value):
+        raise ValueError('Invalid rotation revision')
+    return value
+
+
+def origin_config(public_host, secrets, listen_port=9443, application_port=8766, identity_port=None, revision=None):
     public_host = hostname(public_host)
     def proxy(target):
         return f'''reverse_proxy 127.0.0.1:{port(target)} {{
@@ -98,6 +106,7 @@ def origin_config(public_host, secrets, listen_port=9443, application_port=8766,
             header_up -X-API-Key
         }}'''
     backend = proxy(application_port)
+    transport = ''
     if identity_port is not None:
         if port(identity_port) == port(application_port):
             raise ValueError('Identity and MCP services must use distinct loopback ports')
@@ -112,6 +121,12 @@ def origin_config(public_host, secrets, listen_port=9443, application_port=8766,
                 {proxy(identity_port)}
             }}
         }}'''
+    if revision is not None:
+        transport = f'''@transport path /_pc/transport
+        handle @transport {{
+            respond "{rotation_revision(revision)}" 200
+        }}'''
+        backend = 'handle {\n'+backend+'\n}'
     return f'''{{
     admin off
     auto_https off
@@ -129,6 +144,7 @@ https://:{port(listen_port)} {{
     }}
     @public host {public_host}
     handle @public {{
+        {transport}
         request_body {{
             max_size 16MB
         }}

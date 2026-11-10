@@ -74,7 +74,10 @@ MCP while implementing this transport. Probe the gateway with synthetic data fir
   transcripts. Health probe reports only process liveness, not memory readiness.
 
 Private key generations have at most 90-day validity. **Automatic rotation and
-restart/overlap recovery are a release gate**, not implemented by `prepare`.
+restart/overlap recovery are implemented in the journaled rotation controller**;
+see [certificate renewal](certificate-renewal.md). Real Caddy tests kill the
+controller at every stage while requests continue. Cloud publication has its own
+live acceptance; `gateway.py prepare` alone still does not install renewal.
 Never overwrite a live key generation during a repeated installation.
 
 ## Prototype evidence (2026-11-10)
@@ -144,12 +147,13 @@ Provider references used for this experiment:
 
 ## Remaining 1.0 gates
 
-1. All current CI matrices must pass. At `ba052c2` deployment and gateway passed;
-   one mocked activation test failed on Windows/macOS because its temporary path
-   was unresolved. The fixture correction must pass the whole matrix before release.
-2. Automatic mTLS certificate renewal: overlapping trust, edge/VM rollout,
-   readiness, interrupted-rotation recovery and expiry diagnostics. Certificates
-   currently expire within 90 days; generating them once is not sufficient.
+1. All current CI matrices must pass. The path fixture correction at `a4ed412`
+   passed every test/deployment/gateway matrix. Repeat the checks for the renewal
+   controller and complete the real Cloud.ru publication acceptance.
+2. Automatic mTLS renewal is implemented with overlap, readiness, durable stages,
+   interrupted-controller recovery, expiry diagnostics and a VM timer. Keep its
+   acceptance coverage and include its private configuration in coordinated
+   installation/update/recovery instructions.
 3. One reproducible HTTPS/OAuth install/update flow, replacing pilot-only scripts:
    private owner enrollment, client configuration, recovery kit, coordinated service
    stop/start and actual readiness, safe retry of interrupted operations, and useful

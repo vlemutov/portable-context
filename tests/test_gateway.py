@@ -115,7 +115,7 @@ class GatewayIntegrationTests(unittest.TestCase):
         cls.origin_port = free_port()
         cls.edge_port = free_port()
         origin = gateway.origin_config('memory.example', cls.secrets, cls.origin_port, cls.app.server_port,
-                                       identity_port=identity_port)
+                                       identity_port=identity_port, revision='origin-test')
         edge = gateway.edge_config('memory.example', '127.0.0.1', cls.secrets, cls.edge_port, cls.origin_port)
         for name, config, listener in [('origin', origin, cls.origin_port), ('edge', edge, cls.edge_port)]:
             path = cls.root / (name + '.Caddyfile')
@@ -153,6 +153,11 @@ class GatewayIntegrationTests(unittest.TestCase):
         status, _, body = self.request('/mcp', headers={'Authorization': 'Bearer test-credential'})
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body)['Authorization'], 'Bearer test-credential')
+
+    def test_rotation_probe_precedes_identity_and_application_routes(self):
+        status, _, body = self.request('/_pc/transport')
+        self.assertEqual(status, 200)
+        self.assertEqual(body, b'origin-test')
 
     def test_drops_spoofed_proxy_headers(self):
         status, _, body = self.request('/headers', headers={'Forwarded': 'host=evil', 'X-Forwarded-For': '1.2.3.4',

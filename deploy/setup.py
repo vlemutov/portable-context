@@ -511,6 +511,9 @@ def main(argv=None):
     p = sub.add_parser('recovery-kit', help='Verify OAuth backups and save an offline secret kit locally')
     p.add_argument('--runtime', help='Explicit OAuth runtime directory on the server, if detection is ambiguous')
     p.add_argument('--output', type=Path, help='New private local directory; defaults inside --state')
+    p = sub.add_parser('rotation-setup', help='Install automatic mTLS renewal on the owner VM')
+    p.add_argument('--config', type=Path, required=True, help='Reviewed non-secret Cloud.ru edge identifiers')
+    p.add_argument('--generation', type=Path, required=True, help='Private current certificate generation')
     sub.add_parser('check')
     p=sub.add_parser('restore'); group=p.add_mutually_exclusive_group(required=True)
     group.add_argument('--snapshot'); group.add_argument('--archive',help='Existing ZIP path on the server'); p.add_argument('--target',required=True)
@@ -566,6 +569,9 @@ def main(argv=None):
         result = install(state)
     elif args.command == 'recovery-kit':
         result = recovery_kit(state,args.runtime,args.output)
+    elif args.command == 'rotation-setup':
+        from rotation_setup import install as install_rotation
+        result = install_rotation(state,args.config,args.generation)
     elif args.command in ('restore','activate','cleanup','cleanup-s3'):
         result=maintenance(state,args)
     else:

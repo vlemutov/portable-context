@@ -51,3 +51,5 @@ jobs:
           echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"
       - name: Restore complete disposable installation and reconnect over HTTPS
         run: python deploy/smoke_recovery_installation.py --provider "$RUNNER_TEMP/pocket-id" --caddy "$PC_TEST_CADDY" --restic "$PC_TEST_RESTIC"
+      - name: Rotate mTLS while killing the controller at every stage
+        run: python deploy/smoke_gateway_rotation.py --caddy "$PC_TEST_CADDY"

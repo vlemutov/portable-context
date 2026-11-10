@@ -26,6 +26,12 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+class CloudAPIError(RuntimeError):
+    def __init__(self, status, method):
+        self.status = status
+        super().__init__(f'Cloud API HTTP {status}; operation {method}; response body suppressed')
+
+
 class CloudAPI:
     def __init__(self, state, project_id):
         from setup import command_env
@@ -45,7 +51,7 @@ class CloudAPI:
                 raw = response.read()
                 return json.loads(raw) if raw else {}
         except urllib.error.HTTPError as error:
-            raise RuntimeError(f'Cloud API HTTP {error.code}; operation {method}; response body suppressed') from None
+            raise CloudAPIError(error.code, method) from None
 
     def request(self, service, path, *, method='GET', body=None, query=None):
         if not path.startswith('/') or path.startswith('//') or '?' in path or '#' in path:
