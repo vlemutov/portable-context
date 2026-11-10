@@ -63,6 +63,7 @@ class GatewayInputTests(unittest.TestCase):
 
 @unittest.skipUnless(os.environ.get('PC_TEST_CADDY'), 'Set PC_TEST_CADDY to a checksum-verified Caddy binary')
 class GatewayIntegrationTests(unittest.TestCase):
+    identity_enabled = False
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
@@ -87,6 +88,7 @@ class GatewayIntegrationTests(unittest.TestCase):
                     self.end_headers()
                     return
                 self.send_response(200)
+                self.send_header('X-Test-Backend', str(self.server.server_port))
                 self.end_headers()
                 self.wfile.write(json.dumps(dict(self.headers)).encode())
 
@@ -97,6 +99,13 @@ class GatewayIntegrationTests(unittest.TestCase):
         cls.addClassCleanup(cls.app.server_close)
         threading.Thread(target=cls.app.serve_forever, daemon=True).start()
         cls.addClassCleanup(cls.app.shutdown)
+        identity_port = None
+        if cls.identity_enabled:
+            cls.identity = ThreadingHTTPServer(('127.0.0.1', 0), Application)
+            cls.addClassCleanup(cls.identity.server_close)
+            threading.Thread(target=cls.identity.serve_forever, daemon=True).start()
+            cls.addClassCleanup(cls.identity.shutdown)
+            identity_port = cls.identity.server_port
 
         def free_port():
             with socket.socket() as sock:
@@ -105,7 +114,8 @@ class GatewayIntegrationTests(unittest.TestCase):
 
         cls.origin_port = free_port()
         cls.edge_port = free_port()
-        origin = gateway.origin_config('memory.example', cls.secrets, cls.origin_port, cls.app.server_port)
+        origin = gateway.origin_config('memory.example', cls.secrets, cls.origin_port, cls.app.server_port,
+                                       identity_port=identity_port)
         edge = gateway.edge_config('memory.example', '127.0.0.1', cls.secrets, cls.edge_port, cls.origin_port)
         for name, config, listener in [('origin', origin, cls.origin_port), ('edge', edge, cls.edge_port)]:
             path = cls.root / (name + '.Caddyfile')
@@ -176,6 +186,23 @@ class GatewayIntegrationTests(unittest.TestCase):
                         conn.sendall(b'GET / HTTP/1.1\r\nHost: memory.example\r\nConnection: close\r\n\r\n')
                         if not conn.recv(1024):
                             raise ConnectionError('TLS rejected')
+
+
+class OAuthGatewayIntegrationTests(GatewayIntegrationTests):
+    identity_enabled = True
+
+    def test_identity_routing_blocks_public_setup_and_bootstrap_keys(self):
+        for path in ['/authorize', '/.well-known/openid-configuration', '/api/oidc/token']:
+            status, headers, body = self.request(path, headers={'X-API-Key': 'must-never-reach-provider'})
+            self.assertEqual(status, 200)
+            self.assertEqual(headers['X-Test-Backend'], str(self.identity.server_port))
+            self.assertNotIn('must-never-reach-provider', body.decode())
+        status, headers, _ = self.request('/.well-known/oauth-protected-resource/mcp')
+        self.assertEqual(status, 200)
+        self.assertEqual(headers['X-Test-Backend'], str(self.app.server_port))
+        for path in ['/setup', '/api/signup', '/api/signup/setup']:
+            self.assertEqual(self.request(path)[0], 404)
+            self.assertEqual(self.request(path, method='POST', body=b'{}')[0], 404)
 
 
 if __name__ == '__main__':

@@ -3,6 +3,10 @@
 Status: in development. The production memory remains on 0.9.0. Do not advertise
 OAuth or the new HTTPS installation as released until the acceptance gates pass.
 
+OAuth resource-server code and per-operation capabilities are now implemented in
+the branch; see [the OAuth preview contract](oauth-preview.md). Production
+activation and real browser/client enrollment are separate acceptance steps.
+
 ## Agreed deployment
 
 The owner does not have to buy a domain. For Cloud.ru, evaluate its managed

@@ -82,8 +82,36 @@ def edge_config(public_host, origin_ip, secrets='/tmp/pc-edge', listen_port=8080
 '''
 
 
-def origin_config(public_host, secrets, listen_port=9443, application_port=8766):
+def origin_config(public_host, secrets, listen_port=9443, application_port=8766, identity_port=None):
     public_host = hostname(public_host)
+    def proxy(target):
+        return f'''reverse_proxy 127.0.0.1:{port(target)} {{
+            flush_interval -1
+            header_up Host {public_host}
+            header_up X-Forwarded-Host {public_host}
+            header_up X-Forwarded-Proto https
+            header_up -X-Forwarded-For
+            header_up -Forwarded
+            header_up -X-Real-IP
+            header_up -X-Forwarded-Port
+            header_up -X-Forwarded-Prefix
+            header_up -X-API-Key
+        }}'''
+    backend = proxy(application_port)
+    if identity_port is not None:
+        if port(identity_port) == port(application_port):
+            raise ValueError('Identity and MCP services must use distinct loopback ports')
+        backend = f'''route {{
+            @setup path /api/signup /api/signup/* /setup /setup/*
+            respond @setup 404
+            @mcp path /mcp /mcp/* /.well-known/oauth-protected-resource/mcp
+            handle @mcp {{
+                {proxy(application_port)}
+            }}
+            handle {{
+                {proxy(identity_port)}
+            }}
+        }}'''
     return f'''{{
     admin off
     auto_https off
@@ -104,17 +132,7 @@ https://:{port(listen_port)} {{
         request_body {{
             max_size 16MB
         }}
-        reverse_proxy 127.0.0.1:{port(application_port)} {{
-            flush_interval -1
-            header_up Host {public_host}
-            header_up X-Forwarded-Host {public_host}
-            header_up X-Forwarded-Proto https
-            header_up -X-Forwarded-For
-            header_up -Forwarded
-            header_up -X-Real-IP
-            header_up -X-Forwarded-Port
-            header_up -X-Forwarded-Prefix
-        }}
+        {backend}
     }}
     respond 404
 }}
