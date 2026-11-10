@@ -77,6 +77,15 @@ from environment variables require `UI_CONFIG_DISABLED=true`; merely setting
 Disable open signup and create the owner before public routing. The gateway also
 blocks public initial signup and strips `X-API-Key` before forwarding.
 
+For first owner enrollment, use `Bootstrap.create_owner_login_code(owner_subject)`
+through private loopback and show the result only in a private local handoff.
+Pocket ID v2.19.2 returns a six-character code for its default 15-minute TTL,
+while its login form requires twelve characters when anonymous email login is
+disabled. The helper requests a 20-minute code and validates its format before
+handoff. Keep the code out of URLs, logs, chat and Git. Browser enrollment must
+be checked separately from API token exchange: protocol tests alone miss this UI
+constraint. Expired codes require a new private handoff.
+
 Bootstrap creates separate public PKCE clients `portable-context-desktop` and
 `portable-context-admin`. The desktop client can request read/write only. Both
 require consent, use a 10-minute access-token lifetime, and have the exact callback

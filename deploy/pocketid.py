@@ -10,6 +10,7 @@ import urllib.request
 
 VERSION = '2.19.2'
 LINUX_AMD64_SHA256 = '85881ea87d78710c34f127b2d849d27dd7e69963723d9e590f66de26e87fc4fb'
+OWNER_CODE_TTL = '20m'
 PERMISSIONS = {'memory:read': 'Read memory', 'memory:write': 'Import and enrich memory',
                'memory:admin': 'Administer memory and server sources'}
 
@@ -39,6 +40,22 @@ class Bootstrap:
                 return json.loads(body) if body else {}
         except urllib.error.HTTPError as error:
             raise RuntimeError(f'Pocket ID bootstrap HTTP {error.code}; response suppressed') from None
+
+    def create_owner_login_code(self, owner_subject):
+        """Return a code accepted by v2.19.2's no-email login form.
+
+        TTLs <=15m produce six characters, but the form requires twelve when
+        anonymous email login is disabled. Keep email login disabled and request
+        a bounded 20m code; validate before handing it to the owner.
+        """
+        from uuid import UUID
+        owner = str(UUID(owner_subject))
+        result = self.request('/api/users/'+owner+'/one-time-access-token',
+                              {'ttl': OWNER_CODE_TTL})
+        code = result.get('token')
+        if not isinstance(code, str) or len(code) != 12 or not code.isascii() or not code.isalnum():
+            raise RuntimeError('Provider returned an incompatible owner login code; value suppressed')
+        return code
 
     def configure(self, origin, receipt_path):
         """Create an owner and explicit grants, retaining IDs for repeatable setup.
