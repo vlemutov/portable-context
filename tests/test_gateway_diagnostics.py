@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -12,6 +13,18 @@ import gateway_diagnostics as diagnostics
 
 
 class DiagnosticsTests(unittest.TestCase):
+    def test_vm_probes_run_with_only_standard_library(self):
+        from gateway import issue_credentials
+        import gateway_rotation
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);issue_credentials(root/'seed','memory.example')
+            gateway_rotation.initialize(root/'state',{'public_host':'memory.example','origin_port':1,'application_port':1},root/'seed')
+            source=str(Path(__file__).resolve().parents[1]/'deploy')
+            code="import sys,json;sys.path.insert(0,sys.argv[1]);from gateway_diagnostics import monitor;print(json.dumps(monitor('https://memory.example',sys.argv[3],1,.5,sys.argv[2])))"
+            result=subprocess.run([sys.executable,'-I','-S','-c',code,source,str(root/'state'),str(root/'trace.jsonl')],capture_output=True,text=True,timeout=15)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertEqual(set(json.loads(result.stdout)['probes']),{'vm-origin:transport','vm-mcp:metadata'})
+
     def test_probe_keeps_status_and_markers_but_discards_payload_headers_and_exception_text(self):
         calls = []
         class Handler(BaseHTTPRequestHandler):

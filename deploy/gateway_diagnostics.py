@@ -128,7 +128,8 @@ class Trace:
 
 
 def vm_context(state):
-    from gateway_rotation import read, rotation_revision
+    from gateway import rotation_revision
+    def read(path): return json.loads(Path(path).read_text(encoding='utf-8'))
     state = Path(state);active = read(state/'active.json')['generation']
     journal = read(state/'rotation.json') if (state/'rotation.json').exists() else None
     names = [active];client = active
@@ -154,8 +155,7 @@ def monitor(public_origin, output, seconds, interval=1, state=None, stop=None):
     deadline = time.monotonic()+seconds
     config = None
     if state:
-        from gateway_rotation import read
-        config = read(Path(state)/'config.json')
+        config = json.loads((Path(state)/'config.json').read_text(encoding='utf-8'))
         if config['public_host'] != host: raise ValueError('Controller belongs to another host')
     trace = Trace(output)
     targets = [('public', k) for k in PATHS] if not state else [('vm-origin', 'transport'), ('vm-mcp', 'metadata')]
