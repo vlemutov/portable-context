@@ -215,7 +215,10 @@ def install_locked(state,config):
     if verified_registry.get('name')!=reg['name'] or verified_registry.get('isPublic'):
         raise ValueError('Recorded private registry changed')
     def image(intent):
-        if config.get('image'):return {'image':config['image']}
+        if config.get('image'):
+            if not config['image'].startswith(reg['name']+'.cr.cloud.ru/'):
+                raise ValueError('Image must belong to the reviewed private registry')
+            return {'image':config['image']}
         from edge_tools import install as tool
         crane=tool('crane',state/'tools');host=reg['name']+'.cr.cloud.ru';target=host+'/edge-runtime:caddy-2.11.9'
         values=command_env(state)
@@ -315,3 +318,21 @@ def install_locked(state,config):
         handoff=owner_login(state);save(state/'owner-enrollment.json',handoff)
     journal.value['stage']='complete';journal.save()
     return {**receipt,'client_config':str(state/'client-https.json'),'owner_login':str(state/'owner-enrollment.json')}
+
+
+def reconcile(state,stage,resource_id):
+    """Explicit adoption after an ambiguous CREATE; never create/delete resources."""
+    state=Path(state);review=approved_plan(state,None);config=review['config']
+    resource_id=str(uuid.UUID(resource_id));journal=Journal(state,config)
+    intent=journal.value['intent'].get(stage,{})
+    if stage not in ('registry','container') or not intent.get('submitted') or stage in journal.value['completed']:
+        raise ValueError('No ambiguous resource creation to reconcile')
+    api=CloudAPI(state,config['project_id']);name=config['container_name']
+    if stage=='registry':
+        value=api.request('registry','/v1/registries/'+resource_id)
+        if value.get('name')!=name or value.get('isPublic') or value.get('registryType')!='DOCKER':raise ValueError('Registry does not match reviewed intent')
+    else:
+        value=api.request('containers','/v2/containers/'+name)
+        if value['id']!=resource_id or value.get('projectId')!=config['project_id']:raise ValueError('Container does not match reviewed intent')
+    intent['resource_id']=resource_id;journal.save()
+    return {'reconciled':stage,'resource_id':resource_id,'next':'Repeat install --https with the same state'}

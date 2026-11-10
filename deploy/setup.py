@@ -521,6 +521,9 @@ def main(argv=None):
     p.add_argument('--file',type=Path,help='Optional non-secret edge options')
     sub.add_parser('owner-login',help='Write a new private one-time owner enrollment code locally')
     sub.add_parser('https-check',help='Check public authentication boundary and server identity')
+    p=sub.add_parser('https-reconcile',help='Record an explicitly reviewed resource ID after a lost creation reply')
+    p.add_argument('--stage',choices=('registry','container'),required=True)
+    p.add_argument('--resource-id',required=True)
     p = sub.add_parser('recovery-kit', help='Verify OAuth backups and save an offline secret kit locally')
     p.add_argument('--runtime', help='Explicit OAuth runtime directory on the server, if detection is ambiguous')
     p.add_argument('--output', type=Path, help='New private local directory; defaults inside --state')
@@ -598,6 +601,9 @@ def main(argv=None):
         from https_setup import check_public,remote
         receipt=read(state/'https-installed.json')
         result={'server':remote(state,'check',receipt['origin']),'public':check_public(receipt['origin'])}
+    elif args.command == 'https-reconcile':
+        from https_setup import reconcile
+        result=reconcile(state,args.stage,args.resource_id)
     elif args.command == 'recovery-kit':
         result = recovery_kit(state,args.runtime,args.output)
     elif args.command == 'rotation-setup':

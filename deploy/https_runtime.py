@@ -138,7 +138,8 @@ def start_mcp(root, manifest):
     try:return metadata(manifest)
     except Exception:
         run(['systemctl','--user','stop',manifest['mcp_service']])
-        save(root/'maintenance.json',{'operation':'https-readiness','next':'retry installer'})
+        save(root/'maintenance.json',{'operation':'https-readiness','release':(root/'current').resolve().name,
+            'checkpoint_complete':True,'next':'retry installer with the same source release'})
         raise
 
 

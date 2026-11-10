@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import ExitStack
 from unittest.mock import patch
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'deploy'))
@@ -93,6 +94,67 @@ class HTTPSSetupTests(unittest.TestCase):
         self.assertNotIn('Secret123456',json.dumps(receipt))
         self.assertEqual(json.loads(Path(receipt['private_file']).read_text()),secret)
         if os.name!='nt':self.assertEqual(Path(receipt['private_file']).stat().st_mode&0o777,0o600)
+
+    def test_lost_publication_reply_resumes_without_duplicate_resources_or_reset(self):
+        from cloud_gateway import CloudAPIError
+        from types import SimpleNamespace
+        project='00000000-0000-4000-8000-000000000001'
+        config={'project_id':project,'origin_ip':'192.0.2.4','security_group_id':project,
+            'container_name':'pc-fixture-edge'}
+        setup.save(self.root/'deployment.json',{'mode':'server','host':'192.0.2.4'})
+        setup.save(self.root/'installed.json',{'root':'/private/server','memory':{'workspace_id':'fixture'}})
+        class Cloud:
+            def __init__(self):self.registry=None;self.container=None;self.secret=None;self.calls=[];self.lose=True
+            def request(self,service,path,method='GET',body=None,query=None):
+                if method!='GET':self.calls.append((service,method,path))
+                if service=='registry':
+                    if method=='POST':
+                        self.registry={'id':'registry-id','name':config['container_name'],'status':'ACTIVE','isPublic':False,'registryType':'DOCKER'}
+                        return {'resourceId':'registry-id'}
+                    return {'registries':[]} if path=='/v1/registries' else self.registry
+                if service=='secrets':
+                    if method=='POST':self.secret={'payload':body['payload']};return {}
+                    if self.secret is None:raise CloudAPIError(404,method)
+                    return self.secret
+                if method in ('POST','PATCH'):
+                    self.container=json.loads(json.dumps(body));self.container.update(id='container-id',projectId=project,status='running')
+                    self.container['configuration']['ingress']['publicUri']='memory.example'
+                    if method=='PATCH' and self.lose:self.lose=False;raise ConnectionError('Lost PATCH reply')
+                    return {'resourceId':'container-id'}
+                if self.container is None:raise CloudAPIError(404,method)
+                return self.container
+        cloud=Cloud();commands=[]
+        def command(args,**kwargs):
+            commands.append(args)
+            return SimpleNamespace(returncode=0,stdout=('x86_64\n' if args[-1]=='uname -m' else 'sha256:'+'a'*64))
+        def remote(state,action,origin,generation=None):
+            if action=='configure':return {'runtime':'/private/server/oauth10','origin_service':'pc-gateway-origin.service'}
+            if action=='login':return {'private_login':{'code':'Secret123456','login_url':origin+'/login'}}
+            return {'workspace_id':'fixture'}
+        with ExitStack() as stack:
+            def replace(target,**kwargs):return stack.enter_context(patch(target,**kwargs))
+            memory=replace('setup.install',return_value={'workspace_id':'fixture'})
+            replace('rotation_setup.install',return_value={'schedule':{'scheduled':True}})
+            replace('setup.recovery_kit',return_value={'backup_verified':True})
+            replace('https_setup.CloudAPI',return_value=cloud)
+            replace('https_setup.remote',side_effect=remote)
+            replace('https_setup.check_public',return_value={'ready':True})
+            replace('https_setup.command_env',return_value={'AUTH_KEY_ID':'test','AUTH_SECRET':'private-key'})
+            replace('https_setup.ssh_args',return_value=['ssh','test'])
+            replace('https_setup.terraform',return_value=SimpleNamespace(stdout='{}'))
+            replace('https_setup.subprocess.run',side_effect=command)
+            replace('edge_tools.install',return_value=Path('crane'))
+            # private_directory on Windows invokes icacls; isolate that from fake subprocess.
+            def directory(path):path=Path(path);path.mkdir(parents=True,exist_ok=True);return path
+            replace('https_setup.private_directory',side_effect=directory)
+            with self.assertRaises(ConnectionError):setup.install_locked(self.root,config)
+            result=setup.install_locked(self.root,config)
+            self.assertTrue(result['installed']);self.assertEqual(result['workspace_id'],'fixture')
+            original_calls=list(cloud.calls);setup.install_locked(self.root,config)
+            self.assertEqual(cloud.calls,original_calls)
+            self.assertEqual(len(cloud.calls),4) # registry, container, secret, single PATCH
+            self.assertEqual(memory.call_count,3) # package update is not skipped by cloud receipts
+            self.assertNotIn('Secret123456',json.dumps(result));self.assertNotIn('private-key',json.dumps(result))
 
 
 if __name__=='__main__':unittest.main()
