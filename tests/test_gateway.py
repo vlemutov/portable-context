@@ -181,7 +181,15 @@ class GatewayIntegrationTests(unittest.TestCase):
 
     def test_edge_connection_failure_is_distinct_from_origin_failure(self):
         with socket.socket() as unavailable, socket.socket() as reserved:
-            unavailable.bind(('127.0.0.1', 0))  # Bound but not listening.
+            # A bound, non-listening port can silently drop SYNs on macOS,
+            # outlasting the test client timeout. Reject a real TLS handshake
+            # deterministically instead of relying on OS refusal behavior.
+            unavailable.bind(('127.0.0.1', 0));unavailable.listen();unavailable.settimeout(15)
+            def reject_handshake():
+                try:
+                    connection, _ = unavailable.accept();connection.close()
+                except OSError: pass
+            rejection = threading.Thread(target=reject_handshake);rejection.start()
             reserved.bind(('127.0.0.1', 0));listen = reserved.getsockname()[1]
             config = gateway.edge_config('memory.example', '127.0.0.1', self.secrets,
                 listen, unavailable.getsockname()[1], revision='edge-test')
@@ -207,7 +215,8 @@ class GatewayIntegrationTests(unittest.TestCase):
                     self.assertIsNone(response.getheader('X-PC-Origin-Revision'))
                     self.assertEqual(body,b'Portable Context transport error')
                 finally: conn.close()
-            finally: process.terminate();process.wait(timeout=10)
+            finally:
+                process.terminate();process.wait(timeout=10);rejection.join(timeout=16)
 
     def test_drops_spoofed_proxy_headers(self):
         status, _, body = self.request('/headers', headers={'Forwarded': 'host=evil', 'X-Forwarded-For': '1.2.3.4',
