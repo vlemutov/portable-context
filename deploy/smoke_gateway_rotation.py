@@ -100,6 +100,9 @@ def main():
         issue_credentials(root/'seed','memory.example')
         state=root/'rotation';initialize(state,config,root/'seed');seed=state/'generations/initial'
         atomic_write(Path(config['origin_config']),origin_config(config['public_host'],seed,config['origin_port'],app.server_port,revision='initial'))
+        # Enroll the initial configuration exactly as the production installer does.
+        # The controller must not bypass its external-configuration drift guard.
+        atomic_write(state/'pre-rotation-origin.Caddyfile',Path(config['origin_config']).read_text())
         atomic_write(Path(config['edge_config']),edge_config(config['public_host'],'127.0.0.1',seed,config['edge_port'],config['origin_port'],revision='initial'))
         try:
             unitpath.write_text('[Service]\nExecStart='+caddy+' run --config '+config['origin_config']+' --adapter caddyfile\nUMask=0077\nStandardOutput=null\nStandardError=null\n')
