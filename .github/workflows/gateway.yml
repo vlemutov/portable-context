@@ -18,6 +18,10 @@ jobs:
       - run: python deploy/edge_tools.py caddy --directory '${{ runner.temp }}/pc-edge-tools' --ci
       - run: python -m unittest discover -s tests -p test_gateway.py -v
   oauth-recovery:
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [recovery, rotation, installer]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -42,6 +46,7 @@ jobs:
           path.chmod(0o700)
           PY
       - name: Recover older snapshot without reviving credentials
+        if: matrix.scenario == 'recovery'
         run: python deploy/smoke_oauth_recovery.py --provider "$RUNNER_TEMP/pocket-id" --caddy "$PC_TEST_CADDY" --restic "$PC_TEST_RESTIC"
       - name: Start isolated runner user service manager
         run: |
@@ -50,8 +55,11 @@ jobs:
           echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
           echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"
       - name: Restore complete disposable installation and reconnect over HTTPS
+        if: matrix.scenario == 'recovery'
         run: python deploy/smoke_recovery_installation.py --provider "$RUNNER_TEMP/pocket-id" --caddy "$PC_TEST_CADDY" --restic "$PC_TEST_RESTIC"
       - name: Rotate mTLS while killing the controller at every stage
+        if: matrix.scenario == 'rotation'
         run: python deploy/smoke_gateway_rotation.py --caddy "$PC_TEST_CADDY"
       - name: Install HTTPS and resume a killed package update
+        if: matrix.scenario == 'installer'
         run: python deploy/smoke_https_install.py --provider "$RUNNER_TEMP/pocket-id" --caddy "$PC_TEST_CADDY" --restic "$PC_TEST_RESTIC"

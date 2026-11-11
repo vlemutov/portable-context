@@ -51,7 +51,7 @@ def install(payload, root=None):
             write(helper_root/name,text)
         sys.path.insert(0,str(helper_root))
         import https_runtime
-        https=https_runtime.describe(root)
+        https=https_runtime.update_manifest(root)
     elif any((root/name/'oauth.json').exists() for name in ('oauth','oauth10')):
         raise ValueError('HTTPS installation requires the current lifecycle-aware installer')
     maintenance=root/'maintenance.json'

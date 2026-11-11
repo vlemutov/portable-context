@@ -163,8 +163,29 @@ def remote(state, action, origin, generation=None):
     return json.loads(response.stdout)
 
 
+def connection_receipt(state):
+    """Adopt the verified endpoint of a lifecycle-updated pilot, without new identity."""
+    state=Path(state);path=state/'https-installed.json'
+    if path.exists():return read(path)
+    installed=read(state/'installed.json');endpoint=installed.get('https') or {}
+    if not endpoint.get('ready'):raise ValueError('Run update to recognize the existing HTTPS installation first')
+    origin=endpoint['origin'];local=remote(state,'check',origin);public=check_public(origin)
+    if local.get('workspace_id')!=installed['memory']['workspace_id']:raise ValueError('HTTPS memory mismatch')
+    receipt={'installed':True,'origin':origin,'mcp_url':origin+'/mcp','workspace_id':local['workspace_id'],
+        'client_id':'portable-context-desktop','callback_url':'http://127.0.0.1:14881/callback',
+        'scopes':['openid','offline_access','memory:read','memory:write'],
+        'checks':{'server':local,'public':public},'adopted_existing_installation':True}
+    save(path,receipt);save_client(state,receipt)
+    return receipt
+
+
+def save_client(state,receipt):
+    save(state/'client-https.json',{'mcpServers':{'portable-context':{'url':receipt['mcp_url']}},
+        'oauth':{k:receipt[k] for k in ('client_id','callback_url','scopes')}})
+
+
 def owner_login(state):
-    receipt=read(state/'https-installed.json');result=remote(state,'login',receipt['origin'])
+    state=Path(state);receipt=connection_receipt(state);result=remote(state,'login',receipt['origin'])
     path=state/('owner-login-'+uuid.uuid4().hex[:12]+'.json');save(path,result['private_login'])
     return {'private_file':str(path),'expires_in_minutes':20,'next':'Owner reads this private file locally, enters code and enrolls passkey. Never paste the code into chat.'}
 
@@ -201,7 +222,7 @@ def install_locked(state,config):
     def registry(intent):
         resource=config.get('registry_id') or intent.get('resource_id')
         if not resource:
-            if intent.get('submitted'):raise ValueError('Registry creation reply was lost; review the resource ID before retrying, never create another registry')
+            if intent.get('submitted'):raise ValueError('Registry creation reply was lost; use https-reconcile --stage registry --resource-id REVIEWED_ID, then retry with the same state')
             existing=api.request('registry','/v1/registries').get('registries',[])
             if any(r['name']==name for r in existing):raise ValueError('Registry name occupied; explicitly review its ID or choose another name')
             intent['submitted']=True;journal.save()
@@ -212,7 +233,7 @@ def install_locked(state,config):
         return {'id':resource,'name':value['name']}
     reg=journal.stage('registry',registry)
     verified_registry=api.request('registry','/v1/registries/'+reg['id'])
-    if verified_registry.get('name')!=reg['name'] or verified_registry.get('isPublic'):
+    if verified_registry.get('id')!=reg['id'] or verified_registry.get('name')!=reg['name'] or verified_registry.get('isPublic') or verified_registry.get('registryType')!='DOCKER':
         raise ValueError('Recorded private registry changed')
     def image(intent):
         if config.get('image'):
@@ -236,7 +257,7 @@ def install_locked(state,config):
     def container(intent):
         resource=config.get('container_id') or intent.get('resource_id')
         if not resource:
-            if intent.get('submitted'):raise ValueError('Container creation reply was lost; review the resource ID before retrying')
+            if intent.get('submitted'):raise ValueError('Container creation reply was lost; use https-reconcile --stage container --resource-id REVIEWED_ID, then retry with the same state')
             try:api.request('containers','/v2/containers/'+name)
             except CloudAPIError as error:
                 if error.status!=404:raise
@@ -248,6 +269,7 @@ def install_locked(state,config):
             resource=operation['resourceId'];intent['resource_id']=resource;journal.save()
         value=wait_for(lambda:api.request('containers','/v2/containers/'+name),lambda v:v.get('status')=='running')
         if value['id']!=resource or value.get('projectId')!=config['project_id']:raise ValueError('Container ownership mismatch')
+        validate_placeholder(value,image_value)
         return {'id':resource,'origin':public_origin(value)}
     edge=journal.stage('container',container);origin=edge['origin'];host=origin.removeprefix('https://')
     # Validate identity on every rerun, even if all creation receipts are complete.
@@ -311,13 +333,21 @@ def install_locked(state,config):
         'scopes':['openid','offline_access','memory:read','memory:write'],'rotation':renewal['schedule'],
         'recovery_kit':kit,'checks':{'server':local,'public':public},'owner_enrollment':'required on first install'}
     save(state/'https-installed.json',receipt)
-    save(state/'client-https.json',{'mcpServers':{'portable-context':{'url':origin+'/mcp'}},
-        'oauth':{k:receipt[k] for k in ('client_id','callback_url','scopes')}})
+    save_client(state,receipt)
     # First handoff only; update must not create fresh owner login credentials.
     if not (state/'owner-enrollment.json').exists():
         handoff=owner_login(state);save(state/'owner-enrollment.json',handoff)
     journal.value['stage']='complete';journal.save()
     return {**receipt,'client_config':str(state/'client-https.json'),'owner_login':str(state/'owner-enrollment.json')}
+
+
+def validate_placeholder(value,image):
+    containers=value.get('template',{}).get('containers',[])
+    if len(containers)!=1:raise ValueError('Expected a single setup placeholder container')
+    app=containers[0]
+    if (app.get('image')!=image or app.get('command')!=['caddy'] or app.get('env')!=[] or
+        app.get('args')!=['respond','--listen',':8080','--body','Portable Context setup pending','--status','503']):
+        raise ValueError('Existing container is not the setup placeholder; refusing to replace another application')
 
 
 def reconcile(state,stage,resource_id):
@@ -334,5 +364,6 @@ def reconcile(state,stage,resource_id):
     else:
         value=api.request('containers','/v2/containers/'+name)
         if value['id']!=resource_id or value.get('projectId')!=config['project_id']:raise ValueError('Container does not match reviewed intent')
+        validate_placeholder(value,journal.value['completed']['image']['image'])
     intent['resource_id']=resource_id;journal.save()
     return {'reconciled':stage,'resource_id':resource_id,'next':'Repeat install --https with the same state'}

@@ -19,6 +19,7 @@ import sys
 import tempfile
 import time
 import zipfile
+from unittest.mock import patch
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes,serialization
@@ -50,6 +51,13 @@ def main():
             first=remote_install.install(payload,root);identifier=first['memory']['workspace_id']
             generation=fixture/'generation';issue_credentials(generation,'memory.example')
             ports={'identity_port':14212,'application_port':14214,'origin_port':14443}
+            # Death/failure after intent is persisted, before any HTTP unit exists.
+            with patch('https_runtime.download_provider',side_effect=RuntimeError('synthetic bootstrap interruption')):
+                try:configure(root,identifier,'https://memory.example',generation,ports=ports)
+                except RuntimeError:pass
+                else:raise AssertionError('Bootstrap did not interrupt')
+            partial=remote_install.install(payload,root)
+            assert partial['https'] is None and partial['memory']['workspace_id']==identifier
             configured=configure(root,identifier,'https://memory.example',generation,caddy=args.caddy,provider=args.provider,ports=ports)
             manifest=describe(root);owner=configured['owner_subject'];runtime=Path(configured['runtime'])
             # Local HTTPS represents the managed public endpoint; never skip verification.
@@ -107,10 +115,10 @@ def main():
             assert (runtime/'oauth.json').read_bytes()==old_identity and (runtime/'identity/environment.json').read_bytes()==old_key
             assert (root/'gateway10/keys/origin.pem').read_bytes()==old_transport
             assert wiki.read_text()=='User-owned wiki'
-            assert store.archive(original)==blob
+            assert (root/'memory/originals'/blob).read_bytes()==original.read_bytes()
             third=remote_install.install(changed,root);assert third['release']==second['release']
             print(json.dumps({'clean_install':True,'https_oauth_write':True,'repeated_install':True,
-                'killed_update_resumed':True,'identity_and_tokens_preserved':True,'memory_originals_wiki_preserved':True,
+                'partial_bootstrap_resumed':True,'killed_update_resumed':True,'identity_and_tokens_preserved':True,'memory_originals_wiki_preserved':True,
                 'recovery_kit_verified':True,'http_runs_current_release':True}),flush=True)
         finally:
             if proxy:proxy.terminate();proxy.wait(timeout=10)

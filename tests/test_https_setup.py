@@ -81,6 +81,44 @@ class HTTPSSetupTests(unittest.TestCase):
             with self.assertRaises(ValueError):runtime.quiesce(self.root)
             run.assert_not_called()
 
+    def test_partial_bootstrap_does_not_stop_or_start_missing_writer(self):
+        manifest=self.manifest();unit=self.root/'absent.service'
+        for has_binding in (True,False):
+            if not has_binding:(self.root/'oauth10/oauth.json').unlink()
+            with patch.object(runtime,'unit_file',return_value=unit),patch.object(runtime,'run') as run:
+                self.assertIsNone(runtime.update_manifest(self.root))
+                self.assertIsNone(runtime.quiesce(self.root));run.assert_not_called()
+                self.assertEqual(runtime.describe(self.root),manifest)
+
+    def test_missing_binding_or_foreign_unit_prevents_update(self):
+        self.manifest();unit=self.root/'existing.service'
+        unit.write_text(str(self.root));(self.root/'oauth10/oauth.json').unlink()
+        with patch.object(runtime,'unit_file',return_value=unit),patch.object(runtime,'run') as run:
+            with self.assertRaisesRegex(ValueError,'lost its OAuth'):runtime.quiesce(self.root)
+            unit.write_text('another-installation')
+            with self.assertRaisesRegex(ValueError,'another installation'):runtime.quiesce(self.root)
+            run.assert_not_called()
+
+    def test_systemd_failure_also_closes_maintenance(self):
+        manifest=self.manifest()
+        with patch.object(runtime,'service',side_effect=RuntimeError('systemd unavailable')),patch.object(runtime,'run',side_effect=RuntimeError('also unavailable')):
+            with self.assertRaisesRegex(RuntimeError,'systemd unavailable'):runtime.start_mcp(self.root,manifest)
+        self.assertEqual(setup.read(self.root/'maintenance.json')['operation'],'https-readiness')
+
+    def test_existing_pilot_gets_connection_receipt_without_login_or_cloud_mutation(self):
+        setup.save(self.root/'installed.json',{'https':{'ready':True,'origin':'https://memory.example'},'memory':{'workspace_id':'pilot'}})
+        with patch.object(setup,'remote',return_value={'workspace_id':'pilot'}) as remote,patch.object(setup,'check_public',return_value={'ready':True}),patch.object(setup,'CloudAPI') as cloud:
+            receipt=setup.connection_receipt(self.root)
+            self.assertEqual(receipt['workspace_id'],'pilot');remote.assert_called_once_with(self.root,'check','https://memory.example')
+            self.assertEqual(setup.connection_receipt(self.root),receipt);cloud.assert_not_called()
+        self.assertTrue((self.root/'client-https.json').exists())
+        self.assertFalse((self.root/'owner-enrollment.json').exists())
+
+    def test_existing_application_is_never_adopted_as_placeholder(self):
+        app={'image':'pinned','command':['caddy'],'args':['run'],'env':[]}
+        with self.assertRaisesRegex(ValueError,'another application'):
+            setup.validate_placeholder({'template':{'containers':[app]}},'pinned')
+
     def test_server_rejects_changed_origin_before_service_mutation(self):
         manifest=self.manifest()
         with patch.object(runtime,'run') as run:

@@ -93,7 +93,11 @@ def describe(root):
     if path.exists():
         result=read(path)
         if result['workspace_id']!=workspace(root):raise ValueError('HTTPS workspace mismatch')
-        if Path(result['runtime']).parent!=root:raise ValueError('HTTPS runtime outside installation')
+        if Path(result['runtime']).resolve().parent!=root:raise ValueError('HTTPS runtime outside installation')
+        for key in ('identity_service','mcp_service','origin_service'):
+            if key not in result:continue
+            unit=unit_file(result[key])
+            if unit.exists() and str(root) not in unit.read_text():raise ValueError('Service belongs to another installation')
         return result
     candidates=[root/name for name in ('oauth','oauth10') if (root/name/'oauth.json').exists()]
     if not candidates:return None
@@ -112,8 +116,23 @@ def describe(root):
     return manifest
 
 
-def quiesce(root):
+def update_manifest(root):
+    """A bootstrap intent is not yet an installed HTTP writer.
+
+    Configuration is persisted before the unit. A missing unit can safely be
+    finished by configure; an existing unit without its binding is corruption.
+    """
     manifest=describe(root)
+    if not manifest:return None
+    unit=unit_file(manifest['mcp_service'])
+    if not unit.exists():return None
+    if not (Path(manifest['runtime'])/'oauth.json').exists():
+        raise ValueError('Existing HTTPS service lost its OAuth binding; restore it before updating')
+    return manifest
+
+
+def quiesce(root):
+    manifest=update_manifest(root)
     if manifest:
         # Save intent before stopping, so retry and a killed installer retain ownership.
         save(Path(root)/'https-runtime.json',manifest)
@@ -133,13 +152,16 @@ def start_mcp(root, manifest):
     attachment=('export PC_ATTACHMENT_S3_CONFIG='+shlex.quote(str(root/'backup-config.json'))+'\n') if (root/'backup-config.json').exists() else ''
     write(runtime/'run-mcp','#!/bin/sh\n'+attachment+'exec flock -s -n '+shlex.quote(str(root/'service.lock'))+
         ' sh -c '+shlex.quote(guard)+'\n',0o700)
-    service(manifest['mcp_service'],[runtime/'run-mcp'],root,requires=manifest['identity_service'])
-    run(['systemctl','--user','restart',manifest['mcp_service']])
-    try:return metadata(manifest)
+    try:
+        service(manifest['mcp_service'],[runtime/'run-mcp'],root,requires=manifest['identity_service'])
+        run(['systemctl','--user','restart',manifest['mcp_service']])
+        return metadata(manifest)
     except Exception:
-        run(['systemctl','--user','stop',manifest['mcp_service']])
+        # Close new writers even if systemd itself is unavailable.
         save(root/'maintenance.json',{'operation':'https-readiness','release':(root/'current').resolve().name,
             'checkpoint_complete':True,'next':'retry installer with the same source release'})
+        try:run(['systemctl','--user','stop',manifest['mcp_service']])
+        except Exception:pass
         raise
 
 

@@ -434,6 +434,9 @@ def install(state):
         from rotation_setup import refresh
         refresh(state)
     kit = recovery_kit(state)
+    if result.get('https') and not (state/'https-journal.json').exists():
+        from https_setup import connection_receipt
+        connection_receipt(state)
     return {'installed': True, 'workspace_id': result['memory']['workspace_id'], 'backup': result['backup'],
             'client_config': str(state / 'client-config.json'),
             'recovery_password_file':str(recovery),
@@ -598,8 +601,8 @@ def main(argv=None):
         from https_setup import owner_login
         result=owner_login(state)
     elif args.command == 'https-check':
-        from https_setup import check_public,remote
-        receipt=read(state/'https-installed.json')
+        from https_setup import check_public,remote,connection_receipt
+        receipt=connection_receipt(state)
         result={'server':remote(state,'check',receipt['origin']),'public':check_public(receipt['origin'])}
     elif args.command == 'https-reconcile':
         from https_setup import reconcile
