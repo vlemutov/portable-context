@@ -306,6 +306,10 @@ class Workspace:
             if not job or job['kind']!='import':
                 raise InputError('Expected an existing import job; inspect get_job before cancelling.')
             if job['status']=='cancelled':
+                # Cancellation is an owner decision, not an export attempt: include it in backup identity.
+                # Also cover an idempotent retry after upgrading an earlier cancellation implementation.
+                con.execute('INSERT OR IGNORE INTO metadata VALUES (?,?)',
+                            ('cancelled_import:'+job_id,canonical(json.loads(job['details'])['cancellation'])))
                 return self.job(job_id)
             if job['status'] not in ('ready','running'):
                 raise InputError('Only an unfinished import can be cancelled; committed records are retained.')
@@ -315,6 +319,7 @@ class Workspace:
             cancel(con,job_id,reason.strip(),remaining)
             details=json.loads(job['details'])
             details['cancellation']={'reason':reason.strip(),'remaining_items':remaining,'at':now()}
+            con.execute('INSERT INTO metadata VALUES (?,?)',('cancelled_import:'+job_id,canonical(details['cancellation'])))
             con.execute("UPDATE job_items SET state='cancelled' WHERE job_id=? AND state='pending'",(job_id,))
             con.execute("UPDATE jobs SET status='cancelled',updated_at=?,details=? WHERE id=?",(now(),canonical(details),job_id))
             self.activity(con,'import_cancelled','agent',{'job_id':job_id,'remaining_items':remaining,'reason':reason.strip()})

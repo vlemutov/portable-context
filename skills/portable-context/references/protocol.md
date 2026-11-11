@@ -34,6 +34,8 @@ With capability `cancel_import_v1`, inspect `get_job(job_id)` and use
 preserves committed messages and counts, records an audit event, and removes the job from
 `unfinished_jobs`. Repeating cancellation is safe; `run_import` rejects cancelled jobs, including
 after reconnect/restart. Reusing its staging request ID returns the cancelled job, not a new import.
+Cancellation also changes backup identity, so the next checkpoint preserves it; a retry of the same
+cancellation does not create another change. Restoring an older snapshot still restores its older state.
 Completed imports, enrichment tasks and capture uploads are outside this tool's scope. A batch already
 committed before cancellation remains saved; cancellation is not rollback. Host jobs require
 `memory:write`; server-local jobs require `memory:admin`, as with `run_import`.
