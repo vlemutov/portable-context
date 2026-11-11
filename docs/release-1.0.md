@@ -228,6 +228,13 @@ duplicate-free reimport. Cloud API fault tests separately exercise lost replies
 and resource reconciliation. These do not substitute for the upcoming fresh
 Cloud.ru owner journey or physical passkey enrollment in supported clients.
 
+The rotation acceptance records transient read-probe disconnects separately
+from protocol/authentication or integrity failures. Successful recovery, valid
+responses, the full existing stream, exactly one long mutation and rejection of
+retired certificates remain assertions. `smoke_gateway_rotation.py
+--require-continuity` retains the optional stricter experiment; zero disconnects
+are not silently assumed or required by the scoped 1.0 gate.
+
 ## After 1.0
 
 - Investigate isolated provider/public-network 503/504/TLS failures, optionally

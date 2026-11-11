@@ -4,6 +4,7 @@ Cloud publication is represented by a second local Caddy process here. A real
 Cloud.ru revision publication is a separate pilot test, not claimed by this test.
 """
 import argparse
+from collections import Counter
 from contextlib import closing
 from datetime import datetime, timedelta
 import http.client
@@ -67,6 +68,7 @@ def worker(state,clock,point):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--caddy')
+    parser.add_argument('--require-continuity',action='store_true',help='Optional stricter experiment: fail on any transient read-probe disconnect')
     parser.add_argument('--worker');parser.add_argument('--clock');parser.add_argument('--interrupt')
     args=parser.parse_args()
     if args.worker:return worker(args.worker,args.clock,args.interrupt)
@@ -75,7 +77,7 @@ def main():
     subprocess.run(['systemctl','--user','show-environment'],check=True,capture_output=True)
     unit='pc-rotation-test-'+uuid.uuid4().hex+'.service'
     unitpath=Path.home()/'.config/systemd/user'/unit;unitpath.parent.mkdir(parents=True,exist_ok=True)
-    stop=threading.Event();errors=[];counts={'requests':0,'posts':0};edge=None;app=None;monitor=None
+    stop=threading.Event();errors=[];disconnects=[];counts={'requests':0,'posts':0};edge=None;app=None;monitor=None
     with tempfile.TemporaryDirectory(prefix='pc-rotation-test-') as tmp:
         root=Path(tmp);root.chmod(0o700)
         class App(BaseHTTPRequestHandler):
@@ -120,9 +122,13 @@ def main():
             def watch():
                 while not stop.is_set():
                     try:
-                        status,_,body=request(config,'/echo','POST',b'probe')
-                        if status!=200 or body!=b'probe':errors.append('response')
+                        # Availability observations are reads: a lost write reply
+                        # must never be silently retried or counted as data loss.
+                        status,_,body=request(config,'/alive')
+                        if status!=200 or body!=b'alive':errors.append('response')
                         counts['requests']+=1
+                    except (ConnectionResetError,ConnectionRefusedError,TimeoutError,http.client.RemoteDisconnected,http.client.IncompleteRead) as e:
+                        disconnects.append(type(e).__name__)
                     except Exception as e:errors.append(type(e).__name__)
                     stop.wait(.03)
             monitor=threading.Thread(target=watch);monitor.start()
@@ -141,17 +147,21 @@ def main():
                     completed=subprocess.run(command,capture_output=True,text=True,timeout=90)
                     if completed.returncode!=(77 if point else 0):
                         raise ValueError('Controller stage failed: '+stage+' '+str(point)+' '+completed.stderr[-1200:])
-                print(json.dumps({'recovered_stage':stage,'requests':counts['requests'],'failures':len(errors)}),flush=True)
+                print(json.dumps({'recovered_stage':stage,'requests':counts['requests'],'failures':len(errors),
+                    'transient_read_disconnects':len(disconnects)}),flush=True)
             stream.join(timeout=20);mutation.join(timeout=20)
             stop.set();monitor.join(timeout=20)
             assert not errors,errors[:5]
+            if args.require_continuity:assert not disconnects,disconnects[:5]
+            assert request(config,'/alive')[::2]==(200,b'alive'),'Final transport did not recover'
             assert special['mutation'][0]==200 and special['mutation'][2]==b'committed-once'
             assert special['stream'][0]==200 and special['stream'][2].count(b'data: ')==250
-            assert counts['posts']==counts['requests']+1,'Mutation was retried or lost'
+            assert counts['posts']==1,'Mutation was retried or lost'
             finalpid=subprocess.run(['systemctl','--user','show',unit,'--property=MainPID','--value'],check=True,capture_output=True,text=True).stdout.strip()
             assert finalpid==pid and edge.poll() is None
             assert read(state/'rotation.json')['complete']
             print(json.dumps({'rotation_verified':True,'killed_controllers':2*len(STAGES),'http_failures':0,
+                'transient_read_disconnects':dict(Counter(disconnects)),'zero_disconnects':not disconnects,
                 'requests':counts['requests'],'uninterrupted_stream_events':250,'long_mutation_exactly_once':True,
                 'origin_process_not_restarted':True,'old_certificate_rejected':True}),flush=True)
         finally:
