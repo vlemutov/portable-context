@@ -176,6 +176,24 @@ def download_provider(path):
     pending=path.with_suffix('.new');pending.write_bytes(data);pending.chmod(0o700);pending.replace(path)
 
 
+def ensure_user_services():
+    """Keep identity and HTTP alive between installer SSH calls and after logout."""
+    owner=str(os.getuid())
+    query=['loginctl','show-user',owner,'--property=Linger','--value']
+    try:enabled=run(query).stdout.strip()=='yes'
+    except subprocess.CalledProcessError:enabled=False  # no login/manager yet
+    if not enabled:
+        run(['sudo','-n','loginctl','enable-linger',owner])
+        if run(query).stdout.strip()!='yes':raise ValueError('Enable lingering for the installation owner, then retry')
+    os.environ.setdefault('XDG_RUNTIME_DIR','/run/user/'+owner)
+    os.environ.setdefault('DBUS_SESSION_BUS_ADDRESS','unix:path=/run/user/'+owner+'/bus')
+    for attempt in range(40):
+        try:run(['systemctl','--user','show-environment']);return
+        except subprocess.CalledProcessError:
+            if attempt==39:raise ValueError('Owner service manager not ready; reconnect SSH and retry') from None
+            time.sleep(.25)
+
+
 def configure(root, expected_workspace, origin, generation, *, caddy=None, provider=None, ports=None):
     """Idempotently prepare private identity/MCP/origin before publishing the edge."""
     root=Path(root).resolve();host=hostname(origin.removeprefix('https://'))
@@ -192,6 +210,8 @@ def configure(root, expected_workspace, origin, generation, *, caddy=None, provi
             'identity_service':prefix+'-identity.service','mcp_service':prefix+'-mcp-http.service','origin_service':prefix+'-gateway-origin.service'}
         # Persist full intent before creating identity or starting any service.
         save(root/'https-runtime.json',manifest)
+    # Must precede publication: rotation is installed only after public readiness.
+    ensure_user_services()
     runtime=Path(manifest['runtime']);auth=runtime/'identity';auth.mkdir(parents=True,exist_ok=True,mode=0o700)
     if provider:
         data=Path(provider).read_bytes()

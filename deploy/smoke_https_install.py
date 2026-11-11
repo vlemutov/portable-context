@@ -60,6 +60,7 @@ def main():
             assert partial['https'] is None and partial['memory']['workspace_id']==identifier
             configured=configure(root,identifier,'https://memory.example',generation,caddy=args.caddy,provider=args.provider,ports=ports)
             manifest=describe(root);owner=configured['owner_subject'];runtime=Path(configured['runtime'])
+            assert subprocess.run(['loginctl','show-user',str(os.getuid()),'--property=Linger','--value'],check=True,capture_output=True,text=True).stdout.strip()=='yes'
             # Local HTTPS represents the managed public endpoint; never skip verification.
             key=ec.generate_private_key(ec.SECP256R1());name=x509.Name([x509.NameAttribute(NameOID.COMMON_NAME,'localhost')]);now=datetime.now(timezone.utc)
             cert=(x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key())
@@ -134,7 +135,8 @@ def main():
             print(json.dumps({'clean_install':True,'https_oauth_write':True,'repeated_install':True,
                 'partial_bootstrap_resumed':True,'killed_update_resumed':True,'post_migration_resume_skips_old_code':True,
                 'identity_and_tokens_preserved':True,'memory_originals_wiki_preserved':True,
-                'readiness_failure_closed_and_recovered':True,'recovery_kit_verified':True,'http_runs_current_release':True}),flush=True)
+                'readiness_failure_closed_and_recovered':True,'owner_services_survive_logout':True,
+                'recovery_kit_verified':True,'http_runs_current_release':True}),flush=True)
         finally:
             if proxy:proxy.terminate();proxy.wait(timeout=10)
             if (root/'https-runtime.json').exists():manifest=read(root/'https-runtime.json')

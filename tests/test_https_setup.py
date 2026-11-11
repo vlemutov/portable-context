@@ -108,6 +108,22 @@ class HTTPSSetupTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,'systemd unavailable'):runtime.start_mcp(self.root,manifest)
         self.assertEqual(setup.read(self.root/'maintenance.json')['operation'],'https-readiness')
 
+    def test_first_https_setup_enables_owner_services_before_ssh_disconnect(self):
+        from types import SimpleNamespace
+        with patch.object(runtime.os,'getuid',return_value=1234,create=True),patch.dict(os.environ,{},clear=True),patch.object(runtime,'run') as run:
+            run.side_effect=[SimpleNamespace(stdout='no'),SimpleNamespace(stdout=''),SimpleNamespace(stdout='yes'),SimpleNamespace(stdout='')]
+            runtime.ensure_user_services()
+            self.assertEqual(run.call_args_list[1].args[0],['sudo','-n','loginctl','enable-linger','1234'])
+            self.assertEqual(run.call_args_list[-1].args[0],['systemctl','--user','show-environment'])
+            self.assertEqual(os.environ['XDG_RUNTIME_DIR'],'/run/user/1234')
+            self.assertEqual(os.environ['DBUS_SESSION_BUS_ADDRESS'],'unix:path=/run/user/1234/bus')
+
+    def test_unconfirmed_lingering_stops_before_starting_services(self):
+        from types import SimpleNamespace
+        with patch.object(runtime.os,'getuid',return_value=1234,create=True),patch.object(runtime,'run',return_value=SimpleNamespace(stdout='no')) as run:
+            with self.assertRaisesRegex(ValueError,'Enable lingering'):runtime.ensure_user_services()
+            self.assertFalse(any(call.args[0][0]=='systemctl' for call in run.call_args_list))
+
     def test_existing_pilot_gets_connection_receipt_without_login_or_cloud_mutation(self):
         setup.save(self.root/'installed.json',{'https':{'ready':True,'origin':'https://memory.example'},'memory':{'workspace_id':'pilot'}})
         with patch.object(setup,'remote',return_value={'workspace_id':'pilot'}) as remote,patch.object(setup,'check_public',return_value={'ready':True}),patch.object(setup,'CloudAPI') as cloud:
