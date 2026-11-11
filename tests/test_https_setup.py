@@ -17,7 +17,10 @@ from portable_context.workspace import Workspace
 
 class HTTPSSetupTests(unittest.TestCase):
     def setUp(self):
-        self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup);self.root=Path(self.tmp.name)
+        self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
+        # Match configure's canonical root (/private/var on macOS, expanded 8.3
+        # temp paths on Windows) when constructing an owned service fixture.
+        self.root=Path(self.tmp.name).resolve()
 
     def test_resume_preserves_intent_and_never_marks_failed_stage_complete(self):
         journal=setup.Journal(self.root,{'target':'one'})
