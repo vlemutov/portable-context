@@ -64,10 +64,11 @@ portable-context --home /PRIVATE/memory mcp --transport streamable-http \
 
 Only the loopback provider may use HTTP; public connections require HTTPS.
 Neither tokens nor provider keys belong in command arguments or this file. The
-HTTP process needs the same attachment/backup configuration and maintenance lock
-as stdio. Before older deployment tooling updates the installation, stop the
-`pc-mcp-http` service: the preview holds the shared service lock. Automatic
-coordinated lifecycle management is a remaining release gate.
+The HTTP process needs the same attachment/backup configuration and maintenance lock
+as stdio. Use the current `deploy/setup.py --state PRIVATE_STATE update`: it coordinates
+service quiescence, checkpoint, migration, readiness and reopening. Do not use older deployment
+tooling or manually clear a failed maintenance gate. Resume the same package and private state.
+The main user route is [onboarding](../skills/portable-context/references/onboarding.md).
 
 `deploy/pocketid.py` bootstraps a provider through loopback with a private API key.
 Retain its receipt outside the repository; it pins the owner and API identities
@@ -93,7 +94,7 @@ require consent, use a 10-minute access-token lifetime, and have the exact callb
 if independent device revocation is needed: create a separate client per device.
 Pocket ID's Authorized Apps screen revokes a user's authorization for a client.
 
-## Codex connection candidate
+## Codex connection (verified personal pilot)
 
 Use a separate name while testing; retain the old connection until recall works.
 The configuration below contains no secrets:
@@ -139,10 +140,15 @@ Recovery was exercised against real Pocket ID and restic, including a snapshot
 taken before revocation, new signing keys, and rejection of old sessions after
 recovery. A separate S3 identity backup and full restore passed on the pilot VM.
 
-Disposable full service cutover and installer kit handoff have also passed.
-Release gates remain: automated certificate rotation, reproducible HTTPS/OAuth
-setup/update, full capture/wiki over HTTPS, browser recovery enrollment and the
-published client compatibility matrix. See the current [release gates](release-1.0.md).
+Disposable full service cutover and installer kit handoff have also passed. Certificate rotation
+and interrupted-operation recovery, managed setup/update and migration readiness gates now have
+automated checks, including real Linux services. This does not promise zero downtime during a
+Cloud.ru container publication. See [release gates](release-1.0.md) for evidence and remaining work.
+
+Still validate the complete fresh-account onboarding, first selected capture/wiki flow through
+the intended client, browser recovery enrollment, and each additional client before claiming
+support. The [connection guide](../skills/portable-context/references/connection.md) records the
+current limits; the capture CLI remains SSH/stdio even when the agent's MCP uses HTTPS.
 
 References checked 2026-11-10:
 - [MCP authorization](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization)

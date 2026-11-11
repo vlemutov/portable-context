@@ -77,7 +77,19 @@ depending on one package for both repositories.
 
 ## Lost passkey; server still available
 
-Use the server's Python environment and an owner SSH/console session:
+For a managed installation, use the local checkout and the same private deployment state:
+
+```sh
+python deploy/setup.py --state /PRIVATE/deployment owner-login
+```
+
+This retrieves a fresh private login handoff onto the owner's computer over SSH. It prints only
+the path and non-secret receipt. The owner opens the file privately, follows `login_url`, enters
+the 12-character code and creates a new passkey. The code expires after 20 minutes; rerun this
+command if needed. Do not paste it into chat. No new memory or cloud resources are created.
+
+For manual administration without the local installer state, use the server's Python environment
+and an owner SSH/console session:
 
 ```sh
 python deploy/oauth_recovery.py owner-login \

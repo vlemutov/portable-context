@@ -235,6 +235,33 @@ retired certificates remain assertions. `smoke_gateway_rotation.py
 --require-continuity` retains the optional stricter experiment; zero disconnects
 are not silently assumed or required by the scoped 1.0 gate.
 
+## Agent-guided onboarding — 2026-11-11
+
+The repository now starts at [START-HERE](../START-HERE.md). The skill routes first contact
+through existing/new/unsure memory, host capabilities, Cloud.ru HTTPS or own-server/local
+setup, real client login, recovery handoff, chosen first import/read-back and a second agent.
+Commands, transport limits and receipt paths are checked against this checkout. The local
+client guide preserves personal notes and distinguishes client preparation from a verified
+SSH/stdio connection. MCP-only setup/review resources follow the same workflow.
+
+This is documentation and local validation, not completion of the fresh Cloud.ru user journey.
+Before publication, walk the following acceptance scenarios using these instructions, record
+client/OS/version, chosen ref and evidence, and keep only non-secret results in the release notes:
+
+| Scenario | Required observed result |
+|---|---|
+| New Cloud.ru owner | Reviewed cost plan, one installation, provider HTTPS, browser/passkey login, same workspace, backup/rotation receipts |
+| Existing or uncertain memory | Find the actual endpoint; no replacement on empty state or connection failure |
+| Own Linux server / local folder | Reach existing directory via supported transport; clearly state off-server backup status |
+| First selected import | Correct roles/IDs, originals and file passports, read-back, interrupted upload resume, unchanged reimport |
+| Wiki and second agent | Evidence-linked pages, honest review coverage, same project/file recalled by the second client |
+| Pause / failed update / lost passkey | Same state/package resumes; private owner login works; recovery enrollment verified in browser |
+| Web-only or incompatible OAuth host | Explain missing capability and offer a concrete supported route without claiming connection |
+
+No new paid Cloud.ru installation was created for this documentation pass. Full native HTTPS
+capture/client acceptance remains separate from protocol/installer tests. Version/tag publication
+and marketplace packaging are not implied by the new entry page.
+
 ## After 1.0
 
 - Investigate isolated provider/public-network 503/504/TLS failures, optionally

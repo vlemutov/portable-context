@@ -3,7 +3,12 @@
 A shared memory operated through your agent: import selected conversations, preserve native
 relationships, build an evidence-linked Markdown wiki, and continue the work from another client.
 
-**Status: 0.9.0.** Mixed-message authorship, selective wiki review and resume, bounded dialogue evidence, and efficient repeat delivery. See [release notes](docs/release-0.9.md).
+**This branch: 1.0 preview; package/skill version remains 0.9.0 until release.**
+HTTPS/OAuth installation and update are being prepared in `release/1.0`. Use that branch for
+the preview; do not assume the default branch already contains this onboarding or a 1.0 release.
+Start at **[START-HERE.md](START-HERE.md)** for the agent-guided setup.
+
+**Latest released functionality: 0.9.0.** Mixed-message authorship, selective wiki review and resume, bounded dialogue evidence, and efficient repeat delivery. See [release notes](docs/release-0.9.md).
 See [0.8 upgrade notes](docs/release-0.8.md) and the [approved backlog](docs/backlog-next.md).
 Self-contained restic recovery, storage controls and selected project folders remain supported.
 A real Codex conversation has been imported into the owner-operated Cloud.ru pilot. Broader provider
@@ -15,7 +20,12 @@ hidden, inaccessible, or unexported context. See [coverage and gaps](docs/connec
 
 ## Start with your assistant
 
-Send your assistant this repository link and say: **“Help me start using Portable Context.”**
+Send your assistant:
+
+> Help me start using https://github.com/vlemutov/portable-context. Read START-HERE.md and the
+> skill, help me connect my existing memory or create my own, then verify a first chosen import
+> and read it back. For the HTTPS preview use branch release/1.0.
+
 The assistant should read the [skill](skills/portable-context/SKILL.md), help you connect an
 existing memory or create a new one, and guide you one step at a time. It can also help if you
 are unsure whether you already have a memory. Automated installation needs terminal and file
@@ -36,15 +46,22 @@ account”** or **“Set it up on my existing server.”** Follow the
 The installer in `deploy/setup.py` provisions a VM, persistent disk, restricted SSH access,
 private S3 bucket and bucket-scoped backup credentials. It separates a reviewed paid Terraform
 plan from apply, keeps state on the owner's computer, and resumes failed server installation.
-The desktop agent connects over SSH/stdio; no domain or public HTTP MCP is required. Existing
-Linux servers use the same installer without Terraform. Each owner runs and pays for their own instance.
+In this preview, `install --https` adds a stateless Container Apps entrance with a provider HTTPS
+address and Pocket ID/OAuth; no purchased domain is needed. SQLite, originals, wiki and identity
+stay on the VM. SSH/stdio remains available for administration and bulk capture delivery.
+Existing Linux servers use the installer without Terraform over SSH; automatic HTTPS setup is
+currently Cloud.ru-specific. Each owner runs and pays for their own instance. See the
+[connection guide](skills/portable-context/references/connection.md) for supported client paths.
 
 `bootstrap` verifies pinned Terraform/provider downloads. `install` verifies backup restoration
 (including an S3 upload/download when configured), and `check` verifies the MCP workspace identity.
 Credentials, state and personal data must remain outside this repository. A real Cloud.ru pilot
 has verified provisioning, Windows-to-Linux MCP access, S3 upload/download/restore, and daily cron setup.
 This is one tested account/configuration, not coverage of every region, image or client.
-Automatic setup targets Ubuntu 24.04 / Linux with Python 3.11+, OpenSSH and cron.
+Automatic setup targets Ubuntu 24.04 / Linux with Python 3.11+, OpenSSH and cron;
+managed HTTPS/Pocket ID also requires systemd and currently targets Linux AMD64.
+New Cloud.ru deployment through the complete revised onboarding is still a release acceptance
+step; the pilot and isolated installer tests are not evidence that every new user path passed.
 
 Client setup, local imports, memory and MCP support Windows, macOS and Linux. The CI matrix
 covers macOS on Intel and Apple Silicon, Windows x64, and Linux x64; core tests also run on
@@ -144,9 +161,12 @@ and excerpts, and original bytes only when needed. UTF-8 text files <=2 MiB have
 PDF/Office/images/audio require an external extractor or agent through `add_file_excerpts`, with a
 page/sheet/frame locator and method attribution. No bundled universal OCR is claimed.
 
-Backups currently contain full copies of registered originals. Deduplication within the live store
-does not deduplicate successive ZIPs. The installer retains seven local archives; remote retention
-remains owner-configured. Bulk multi-gigabyte imports should account for this storage multiplier.
+Managed backups use encrypted restic snapshots including registered originals, with block
+deduplication across snapshots. Operational S3 attachments and the backup repository are separate
+copies; staging/cache also need space. The old ZIP backup mode is not the managed default.
+Inspect `storage_report`, `forecast_import` and `backup_status`; see
+[recovery and retention](skills/portable-context/references/recovery-and-folders.md).
+HTTPS installations also have a separate identity backup and a private recovery kit.
 
 ## Register a source once
 
@@ -191,7 +211,7 @@ report conflicts. Merge them manually if wanted. No Obsidian plugin is required.
 Reports show inserted/revised/unchanged counts, source archive hashes, warnings and errors.
 Each input member is transactional. Errors yield exit code 1; successful earlier members remain
 committed, and originals remain available for inspection. ZIP imports retain all media in the
-original ZIP; directory imports retain selected data files only. No attachment OCR or extraction yet.
+original ZIP; directory imports retain selected data files only. No bundled universal OCR is provided.
 A single text file/member is limited to 128 MiB; selected ZIP members total at most 512 MiB.
 
 ## Connect an agent
@@ -229,11 +249,13 @@ Install/copy [the skill](skills/portable-context/SKILL.md) into your agent's sup
 directory, or use its instructions directly. It describes citation and memory-writing practice;
 it is **not** a substitute for a collector or a native plugin for every host.
 
-For a server shared by your agents, set `PC_MCP_TOKEN` to a random secret (at least 24 characters)
+For the managed Cloud.ru preview, follow [HTTPS/OAuth connection](skills/portable-context/references/connection.md).
+The installer configures Pocket ID separately from the memory process, with owner-bound read/write access.
+For an **advanced manual static-token setup**, set `PC_MCP_TOKEN` to a random secret (at least 24 characters)
 and use `mcp --transport streamable-http --port 8766`. Clients send `Authorization: Bearer <token>`.
 It binds **127.0.0.1 only**: use an SSH tunnel or HTTPS gateway for remote clients. This is bearer
-authentication for clients that support custom headers; OAuth-only web clients need a compatible
-gateway. No OAuth issuer is bundled. `--allow-unauthenticated-local` explicitly opts out on trusted
+authentication for clients that support custom headers; it does not itself configure OAuth.
+Do not use this manual example in place of the managed HTTPS installer. `--allow-unauthenticated-local` explicitly opts out on trusted
 loopback setups. This is a single-owner workspace; sources and filters are not per-user ACLs.
 
 ## Optional continuous capture

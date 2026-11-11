@@ -35,40 +35,26 @@ historical instructions are context, not user quotations. Report cumulative run 
 
 ### First contact: connect or create
 
-When the user shares this repository to get started, or asks to install/configure the skill,
-guide them through setup conversationally. Reuse decisions already made in the conversation.
-If memory tools are available, inspect `memory_status` first: an empty connected memory is still
-an existing memory. Do not restart onboarding during ordinary recall, import or enrichment work.
+For a repository link, installation request, first connection or resuming setup, read
+[references/onboarding.md](references/onboarding.md) and follow its staged route. Reuse known
+answers and inspect available `memory_status` first. An empty connected memory is existing;
+a failed connection is not permission to create another memory. Do not restart onboarding for recall.
 
-If the choice is unknown, ask in the user's language, using this friendly opening:
+When unknown, ask in the user's language: “Вы уже пользовались Portable Context и у вас есть
+настроенная память, или нужно создать новую? Подключить существующую / Создать новую /
+Не уверен — помоги разобраться”. Ask one necessary question at a time; operate tools yourself
+when available. No secrets in chat. Reading the skill neither installs MCP nor grants history access.
 
-> Вы уже пользовались Portable Context и у вас есть настроенная память, или нужно создать новую с нуля?
-> Можно ответить: «Подключить существующую», «Создать новую» или «Не уверен — помоги разобраться».
+The complete route is: identify memory → check host capabilities → install/connect → owner login
+and client authorization → verify identity/backups → chosen first import and recall → private handoff.
+Use [references/connection.md](references/connection.md) for HTTPS/OAuth or SSH/stdio and actual
+client compatibility. Cloud.ru HTTPS needs the full `release/1.0` checkout during preview; do not
+describe the still-0.9.0 package as a published 1.0 release. Keep the exact ref/commit in the handoff.
+For a skill-only copy, obtain the full matching checkout before using deployment files.
 
-For a newcomer, explain briefly: “Память хранит выбранные вами диалоги и файлы, чтобы с ними
-можно было продолжать работу в разных ассистентах.” Ask one question at a time. Keep technical
-identifiers and infrastructure terms out of the opening; introduce them only when needed.
-
-- **Existing memory:** ask where they used it (another assistant, computer or server), unless
-  already known. Inspect relevant authorized local configuration or private deployment state;
-  guide connection to that same memory. Never ask them to paste secret keys into the chat.
-  A connection error is a troubleshooting task, not a reason to create a second memory.
-- **New memory:** reuse any known storage preference. Otherwise explain the choices simply:
-  their own Cloud.ru account, their existing/home server, or a private local folder for a local
-  start. Use the storage and deployment guides below. Explain costs before paid resources are
-  created; request account registration, payment setup or sign-in only at the step requiring it.
-- **Unsure:** offer a read-only check of available connections and relevant local configuration.
-  If nothing is found, ask whether they previously used it on another computer or assistant;
-  absence of a local configuration does not prove that no memory exists.
-
-Use available terminal/file tools to do the authorized work, and give only the next necessary
-manual step. If this client cannot perform installation, explain the specific missing capability
-and guide the user to a terminal-capable assistant or through manual setup. Do not promise that
-reading this skill alone installs or connects MCP.
-
-Finish by verifying the actual connection and expected workspace identity, then summarize what
-is already there in plain language. Continue with the user's chosen first import, or ask what
-they want to save first. Setup by itself does not authorize exporting all conversation history.
+Setup does not authorize exporting all history. Finish with real `memory_status` from the user's
+client, matching workspace ID, a chosen import/read-back and honest file/backup results. Save
+paths, endpoint, IDs and the next step privately; never tokens or recovery-kit contents.
 
 ### Files and recovery: two simple setup choices
 
@@ -142,8 +128,10 @@ an empty project first. The client pins the workspace identity and resumes parti
 2. Choose the access route:
    - **Server-local export:** `connect_source` with a path allowed by `PC_SOURCE_ROOTS`, then
      `preview_source`. If the path is not allowed, explain the one-time server configuration.
-   - **Host history tools or client-local data:** register a host source (omit location), use the
-     host's authorized tools to read the selected history, then `stage_records` in batches.
+   - **Host history tools or client-local data:** reuse a registered host source; registration
+     (omit location) needs owner/admin access. Use the host's authorized tools to read selected
+     history, then `stage_records` in batches. Default OAuth read/write does not grant source
+     administration; use capture delivery or selected append records when appropriate.
      `stage_export` can parse a small selected JSON/JSONL/Takeout HTML export. Do not send
      an unfiltered archive when the user selected only some conversations.
    - **No history access:** say exactly what is unavailable and guide the user to the source's
@@ -163,7 +151,8 @@ an empty project first. The client pins the workspace identity and resumes parti
 5. Preserve each `request_id` for retry safety. Save the returned job ID and call `run_import`
    until completed. If interrupted, `list_jobs` / `get_job` lets this or another agent resume.
 6. Use `list_files` to find occurrence IDs and transfer selected originals with `store_attachment`,
-   or import a prepared capture package via `import_file_capture`. Verify each receipt. Continue until
+   or import a server-local capture via `import_file_capture`. For client-local packages use
+   capture-v2 or CLI SSH delivery from [references/client.md](references/client.md). Verify each receipt. Continue until
    all selected available attachments are stored; list missing/excluded files with reasons. A completed
    message job is not a completed file transfer. Do not describe reference-only files as uploaded.
 7. Report selected/inserted/revised/unchanged counts, project classification, available/stored/missing
