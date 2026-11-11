@@ -119,6 +119,21 @@ class HTTPSSetupTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'another application'):
             setup.validate_placeholder({'template':{'containers':[app]}},'pinned')
 
+    def test_lost_creation_requires_matching_explicit_resource_id_and_only_reads_cloud(self):
+        identifier='00000000-0000-4000-8000-000000000001'
+        config={'project_id':identifier,'container_name':'pc-test-edge'}
+        journal=setup.Journal(self.root,config)
+        journal.value['intent']['registry']={'submitted':True};journal.save()
+        with patch.object(setup,'approved_plan',return_value={'config':config}),patch.object(setup,'CloudAPI') as api:
+            api.return_value.request.return_value={'id':identifier,'name':'unrelated','registryType':'DOCKER','isPublic':False}
+            with self.assertRaises(ValueError):setup.reconcile(self.root,'registry',identifier)
+            self.assertNotIn('resource_id',setup.read(journal.path)['intent']['registry'])
+            api.return_value.request.return_value['name']='pc-test-edge'
+            result=setup.reconcile(self.root,'registry',identifier)
+            self.assertEqual(result['resource_id'],identifier)
+            self.assertEqual(setup.read(journal.path)['intent']['registry']['resource_id'],identifier)
+            self.assertTrue(all(call.kwargs.get('method','GET')=='GET' for call in api.return_value.request.call_args_list))
+
     def test_server_rejects_changed_origin_before_service_mutation(self):
         manifest=self.manifest()
         with patch.object(runtime,'run') as run:

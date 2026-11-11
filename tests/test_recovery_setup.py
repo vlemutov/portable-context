@@ -5,9 +5,10 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import Mock
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'deploy'))
-from recovery_setup import receive_kit
+from recovery_setup import receive_kit,open_identity_repository
 
 
 class RecoverySetupTests(unittest.TestCase):
@@ -56,3 +57,18 @@ class RecoverySetupTests(unittest.TestCase):
         value=receive_kit({'configured':False,'reason':'oauth_not_installed'},self.root)
         self.assertFalse(value['configured'])
         self.assertFalse((self.root/'recovery-kit').exists())
+
+    def test_interrupted_initialization_resumes_but_completed_repository_never_reinitializes(self):
+        marker=self.root/'initialization-attempted.json'
+        marker.write_text(json.dumps({'attempted':True,'complete':False}))
+        manager=Mock();manager.snapshots.side_effect=[RuntimeError('not created'),[]]
+        open_identity_repository(manager,marker);manager.initialize.assert_called_once()
+        self.assertTrue(json.loads(marker.read_text())['complete'])
+        manager.reset_mock();manager.snapshots.side_effect=RuntimeError('network unavailable')
+        with self.assertRaises(RuntimeError):open_identity_repository(manager,marker)
+        manager.initialize.assert_not_called()
+
+    def test_lost_initialization_reply_only_opens_existing_repository(self):
+        marker=self.root/'initialization-attempted.json';marker.write_text('{"attempted":true}')
+        manager=Mock();manager.snapshots.return_value=[]
+        open_identity_repository(manager,marker);manager.initialize.assert_not_called()

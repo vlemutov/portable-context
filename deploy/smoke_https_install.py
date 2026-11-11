@@ -106,6 +106,13 @@ def main():
             assert (root/'maintenance.json').is_file()
             failed=subprocess.run([str(root/'bin/mcp')],capture_output=True,timeout=10)
             assert failed.returncode!=0,'SSH writer escaped maintenance gate'
+            # Kill a second retry after the candidate has opened/migrated the DB.
+            # The saved checkpoint must prevent running old-code backup on resume.
+            program="import sys,json,os;sys.path.insert(0,sys.argv[1]);import remote_install;original=remote_install.run\ndef stop(args,**kwargs):\n result=original(args,**kwargs)\n if args[-1]=='init' and 'portable_context' in args:os._exit(78)\n return result\nremote_install.run=stop\nremote_install.install(json.load(sys.stdin),sys.argv[2])"
+            died=subprocess.run([sys.executable,'-c',program,str(ROOT/'deploy'),str(root)],input=json.dumps(changed),text=True,capture_output=True,timeout=240)
+            assert died.returncode==78,'Did not reach post-migration interruption point'
+            assert read(root/'maintenance.json')['checkpoint_complete']
+            backup_wrapper=root/'bin/backup';backup_wrapper.write_text('#!/bin/sh\nexit 91\n');backup_wrapper.chmod(0o700)
             second=remote_install.install(changed,root)
             assert second['release']!=first['release'] and second['memory']['workspace_id']==identifier
             assert second['https']['ready'] and not (root/'maintenance.json').exists()
@@ -116,10 +123,18 @@ def main():
             assert (root/'gateway10/keys/origin.pem').read_bytes()==old_transport
             assert wiki.read_text()=='User-owned wiki'
             assert (root/'memory/originals'/blob).read_bytes()==original.read_bytes()
+            # A failed readiness check after activation closes both entry paths;
+            # repeating the same release repairs the service without old-code rollback.
+            program="import sys,json;sys.path.insert(0,sys.argv[1]);import https_runtime,remote_install\ndef fail(*args,**kwargs):raise RuntimeError('synthetic readiness failure')\nhttps_runtime.metadata=fail\nremote_install.install(json.load(sys.stdin),sys.argv[2])"
+            rejected=subprocess.run([sys.executable,'-c',program,str(ROOT/'deploy'),str(root)],input=json.dumps(changed),text=True,capture_output=True,timeout=240)
+            assert rejected.returncode!=0 and read(root/'maintenance.json')['operation']=='https-readiness'
+            assert subprocess.run([str(root/'bin/mcp')],capture_output=True,timeout=10).returncode!=0
             third=remote_install.install(changed,root);assert third['release']==second['release']
+            assert browser.mcp(token,'memory_status',{})['stats']['messages']==1
             print(json.dumps({'clean_install':True,'https_oauth_write':True,'repeated_install':True,
-                'partial_bootstrap_resumed':True,'killed_update_resumed':True,'identity_and_tokens_preserved':True,'memory_originals_wiki_preserved':True,
-                'recovery_kit_verified':True,'http_runs_current_release':True}),flush=True)
+                'partial_bootstrap_resumed':True,'killed_update_resumed':True,'post_migration_resume_skips_old_code':True,
+                'identity_and_tokens_preserved':True,'memory_originals_wiki_preserved':True,
+                'readiness_failure_closed_and_recovered':True,'recovery_kit_verified':True,'http_runs_current_release':True}),flush=True)
         finally:
             if proxy:proxy.terminate();proxy.wait(timeout=10)
             if (root/'https-runtime.json').exists():manifest=read(root/'https-runtime.json')

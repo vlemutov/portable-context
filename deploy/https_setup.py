@@ -352,6 +352,13 @@ def validate_placeholder(value,image):
 
 def reconcile(state,stage,resource_id):
     """Explicit adoption after an ambiguous CREATE; never create/delete resources."""
+    from portable_context.restic_backup import file_lock
+    state=Path(state)
+    with file_lock(state/'https-install.lock'):
+        return reconcile_locked(state,stage,resource_id)
+
+
+def reconcile_locked(state,stage,resource_id):
     state=Path(state);review=approved_plan(state,None);config=review['config']
     resource_id=str(uuid.UUID(resource_id));journal=Journal(state,config)
     intent=journal.value['intent'].get(stage,{})
@@ -360,7 +367,7 @@ def reconcile(state,stage,resource_id):
     api=CloudAPI(state,config['project_id']);name=config['container_name']
     if stage=='registry':
         value=api.request('registry','/v1/registries/'+resource_id)
-        if value.get('name')!=name or value.get('isPublic') or value.get('registryType')!='DOCKER':raise ValueError('Registry does not match reviewed intent')
+        if value.get('id')!=resource_id or value.get('name')!=name or value.get('isPublic') or value.get('registryType')!='DOCKER':raise ValueError('Registry does not match reviewed intent')
     else:
         value=api.request('containers','/v2/containers/'+name)
         if value['id']!=resource_id or value.get('projectId')!=config['project_id']:raise ValueError('Container does not match reviewed intent')

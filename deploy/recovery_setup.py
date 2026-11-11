@@ -48,16 +48,13 @@ def protect(root, workspace, runtime=None, schedule=True):
     config = root/'identity-backup-config.json'
     first_setup = not config.exists()
     repository = recovery.read(config)['repository'] if config.exists() else base['repository'].rstrip('/')+'-identity'
+    marker=root/'identity-backup-state/initialization-attempted.json'
+    if first_setup:
+        # Persist creation intent before configuration: either write can be interrupted.
+        recovery.write(marker, {'attempted':True,'complete':False})
     recovery.configure(runtime,memory_config,config,repository)
     manager = recovery.IdentityBackups(config)
-    # A failed connection must never be interpreted as a missing repository.
-    marker = manager.state/'initialization-attempted.json'
-    if first_setup:
-        # restic init refuses an existing repository. A retry only opens it;
-        # failed initialization requires diagnosis, never a fallback after network failure.
-        recovery.write(marker, {'attempted':True})
-        manager.initialize()
-    manager.snapshots()
+    open_identity_repository(manager,marker)
     backup = manager.backup(); check = manager.check()
     scheduled = recovery.install_schedule(config) if schedule else None
     with tempfile.TemporaryDirectory(prefix='kit-export-',dir=root) as tmp:
@@ -65,6 +62,21 @@ def protect(root, workspace, runtime=None, schedule=True):
         files = {p.name:base64.b64encode(p.read_bytes()).decode() for p in output.iterdir()}
     return {'configured':True, 'workspace_id':workspace, 'backup':backup, 'verified':check['verified'],
             'schedule':scheduled, 'kit_files':files}
+
+
+def open_identity_repository(manager,marker):
+    """Resume only our unfinished creation; existing repositories are never reinitialized."""
+    from oauth_recovery import read,write
+    pending=marker.exists() and not read(marker).get('complete')
+    if pending:
+        try:manager.snapshots()
+        except Exception:
+            # This is a saved installation intent, not an inference that a failed
+            # connection means absence. restic init refuses to overwrite a repo.
+            manager.initialize()
+        manager.snapshots()
+        write(marker,{'attempted':True,'complete':True})
+    else:manager.snapshots()
 
 
 def receive_kit(result, state, output=None):

@@ -184,6 +184,50 @@ Remaining work is ordered as follows:
    checks for the final supported Windows/macOS/Linux matrix must pass. Merge/tag
    only after these scoped acceptance gates pass; keep SSH recovery available.
 
+## Installer implementation and acceptance — 2026-11-11
+
+The CLI now joins the existing VM/memory installer to the HTTPS/OAuth lifecycle:
+
+```text
+python deploy/setup.py --state PRIVATE_DIRECTORY https-plan
+python deploy/setup.py --state PRIVATE_DIRECTORY install --https --approve-plan REVIEWED_HASH
+python deploy/setup.py --state PRIVATE_DIRECTORY update
+python deploy/setup.py --state PRIVATE_DIRECTORY https-check
+python deploy/setup.py --state PRIVATE_DIRECTORY owner-login
+```
+
+The base VM must already have been prepared/applied using the existing reviewed
+flow. The HTTPS plan adds private registry/image storage, the stateless Container
+Apps endpoint, its transport secret and the narrow mTLS ingress rule. Scaling
+remains 0/1. No quoted price or zero-downtime guarantee is implied. Automatic
+Pocket ID provisioning currently requires a Linux AMD64 server; the local CLI
+and SSH memory installer have separate cross-platform coverage.
+
+Keep the same private state directory when retrying. Journaled resource IDs and
+exact plan receipts prevent a reconnect from creating a second installation.
+An ambiguous creation response requires an explicit matching resource ID through
+`https-reconcile --stage registry|container --resource-id REVIEWED_ID`; it does
+not trigger another CREATE. An existing unrelated application is not accepted
+as the setup placeholder. The first login code is handed off through a private
+local file; updates do not issue a new login or replace identity/transport keys.
+
+Updates checkpoint data, stop HTTP/SSH writers, use the candidate package for
+migration, verify restoration, and switch `current` before reopening access.
+An interrupted migration must resume with the same package, not roll old code
+back over the database. Failed HTTP readiness leaves a maintenance gate and
+stops the HTTP service. Existing pilot installations are recognized by their
+workspace, issuer, owner binding and owned units; connection commands can adopt
+their verified endpoint without provisioning another account or container.
+
+Acceptance uses separate Linux jobs for identity recovery, certificate rotation
+and HTTPS installation. The installer fixture uses real systemd, Pocket ID,
+Caddy, restic and HTTPS/OAuth, with synthetic memory and no cloud account. It
+checks interrupted bootstrap, interrupted updates before/after migration,
+readiness failure, unchanged identity/grants, retained originals/wiki and
+duplicate-free reimport. Cloud API fault tests separately exercise lost replies
+and resource reconciliation. These do not substitute for the upcoming fresh
+Cloud.ru owner journey or physical passkey enrollment in supported clients.
+
 ## After 1.0
 
 - Investigate isolated provider/public-network 503/504/TLS failures, optionally
