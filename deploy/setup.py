@@ -524,6 +524,8 @@ def main(argv=None):
     p.add_argument('--file',type=Path,help='Optional non-secret edge options')
     sub.add_parser('owner-login',help='Write a new private one-time owner enrollment code locally')
     sub.add_parser('https-check',help='Check public authentication boundary and server identity')
+    p=sub.add_parser('oauth-client',help='Enable a supported native callback on the existing OAuth client')
+    p.add_argument('--client',choices=('claude-code',),required=True)
     p=sub.add_parser('https-reconcile',help='Record an explicitly reviewed resource ID after a lost creation reply')
     p.add_argument('--stage',choices=('registry','container'),required=True)
     p.add_argument('--resource-id',required=True)
@@ -554,7 +556,7 @@ def main(argv=None):
         if not all(values.values()):
             raise ValueError('Both values are required')
         save(state / 'credentials.json', values)
-        result = {'saved': True, 'note': 'Credentials stay on this computer; remove them after provisioning if desired.'}
+        result = {'saved': True, 'note': 'Stored privately. Managed HTTPS also uses this cloud key on the VM for certificate renewal; do not revoke it without updating the rotation controller.'}
     elif args.command == 'configure':
         config = read(state / 'deployment.json')
         values = read(args.file)
@@ -604,6 +606,9 @@ def main(argv=None):
         from https_setup import check_public,remote,connection_receipt
         receipt=connection_receipt(state)
         result={'server':remote(state,'check',receipt['origin']),'public':check_public(receipt['origin'])}
+    elif args.command == 'oauth-client':
+        from https_setup import claude_code_client
+        result=claude_code_client(state)
     elif args.command == 'https-reconcile':
         from https_setup import reconcile
         result=reconcile(state,args.stage,args.resource_id)

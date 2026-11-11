@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from contextlib import ExitStack
 from unittest.mock import patch
 
@@ -21,6 +22,31 @@ class HTTPSSetupTests(unittest.TestCase):
         # Match configure's canonical root (/private/var on macOS, expanded 8.3
         # temp paths on Windows) when constructing an owned service fixture.
         self.root=Path(self.tmp.name).resolve()
+
+    def test_callback_migration_requires_matching_identity_checkpoint(self):
+        origin='https://memory.example'; identity=self.root/'oauth'
+        payload={'root':str(self.root),'workspace_id':'same-memory','origin':origin,'action':'claude-code'}
+        with patch('https_runtime.workspace',return_value='same-memory'), \
+             patch('https_runtime.describe',return_value={'origin':origin,'runtime':str(identity)}), \
+             patch('oauth_recovery.runtime_info',return_value=(identity,{'PORT':'14120','STATIC_API_KEY':'synthetic'},
+                   {'clients':['portable-context-desktop']},SimpleNamespace(issuer=origin))), \
+             patch('oauth_recovery.IdentityBackups') as manager, \
+             patch('pocketid.Bootstrap.enable_claude_code') as enable:
+            backup=manager.return_value; backup.runtime=self.root/'other'; backup.config={'issuer':origin}
+            with self.assertRaisesRegex(ValueError,'another runtime'):
+                setup.server_action(payload)
+            enable.assert_not_called(); backup.backup.assert_not_called()
+            backup.runtime=identity; backup.config={'issuer':'https://other.example'}
+            with self.assertRaisesRegex(ValueError,'another runtime'):
+                setup.server_action(payload)
+            enable.assert_not_called()
+            backup.config={'issuer':origin}
+            def migrate(receipt,checkpoint):
+                checkpoint(); return {'changed':True,'permissions_changed':False}
+            enable.side_effect=migrate
+            result=setup.server_action(payload)
+            self.assertEqual(result['workspace_id'],'same-memory')
+            backup.backup.assert_called_once_with()
 
     def test_resume_preserves_intent_and_never_marks_failed_stage_complete(self):
         journal=setup.Journal(self.root,{'target':'one'})

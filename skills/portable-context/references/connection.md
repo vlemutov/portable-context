@@ -20,7 +20,9 @@
    Успешный `https-check` установщика не заменяет проверку входа самого приложения.
 
 Управляемая установка создаёт публичный PKCE-клиент `portable-context-desktop` без client secret.
-Его разрешённый callback — **ровно** `http://127.0.0.1:14881/callback`.
+Новые установки регистрируют два точных callback: `http://127.0.0.1:14881/callback`
+для Codex и `http://localhost:14881/callback` для Claude Code. Это разные OAuth URI:
+одинаковый порт и локальный компьютер не делают их взаимозаменяемыми.
 Права: `openid`, `offline_access`, `memory:read`, для записи также `memory:write`.
 Обычному агенту не нужны `memory:admin` или ключи облака/S3. Не повышай права из-за ошибки записи.
 Сначала проверь согласие пользователя и scopes текущего токена.
@@ -48,7 +50,78 @@ callback_url = "http://127.0.0.1:14881/callback"
 а не меняй callback только на стороне клиента. [Официальная документация MCP в Codex](https://learn.chatgpt.com/docs/extend/mcp?surface=cli)
 проверена 11 ноября 2026. После изменения конфигурации переподключи MCP в текущем приложении.
 
-### Claude, Gemini и другие агенты
+### Claude Code: localhost и обновление существующей установки
+
+Claude Code использует `http://localhost:PORT/callback`; `--callback-port` фиксирует порт,
+но не заменяет hostname на 127.0.0.1. [Официальная инструкция](https://code.claude.com/docs/en/mcp#use-pre-configured-oauth-credentials)
+проверена 11 ноября 2026. На 2.1.321 в пользовательском пилоте зафиксирован именно localhost.
+Не редактируй URL авторизации вручную: при обмене кода redirect_uri тоже должен совпадать.
+
+Если сервер установлен до этой правки и разрешает только Codex callback, агент владельца
+может исправить это через уже доступный HTTPS веб-интерфейс Pocket ID: войти существующим
+passkey → Administration → OIDC Clients → Portable Context desktop → General → Add callback URL.
+Добавить ровно `http://localhost:14881/callback`, сохранив `http://127.0.0.1:14881/callback`,
+нажать Save и проверить подтверждение. Не менять PKCE, consent, scopes и сроки токенов.
+Веб-правка не создаёт дополнительный restic checkpoint; не объявляй его выполненным.
+
+Если нужен автоматизированный путь с резервной копией и есть административный SSH,
+из нового полного checkout с прежним приватным state:
+
+```text
+python deploy/setup.py --state PRIVATE_STATE oauth-client --client claude-code
+```
+
+Команда проверяет память/issuer и принадлежность клиента, делает копию OAuth в уже настроенный
+restic, затем добавляет **только** localhost callback. Сохраняет Codex callback, остальные
+настройки, группы, сроки токенов и права; не создаёт нового владельца и не требует перезапуска MCP.
+Повтор безопасен. Для этой правки при недоступном SSH можно использовать веб-путь выше.
+Диагностика SSH, если нужна для других административных задач, — [network.md](network.md).
+Повседневное HTTPS-подключение агента не требует SSH. Ошибка копии останавливает CLI-изменение.
+Receipt — PRIVATE_STATE/claude-code-client.json. Обновление одного скилла эту миграцию не выполняет.
+
+Для **нового** подключения Claude Code (URL заменить своим):
+
+```text
+claude mcp add --transport http --scope user --client-id portable-context-desktop --callback-port 14881 portable-context https://YOUR-ORIGIN/mcp
+```
+
+Если запись уже есть, сохрани её и обнови только нужные поля в её текущей области настроек;
+повторный add с тем же именем завершается ошибкой. Не удаляй чужие подключения. Форма JSON:
+
+```json
+{
+  "type": "http",
+  "url": "https://YOUR-ORIGIN/mcp",
+  "oauth": {
+    "clientId": "portable-context-desktop",
+    "callbackPort": 14881,
+    "scopes": "openid offline_access memory:read memory:write"
+  }
+}
+```
+
+Для public client не нужен `--client-secret`. Попроси `/mcp` → Authenticate либо
+`claude mcp login portable-context`; пользователь проходит браузерный вход. После исправления
+callback запусти **новую** попытку авторизации, затем вызови memory_status и прочитай проект.
+Пока этого не произошло, сообщай «callback подготовлен», а не «Claude подключён».
+Desktop Chat/Cowork и Claude Code — разные клиенты, эту настройку нельзя автоматически считать
+подходящей всем интерфейсам Claude. Не называй рабочее подключение другого приложения SSH,
+не проверив его фактический конфиг.
+
+**Результат пилота 11 ноября 2026:** владелец подтвердил вход Claude Code 2.1.321 по HTTPS/OAuth
+через VPN без SSH/обходного маршрута; тот же workspace и существующие проекты доступны.
+Выданы openid, offline_access, memory:read и memory:write без memory:admin. Это подтверждение
+входа и чтения; запись, capture с файлами, refresh и отзыв именно в Claude Code ещё требуют
+отдельных проверок. Codex HTTPS/OAuth после изменения callback также ответил memory_status.
+
+Если `claude mcp get` до входа пишет `timed out`, не делай вывод, что память выключена.
+Такое сообщение наблюдалось в пилоте без завершённой авторизации. Проверь URL/transport,
+доступность HTTPS и OAuth metadata; ожидаемый 401 без токена означает необходимость входа,
+а не успешное подключение. Запусти `/mcp` → Authenticate или `claude mcp login`, затем проверь
+настоящий memory_status. Если после входа тайм-аут остаётся, это отдельная диагностика;
+не скрывай его под универсальным «нужна авторизация». Текст upstream CLI мы не меняем.
+
+### Gemini и другие агенты
 
 Скилл общий, настройки подключения зависят от приложения. Не копируй Codex TOML в другой клиент.
 
@@ -59,7 +132,8 @@ callback_url = "http://127.0.0.1:14881/callback"
 | Требует автоматическую регистрацию OAuth | По умолчанию DCR/CIMD не включены; нужен отдельный совместимый клиент/настройка владельца |
 | Только веб-чат без терминала/настройки MCP | Объяснить недостающий шаг и продолжить установку в подходящем агенте |
 
-Нативный HTTPS для Claude Code, Hermes, OpenClaw, Ouroboros и Gemini здесь не объявлен
+Полный сценарий импорта/записи через Claude Code остаётся отдельной проверкой после входа.
+Для Hermes, OpenClaw, Ouroboros и Gemini нативный HTTPS не объявлен
 проверенным только на основании поддержки MCP. Не обходи ошибку регистрации wildcard callback
 или открытой регистрацией. Владелец может настроить отдельный public client с точным callback;
 административные детали — `docs/oauth-preview.md` в полном checkout той же версии.

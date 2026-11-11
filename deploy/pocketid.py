@@ -11,6 +11,8 @@ import urllib.request
 VERSION = '2.19.2'
 LINUX_AMD64_SHA256 = '85881ea87d78710c34f127b2d849d27dd7e69963723d9e590f66de26e87fc4fb'
 OWNER_CODE_TTL = '20m'
+CODEX_CALLBACK = 'http://127.0.0.1:14881/callback'
+CLAUDE_CODE_CALLBACK = 'http://localhost:14881/callback'
 PERMISSIONS = {'memory:read': 'Read memory', 'memory:write': 'Import and enrich memory',
                'memory:admin': 'Administer memory and server sources'}
 
@@ -56,6 +58,43 @@ class Bootstrap:
         if not isinstance(code, str) or len(code) != 12 or not code.isascii() or not code.isalnum():
             raise RuntimeError('Provider returned an incompatible owner login code; value suppressed')
         return code
+
+    def enable_claude_code(self, receipt, before_change):
+        """Explicit additive migration for the owned desktop client; no grant reset.
+
+        Pocket ID's PUT replaces client settings, so carry forward the complete
+        current DTO. Never rebuild an existing client from bootstrap defaults.
+        before_change must create the owner's identity backup before the write.
+        """
+        client_id = 'portable-context-desktop'
+        if client_id not in receipt.get('clients', []):
+            raise ValueError('Desktop client is not owned by this bootstrap receipt')
+        path = '/api/oidc/clients/'+client_id
+        current = self.request(path)
+        if (current.get('id') != client_id or current.get('clientType', 'standard') != 'standard'
+                or current.get('isPublic') is not True or current.get('pkceEnabled') is not True
+                or current.get('skipConsent') is not False):
+            raise ValueError('Expected the public PKCE desktop client with consent; inspect owner settings')
+        callbacks = current.get('callbackURLs')
+        if not isinstance(callbacks, list) or CODEX_CALLBACK not in callbacks:
+            raise ValueError('Desktop callback configuration changed; inspect owner settings')
+        changed = CLAUDE_CODE_CALLBACK not in callbacks
+        if changed:
+            before_change()
+            # Refuse overwriting an owner edit made while the checkpoint ran.
+            if self.request(path) != current:
+                raise ValueError('Client changed during backup; retry after reviewing owner settings')
+            candidate = dict(current, callbackURLs=[*callbacks, CLAUDE_CODE_CALLBACK])
+            self.request(path, candidate, 'PUT')
+            verified = self.request(path)
+            for key in ('callbackURLs', 'name', 'description', 'logoutCallbackURLs', 'backchannelLogoutURL',
+                        'isPublic', 'pkceEnabled', 'requiresReauthentication', 'requiresPushedAuthorizationRequests',
+                        'skipConsent', 'credentials', 'launchURL', 'hasLogo', 'hasDarkLogo', 'isGroupRestricted',
+                        'accessTokenDurationMinutes', 'refreshTokenDurationMinutes', 'allowedUserGroups'):
+                if verified.get(key) != candidate.get(key):
+                    raise RuntimeError('OAuth client verification failed; inspect private identity backup')
+        return {'client_id': client_id, 'callback_url': CLAUDE_CODE_CALLBACK,
+                'changed': changed, 'codex_callback_preserved': True, 'permissions_changed': False}
 
     def configure(self, origin, receipt_path):
         """Create an owner and explicit grants, retaining IDs for repeatable setup.
@@ -108,7 +147,8 @@ class Bootstrap:
             client_id = 'portable-context-'+label
             if client_id not in receipt.get('clients', []):
                 self.request('/api/oidc/clients', {'id': client_id,
-                    'name': 'Portable Context '+label, 'callbackURLs': ['http://127.0.0.1:14881/callback'],
+                    'name': 'Portable Context '+label,
+                    'callbackURLs': [CODEX_CALLBACK, CLAUDE_CODE_CALLBACK] if label == 'desktop' else [CODEX_CALLBACK],
                     'isPublic': True, 'pkceEnabled': True, 'skipConsent': False,
                     'accessTokenDurationMinutes': 10, 'refreshTokenDurationMinutes': 43200})
                 receipt.setdefault('clients', []).append(client_id)

@@ -89,8 +89,13 @@ constraint. Expired codes require a new private handoff.
 
 Bootstrap creates separate public PKCE clients `portable-context-desktop` and
 `portable-context-admin`. The desktop client can request read/write only. Both
-require consent, use a 10-minute access-token lifetime, and have the exact callback
-`http://127.0.0.1:14881/callback`. Do not reuse one client ID for multiple devices
+require consent and use a 10-minute access-token lifetime. The admin client uses
+`http://127.0.0.1:14881/callback`. New desktop clients also register the exact
+`http://localhost:14881/callback` for Claude Code, alongside Codex's 127.0.0.1 form.
+Existing installations opt in through `setup.py --state PRIVATE_STATE oauth-client --client claude-code`;
+this checkpoints identity and preserves existing grants/settings. Updating the skill alone
+does not change provider registration. See the [connection guide](../skills/portable-context/references/connection.md).
+Do not reuse one client ID for multiple devices
 if independent device revocation is needed: create a separate client per device.
 Pocket ID's Authorized Apps screen revokes a user's authorization for a client.
 

@@ -145,6 +145,16 @@ def server_action(p):
         try:owner_login(manifest['runtime'],output);return {'private_login':read(output)}
         finally:output.unlink(missing_ok=True)
     if p['action']=='check':return {'workspace_id':expected,**metadata(manifest)}
+    if p['action']=='claude-code':
+        from oauth_recovery import runtime_info, IdentityBackups
+        from pocketid import Bootstrap
+        _,env,receipt,config=runtime_info(manifest['runtime'])
+        if config.issuer!=p['origin']:raise ValueError('Wrong OAuth issuer')
+        backup=IdentityBackups(root/'identity-backup-config.json')
+        if backup.runtime!=Path(manifest['runtime']).resolve() or backup.config.get('issuer')!=config.issuer:
+            raise ValueError('Identity backup belongs to another runtime or issuer')
+        result=Bootstrap(int(env['PORT']),env['STATIC_API_KEY']).enable_claude_code(receipt,backup.backup)
+        return {'workspace_id':expected,**result}
     raise ValueError('Unsupported HTTPS server action')
 
 
@@ -188,6 +198,15 @@ def owner_login(state):
     state=Path(state);receipt=connection_receipt(state);result=remote(state,'login',receipt['origin'])
     path=state/('owner-login-'+uuid.uuid4().hex[:12]+'.json');save(path,result['private_login'])
     return {'private_file':str(path),'expires_in_minutes':20,'next':'Owner reads this private file locally, enters code and enrolls passkey. Never paste the code into chat.'}
+
+
+def claude_code_client(state):
+    """Enable the exact localhost callback on an existing owner installation."""
+    state=Path(state);receipt=connection_receipt(state)
+    result=remote(state,'claude-code',receipt['origin'])
+    result.update(mcp_url=receipt['mcp_url'],scopes=['openid','offline_access','memory:read','memory:write'])
+    save(state/'claude-code-client.json',result)
+    return result
 
 
 def check_public(origin, timeout=180):

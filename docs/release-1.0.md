@@ -262,6 +262,24 @@ No new paid Cloud.ru installation was created for this documentation pass. Full 
 capture/client acceptance remains separate from protocol/installer tests. Version/tag publication
 and marketplace packaging are not implied by the new entry page.
 
+## Existing-owner Claude Code pilot — 2026-11-11
+
+The owner reported successful browser authorization and project reads with Claude Code 2.1.321
+against the existing HTTPS memory over VPN, without an SSH bypass route. Access had read/write
+scopes but no memory:admin. Codex independently returned memory_status over its existing OAuth
+connection after the correction. This verifies login and recall, not Claude Code writes, file
+capture, refresh, revocation or the full new-owner journey.
+
+The blocker was an exact redirect URI mismatch: Claude Code uses localhost while Codex uses
+127.0.0.1. The owner installation was corrected through Pocket ID's UI, preserving the original
+callback/security settings. New bootstrap registrations include both exact loopback URLs.
+For existing installations, `setup.py oauth-client --client claude-code` provides an explicit
+checkpointed SSH migration; the connection guide also documents the HTTPS UI route.
+
+The skill now reports revision 1.0-preview.2 separately from package baseline 0.9.0. A pre-login
+`claude mcp get` timeout is documented as inconclusive, not as proof of server failure or proof
+that authentication is the only possible cause. Full upstream CLI error wording is outside this fix.
+
 ## After 1.0
 
 - Investigate isolated provider/public-network 503/504/TLS failures, optionally
