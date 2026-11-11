@@ -16,7 +16,7 @@ commit_enrichment append_messages write_memory refresh_vault'''.split())
 ADMIN = frozenset('''preview_backup_policy set_backup_policy backup_after_import
 set_index_policy set_capture_policy cleanup_unused_placeholders import_file_capture
 preview_source start_import verify_s3_original'''.split())
-DYNAMIC = frozenset({'storage_report', 'store_attachment', 'connect_source', 'run_import'})
+DYNAMIC = frozenset({'storage_report', 'store_attachment', 'connect_source', 'run_import', 'cancel_import'})
 TOOLS = READ | WRITE | ADMIN | DYNAMIC
 SCOPES = ('memory:read', 'memory:write', 'memory:admin')
 READ_METHODS = frozenset({'initialize', 'ping', 'tools/list', 'resources/list',
@@ -47,7 +47,7 @@ def tool_scope(name, arguments, store):
         with store.connect() as con:
             row = con.execute('SELECT mode FROM sources WHERE id=?', (arguments.get('source_id'),)).fetchone()
         return SCOPES[2] if row and row['mode'] != 'host' else SCOPES[1]
-    if name == 'run_import':
+    if name in ('run_import','cancel_import'):
         # Only already staged host input is runnable by an ordinary writer.
         with store.connect() as con:
             row = con.execute('SELECT specification FROM jobs WHERE id=?', (arguments.get('job_id'),)).fetchone()

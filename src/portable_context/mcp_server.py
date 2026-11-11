@@ -8,6 +8,25 @@ from .catalog import Catalog
 
 def build_server(store: Store, allowed_roots=None, *, oauth_config=None, token_verifier=None):
     from mcp.server import MCPServer
+    from mcp.server.mcpserver.exceptions import ToolError
+    from pydantic import BaseModel, ConfigDict, Field, ValidationError
+    from .errors import InputError
+
+    class Executor(BaseModel):
+        """Self-reported client labels, not authentication. No transport or purpose fields."""
+        model_config = ConfigDict(extra='forbid', strict=True, hide_input_in_errors=True)
+        client: str | None = Field(default=None, max_length=200)
+        version: str | None = Field(default=None, max_length=200)
+        agent: str | None = Field(default=None, max_length=200)
+
+    def executor_labels(value):
+        return value.model_dump(exclude_none=True) if value is not None else None
+
+    def import_call(function, *args):
+        try:
+            return function(*args)
+        except InputError as exc:
+            raise ToolError(str(exc)) from None
 
     workspace = Workspace(store, allowed_roots)
     catalog = Catalog(store, workspace.allowed_roots)
@@ -26,6 +45,24 @@ def build_server(store: Store, allowed_roots=None, *, oauth_config=None, token_v
         "Before first import explain its storage location and execution model; read portable-context://setup. "
         "Use resumable import and enrichment jobs. Semantic analysis is your job, not an automatic server action. "
         "For a workflow guide read portable-context://guide."))
+
+    async def validate_executor(ctx, call_next):
+        # Run after OAuth authorization but before SDK argument validation, which can echo rejected values.
+        params=ctx.params or {}
+        if ctx.method=='tools/call' and params.get('name') in (
+                'stage_records','stage_export','start_import','begin_capture_upload'):
+            args=params.get('arguments') or {}
+            value=args.get('executor') if isinstance(args,dict) else None
+            if value is not None:
+                try:
+                    Executor.model_validate(value)
+                except ValidationError:
+                    from mcp.types import CallToolResult, TextContent
+                    return CallToolResult(is_error=True,content=[TextContent(type='text',text=
+                        'Invalid executor: accepts only client, version, agent (strings <=200 characters or null). '
+                        'Remove unsupported fields such as transport or purpose. Preserve records and raw; retry with the same request_id.')])
+        return await call_next(ctx)
+    server.middleware.append(validate_executor)
 
     @server.resource('portable-context://setup')
     def setup_guide() -> str:
@@ -79,6 +116,10 @@ def build_server(store: Store, allowed_roots=None, *, oauth_config=None, token_v
             'Preview source conversations, then select exact conversation keys or all available records. '
             'start_import snapshots selected local records; stage_records/stage_export accept only content the user selected. '
             'run_import in batches until completed. Preserve request_id for retries. Report coverage and exclusions. '
+            'Inspect each unfinished job before resuming; never run unwanted diagnostic jobs to clear the list. '
+            'cancel_import(job_id,reason) stops pending import records permanently and retains already committed records and audit. '
+            'executor accepts only client, version, agent labels; fix invalid labels without dropping raw. '
+            'Never put dummy text under real source message IDs. '
             'Before export loses source access, capture memory_project={id,name,basis,summary} (basis user_selection or agent_inference), '
             'and attachment name, role, purpose, status, native ID/path, sha256 if bytes are available. Unknowns stay unknown. '
             'Use project only for native project metadata. Import immediately creates project entries and file passports. '
@@ -250,10 +291,10 @@ def build_server(store: Store, allowed_roots=None, *, oauth_config=None, token_v
         return catalog.archive_project(project_id,expected_version,archived,actor)
 
     @server.tool()
-    def begin_capture_upload(manifest: dict, project_id: str | None = None, executor: dict | None = None, run_id: str | None = None) -> dict:
+    def begin_capture_upload(manifest: dict, project_id: str | None = None, executor: Executor | None = None, run_id: str | None = None) -> dict:
         """Begin/resume a locally selected and screened capture-v2 upload. No arbitrary server paths."""
         from .transfer import Uploads
-        return Uploads(workspace).begin(manifest,project_id,executor,run_id)
+        return import_call(Uploads(workspace).begin,manifest,project_id,executor_labels(executor),run_id)
 
     @server.tool()
     def capture_upload_status(upload_id: str, offset: int = 0, limit: int = 100) -> dict:
@@ -385,36 +426,46 @@ def build_server(store: Store, allowed_roots=None, *, oauth_config=None, token_v
 
     @server.tool()
     def start_import(source_id: str, conversation_keys: list[str] | None = None,
-                     include_forks: bool = False, request_id: str | None = None, executor: dict | None = None) -> dict:
+                     include_forks: bool = False, request_id: str | None = None, executor: Executor | None = None) -> dict:
         """Snapshot selected local-source conversations into a resumable import job.
         Null selects all available conversations; [] selects none. include_forks follows explicit
         source links only. Whole ZIPs are not copied during selective import. Reuse request_id on retry.
         """
-        return workspace.start_import(source_id, conversation_keys, include_forks, request_id, executor)
+        return import_call(workspace.start_import,source_id,conversation_keys,include_forks,request_id,executor_labels(executor))
 
     @server.tool()
-    def stage_records(source_id: str, records: list[dict], request_id: str, executor: dict | None = None) -> dict:
+    def stage_records(source_id: str, records: list[dict], request_id: str, executor: Executor | None = None) -> dict:
         """Snapshot up to 500 selected host records as an import job. No hidden history is fetched.
         Required event fields: source, instance, conversation_id, message_id, role, text.
         Optional native links: parent_id; fork_of={conversation_id,message_id}; project={id,name}.
         Capture memory_project={id,name,basis,summary} for non-native organization; basis user_selection|agent_inference.
         Attachments should include name, role, purpose, status and sha256 where known; missing originals remain explicit.
         Preserve native IDs, timestamp, raw and attachments. Reuse request_id per batch on retry.
+        executor accepts only client, version, agent labels (strings <=200 characters).
+        Correct invalid labels without removing source raw or changing real message text.
         """
-        return workspace.stage_records(source_id, records, request_id, executor)
+        return import_call(workspace.stage_records,source_id,records,request_id,executor_labels(executor))
 
     @server.tool()
-    def stage_export(source_id: str, content: str, filename: str, request_id: str, executor: dict | None = None) -> dict:
+    def stage_export(source_id: str, content: str, filename: str, request_id: str, executor: Executor | None = None) -> dict:
         """Parse a selected small text export supplied by the host (8 MiB / 500 records maximum).
         Select content BEFORE sending; for large files register a server-local path instead.
         This accepts JSON/JSONL/Takeout HTML text, not base64 ZIP data.
         """
-        return workspace.stage_export(source_id, content, filename, request_id, executor)
+        return import_call(workspace.stage_export,source_id,content,filename,request_id,executor_labels(executor))
 
     @server.tool()
     def run_import(job_id: str, batch_size: int = 100) -> dict:
         """Commit the next import batch and checkpoint atomically. Repeat/resume until completed."""
-        return workspace.run_import(job_id, batch_size)
+        return import_call(workspace.run_import,job_id,batch_size)
+
+    @server.tool()
+    def cancel_import(job_id: str, reason: str) -> dict:
+        """Permanently stop pending records of one selected import; retain committed records and audit.
+        Inspect get_job first. Repeated cancellation is safe; cancelled jobs cannot be resumed.
+        Does not cancel enrichment or capture uploads. A partially imported job keeps its completed items.
+        """
+        return import_call(workspace.cancel_import,job_id,reason)
 
     @server.tool()
     def get_job(job_id: str) -> dict:

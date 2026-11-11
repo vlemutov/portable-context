@@ -25,6 +25,18 @@ the same delivery. Target project is fixed at begin; a changed policy can refuse
 A separate user-initiated replay starts a separate run; retrying a completed finish is idempotent.
 Generate and save a UUID `run_id` before begin for safe retries even if the begin response is lost.
 Host `stage_records`, `stage_export` and `start_import` also accept `executor={client,version,agent}`.
+These are the only accepted executor fields: optional strings of at most 200 characters or null.
+Transport and purpose are not executor labels. A validation error is not a reason to remove raw source
+fields or replace real message text. Fix the specified argument and retry the same request ID.
+
+With capability `cancel_import_v1`, inspect `get_job(job_id)` and use
+`cancel_import(job_id,reason)` to stop one unwanted import. It atomically cancels remaining records,
+preserves committed messages and counts, records an audit event, and removes the job from
+`unfinished_jobs`. Repeating cancellation is safe; `run_import` rejects cancelled jobs, including
+after reconnect/restart. Reusing its staging request ID returns the cancelled job, not a new import.
+Completed imports, enrichment tasks and capture uploads are outside this tool's scope. A batch already
+committed before cancellation remains saved; cancellation is not rollback. Host jobs require
+`memory:write`; server-local jobs require `memory:admin`, as with `run_import`.
 
 ## Source and import
 

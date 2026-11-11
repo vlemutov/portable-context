@@ -3,12 +3,12 @@ name: portable-context
 description: Deploy a personal Portable Context memory on Cloud.ru or an existing server, import selected or all accessible conversation history, preserve source relationships, and build or update its knowledge wiki through MCP. Use for setup, migration, recall, shared graph enrichment, or resuming another agent's work.
 metadata:
   version: "0.9.0"
-  revision: "1.0-preview.2"
+  revision: "1.0-preview.3"
 ---
 
 # Portable Context
 
-Skill revision: **1.0-preview.2**. Package/protocol baseline: **0.9.0**.
+Skill revision: **1.0-preview.3**. Package/protocol baseline: **0.9.0**.
 Report both when identifying this installed copy; record its source commit on installation.
 The preview revision distinguishes updated instructions without claiming a released 1.0 server.
 
@@ -154,7 +154,15 @@ an empty project first. The client pins the workspace identity and resumes parti
    Unknowns remain explicit. The exporter creates file passports and project entry pages immediately;
    it must not rely on a later agent reconstructing meaning from filenames. Snapshot temporary files now.
 5. Preserve each `request_id` for retry safety. Save the returned job ID and call `run_import`
-   until completed. If interrupted, `list_jobs` / `get_job` lets this or another agent resume.
+   until completed. If interrupted, inspect `get_job` and resume only the user's intended selection;
+   `unfinished_jobs` is not a queue to execute blindly. For an accidentally staged import, use
+   `cancel_import(job_id,reason)` when `cancel_import_v1` is available. Cancellation preserves already
+   imported records and its audit history; a cancelled job must not be resumed or silently restaged.
+   On older servers report the exact blocked job and arrange an upgrade; never run it to clear the list.
+   `executor` accepts only `client`, `version`, `agent` (strings up to 200 characters or null).
+   Correct the reported invalid field and retry; do not discard `raw` to work around validation errors.
+   Never stage dummy text under a real source message ID. Test with selected real records or an isolated
+   test memory; keep the same records for an idempotence check and use a new request ID for the second import.
 6. Use `list_files` to find occurrence IDs and transfer selected originals with `store_attachment`,
    or import a server-local capture via `import_file_capture`. For client-local packages use
    capture-v2 or CLI SSH delivery from [references/client.md](references/client.md). Verify each receipt. Continue until

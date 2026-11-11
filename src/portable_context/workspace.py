@@ -12,6 +12,7 @@ from .core import Store, canonical, digest, key, now, validate, guarded_import
 from . import __version__
 from .sources import GUIDES, catalog, conversation_key, scan_source, select_records
 from .importers import FORMATS, parse
+from .errors import InputError
 
 
 def identifier(value, label='id'):
@@ -110,11 +111,11 @@ class Workspace:
             from .review import coverage
             dirty=sum(not r['scope_complete'] for r in coverage(self.store)['conversations'])
             pages = con.execute('SELECT count(*) FROM wiki_pages').fetchone()[0]
-            jobs = [dict(r) for r in con.execute("SELECT id,kind,status FROM jobs WHERE status NOT IN ('completed','completed_selective') ORDER BY created_at LIMIT 50")]
+            jobs = [dict(r) for r in con.execute("SELECT id,kind,status FROM jobs WHERE status NOT IN ('completed','completed_selective','cancelled') ORDER BY created_at LIMIT 50")]
         return {'workspace_id': workspace_id, 'version': __version__, 'stats': self.store.stats(),
-                'skill':{'recommended_version':__version__,'minimum_version':'0.7.0',
+                'skill':{'recommended_version':__version__,'recommended_revision':'1.0-preview.3','minimum_version':'0.7.0',
                          'compatibility':'Capabilities govern write operations; older skills can still perform legacy reads.'},
-                'capabilities':['capture_policy_v1','file_categories_v1','project_groups_v1','import_log_v1','native_sessions_v1',
+                'capabilities':['cancel_import_v1','executor_schema_v1','capture_policy_v1','file_categories_v1','project_groups_v1','import_log_v1','native_sessions_v1',
                     'project_folders_v1','restic_backups_v1','storage_report_v1','index_policy_v1','selective_review_v1','mixed_authorship_v1','effective_attribution_v1','workspace_observations_v1','content_identity_v1','resumable_capture_phases_v1','recovery_coverage_v1','claude_record_taxonomy_v1'],
                 'backup':backup_manager.status() if backup_manager else {'configured':False,'note':'Managed pre-import protection requires backup setup'},
                 'recent_imports':list_imports(self.store,3),
@@ -295,9 +296,36 @@ class Workspace:
                                                 (max(1, min(limit, 100)), max(0, offset)))]
 
     @guarded_import
+    def cancel_import(self, job_id, reason):
+        """Cancel remaining records atomically; never undo committed messages."""
+        if not isinstance(reason,str) or not reason.strip() or len(reason)>1000:
+            raise InputError('Cancellation reason must be a nonempty string of at most 1000 characters.')
+        with self.store.connect() as con:
+            con.execute('BEGIN IMMEDIATE')
+            job=con.execute('SELECT * FROM jobs WHERE id=?',(job_id,)).fetchone()
+            if not job or job['kind']!='import':
+                raise InputError('Expected an existing import job; inspect get_job before cancelling.')
+            if job['status']=='cancelled':
+                return self.job(job_id)
+            if job['status'] not in ('ready','running'):
+                raise InputError('Only an unfinished import can be cancelled; committed records are retained.')
+            remaining=con.execute("SELECT count(*) FROM job_items WHERE job_id=? AND state='pending'",(job_id,)).fetchone()[0]
+            from .import_log import start,cancel
+            start(con,'job:'+job_id,run_id=job_id,kind='host_or_source_job')
+            cancel(con,job_id,reason.strip(),remaining)
+            details=json.loads(job['details'])
+            details['cancellation']={'reason':reason.strip(),'remaining_items':remaining,'at':now()}
+            con.execute("UPDATE job_items SET state='cancelled' WHERE job_id=? AND state='pending'",(job_id,))
+            con.execute("UPDATE jobs SET status='cancelled',updated_at=?,details=? WHERE id=?",(now(),canonical(details),job_id))
+            self.activity(con,'import_cancelled','agent',{'job_id':job_id,'remaining_items':remaining,'reason':reason.strip()})
+        return self.job(job_id)
+
+    @guarded_import
     def run_import(self, job_id, batch_size=100):
         job=self.job(job_id)
         if job['kind']!='import': raise ValueError('Expected import job')
+        if job['status']=='cancelled':
+            raise InputError('Import is cancelled and cannot be resumed. Inspect get_job; use a new request_id only for a newly selected import.')
         if job['status']!='completed':
             from .restic_backup import protection
             protection(self.store.root,job_id)
@@ -306,6 +334,8 @@ class Workspace:
             job = con.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone()
             if not job or job['kind'] != 'import':
                 raise ValueError('Expected import job')
+            if job['status']=='cancelled':
+                raise InputError('Import is cancelled and cannot be resumed. Inspect get_job; use a new request_id only for a newly selected import.')
             from .import_log import start,progress
             start(con,'job:'+job_id,run_id=job_id,kind='host_or_source_job')
             rows = con.execute("SELECT * FROM job_items WHERE job_id=? AND state='pending' ORDER BY position LIMIT ?",

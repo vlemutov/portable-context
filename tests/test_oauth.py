@@ -170,6 +170,46 @@ class OAuthTests(unittest.IsolatedAsyncioTestCase):
         for name, args, expected in cases:
             self.assertEqual(tool_scope(name, args, self.store), expected)
 
+    async def test_https_executor_validation_and_cancelled_import(self):
+        from portable_context.workspace import Workspace
+        ws=Workspace(self.store); ws.register_source('host','Host','events','test')
+        server=build_server(self.store,oauth_config=self.config,token_verifier=self.verifier)
+        app=http_app(server,self.config)
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url=self.config.issuer,
+                headers={'Accept':'application/json, text/event-stream','MCP-Protocol-Version':'2025-11-25'}) as client:
+                writer=self.token('openid memory:read memory:write')
+                async def call(name,args,token=writer):
+                    response=await client.post('/mcp',json={'jsonrpc':'2.0','id':1,'method':'tools/call',
+                        'params':{'name':name,'arguments':args}},headers={'Authorization':'Bearer '+token})
+                    self.assertEqual(response.status_code,200)
+                    return response.json()
+                args={'source_id':'host','request_id':'selected','records':[{'source':'test','instance':'test',
+                      'conversation_id':'one','message_id':'real','role':'user','text':'Selected real text',
+                      'raw':{'native':'preserve-this'}}]}
+                bad=await call('stage_records',{**args,'executor':{'client':'Claude','transport':'DO-NOT-ECHO-SECRET'}})
+                self.assertTrue(bad['result']['isError'])
+                self.assertIn('Invalid executor',str(bad))
+                self.assertNotIn('DO-NOT-ECHO-SECRET',str(bad))
+                self.assertEqual(ws.list_jobs(),[])
+                bad_type=await call('stage_records',{**args,'executor':{'client':{'secret':'DO-NOT-ECHO-SECRET'}}})
+                self.assertTrue(bad_type['result']['isError'])
+                self.assertNotIn('DO-NOT-ECHO-SECRET',str(bad_type))
+                staged=await call('stage_records',{**args,'executor':{'client':'Claude','version':'test','agent':'agent'}})
+                self.assertFalse(staged['result'].get('isError',False))
+                job=ws.list_jobs()[0]
+                denied=await call('cancel_import',{'job_id':job['id'],'reason':'Wrong scope'},self.token())
+                self.assertEqual(denied['error']['code'],-32003)
+                cancelled=await call('cancel_import',{'job_id':job['id'],'reason':'Selected cancellation'})
+                self.assertFalse(cancelled['result'].get('isError',False))
+                blocked=await call('run_import',{'job_id':job['id']})
+                self.assertTrue(blocked['result']['isError'])
+                self.assertIn('cancelled',str(blocked))
+                self.assertEqual(self.store.stats()['messages'],0)
+                retry=await call('cancel_import',{'job_id':job['id'],'reason':'Retry'})
+                self.assertFalse(retry['result'].get('isError',False))
+                self.assertEqual(ws.job(job['id'])['status'],'cancelled')
+
     async def test_real_mcp_http_permissions_discovery_and_live_revocation(self):
         server = build_server(self.store, oauth_config=self.config, token_verifier=self.verifier)
         app = http_app(server, self.config)
