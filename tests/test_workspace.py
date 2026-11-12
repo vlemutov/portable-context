@@ -26,6 +26,11 @@ def page(task, page_id='atlas', **kwargs):
 
 
 class WorkspaceTests(unittest.TestCase):
+    def test_recommended_skill_tracks_server_release(self):
+        from portable_context import __version__
+        status = self.ws.describe()
+        self.assertEqual(status['skill']['recommended_version'], __version__)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

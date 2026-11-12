@@ -1,18 +1,26 @@
 # Use your agent as the interface
 
-Portable Context 0.2 implements the shared workflow. An agent reasons and operates tools; the
-server preserves data, jobs, typed links and wiki revisions. The included skill teaches this flow.
+Portable Context gives agents a shared workflow: the agent reasons and operates tools; the
+server preserves data, jobs, typed links and wiki revisions. Start at [START-HERE](../START-HERE.md)
+for the repository-link experience. The HTTPS/OAuth route is currently a `release/1.0` preview.
 
-## 1. Connect the memory once
+## 1. Connect or create your memory
 
-Choose one private memory directory or server. Point every agent at this same workspace.
-Install `skills/portable-context` in hosts that support skills, or ask the host to read the MCP
-resource `portable-context://guide`. Ask:
+The agent first checks whether you already have a memory. It helps connect that same workspace,
+create one in your own Cloud.ru account, use your own server, or start in a local private folder.
+An empty or temporarily unreachable memory is not a reason to create a replacement.
 
-> Explain how to use this memory and which sources you can actually access.
+With terminal/file access the agent follows the [onboarding route](../skills/portable-context/references/onboarding.md).
+You handle account/payment setup, private credential entry and browser/passkey consent; the agent
+prepares plans, installation and checks. Cloud.ru provides the HTTPS address; a purchased domain
+is unnecessary. Your account pays for the resources. A web-only chat may need a desktop agent
+for installation. The skill does not by itself install MCP or sign in to your AI accounts.
 
-The agent checks `memory_status`. Compare the workspace ID across clients: two installations
-with different data directories are separate memories. The server does not log in to AI accounts.
+Cloud.ru preview uses HTTPS/OAuth; local and existing-server stdio/SSH remain available.
+The [connection guide](../skills/portable-context/references/connection.md) distinguishes verified
+clients from untested ones. Every agent must reach the same live workspace, not separate copies.
+The agent checks its actual MCP connection and workspace ID, recovery status and your file choices.
+You then choose a first real import and read it back. Setup is not consent to export all history.
 
 ## 2. Ask for an initial import
 
@@ -41,9 +49,11 @@ An interrupted job can be resumed by the same or a different connected agent.
 
 > Read the imported discussions, build a wiki about Atlas and connect related decisions.
 
-The agent receives manageable chunks of source revisions. It reads evidence and existing wiki
-pages, then submits updates with citations and semantic links. The server commits page changes,
-history, links and task progress together. It rejects stale writes and invented source IDs.
+The agent previews review coverage and reads bounded evidence and existing wiki pages, then
+submits cited updates and explicit per-revision reviews. It reports reviewed, partial, unseen and
+changed evidence separately; dialogue review does not claim all tool output or file bytes were read.
+See the [review contract](../skills/portable-context/references/review.md). The server commits pages,
+history, links and review progress together and rejects stale writes and invented source IDs.
 It does not independently verify the truth of the agent's interpretation.
 
 The resulting vault contains:

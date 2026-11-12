@@ -26,15 +26,39 @@ def write(path, value, mode=0o600):
     tmp.replace(path)
 
 
-def install(payload):
+def install(payload, root=None):
     if sys.platform != 'linux' or sys.version_info < (3, 11):
         raise ValueError('Automatic install requires Linux and Python 3.11+. See the server guide.')
+    data=base64.b64decode(payload['bundle'],validate=True);digest=hashlib.sha256(data).hexdigest()
+    if digest!=payload['sha256']:raise ValueError('Install bundle checksum mismatch')
     os.umask(0o077)
-    root = Path.home() / '.local/share/portable-context-server'
+    root = Path(root).resolve() if root is not None else Path.home() / '.local/share/portable-context-server'
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     install_lock = (root / 'install.lock').open('w')
     fcntl.flock(install_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    if (root / 'bin/backup').exists():
+    rotation_lock=None
+    if (root/'gateway-rotation/config.json').exists():
+        rotation_lock=(root/'gateway-rotation/rotation.lock').open('a')
+        fcntl.flock(rotation_lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    # An update must coordinate the persistent HTTP writer as well as SSH writers.
+    helpers=payload.get('https_helpers')
+    https=None
+    if helpers:
+        helper_root=root/'install-helpers'/hashlib.sha256(json.dumps(helpers,sort_keys=True).encode()).hexdigest()
+        helper_root.mkdir(parents=True,exist_ok=True,mode=0o700)
+        for name,text in helpers.items():
+            if Path(name).name!=name or not name.endswith('.py'):raise ValueError('Invalid lifecycle helper')
+            write(helper_root/name,text)
+        sys.path.insert(0,str(helper_root))
+        import https_runtime
+        https=https_runtime.update_manifest(root)
+    elif any((root/name/'oauth.json').exists() for name in ('oauth','oauth10')):
+        raise ValueError('HTTPS installation requires the current lifecycle-aware installer')
+    maintenance=root/'maintenance.json'
+    pending=json.loads(maintenance.read_text()) if maintenance.exists() else None
+    if pending and (pending.get('operation') not in ('upgrade','https-readiness') or pending.get('release')!=digest):
+        raise ValueError('Finish the pending installation with the same source release before another update')
+    if (root / 'bin/backup').exists() and not pending:
         # Preserve a recoverable version before an upgrade can migrate the database.
         if (root/'restic-config.json').exists():
             run([str(root / 'bin/backup')], stdout=sys.stderr)
@@ -49,10 +73,6 @@ def install(payload):
             run(command,stdout=sys.stderr)
             legacy_lock.close()
     # Never replace a running release in-place. A failed install leaves current working.
-    data = base64.b64decode(payload['bundle'], validate=True)
-    digest = hashlib.sha256(data).hexdigest()
-    if digest != payload['sha256']:
-        raise ValueError('Install bundle checksum mismatch')
     release = root / 'releases' / digest
     ready = release / '.ready'
     if not ready.exists():
@@ -109,24 +129,30 @@ def install(payload):
         run(restic_cmd+['init'],stdout=sys.stderr)
         run(restic_cmd+['list'],stdout=sys.stderr)
     # Block reconnects before migration; keep the gate closed on failure instead of allowing old writers.
-    maintenance=root/'maintenance.json'
-    write(maintenance,json.dumps({'operation':'upgrade','release':digest}))
+    pending=pending or {'operation':'upgrade','release':digest}
+    write(maintenance,json.dumps(pending))
+    if https: https_runtime.quiesce(root)
     attachment_env=('export PC_ATTACHMENT_S3_CONFIG='+shlex.quote(str(root/'backup-config.json'))+'\n' if backup else '')
     current=root/'current'
     cmd=[str(current/'venv/bin/python'),'-m','portable_context','--home',str(memory)]
     gate='if [ -e '+shlex.quote(str(maintenance))+' ]; then echo "Memory maintenance in progress; retry after installer succeeds" >&2; exit 75; fi; '
     wrapper='#!/bin/sh\n'+attachment_env+'exec flock -s -n '+shlex.quote(str(root/'service.lock'))+' sh -c '+shlex.quote(gate+'exec '+shlex.join(cmd+['mcp','--source-root',str(imports)]))+'\n'
     write(root/'bin/mcp',wrapper,0o700)
-    stop_script = "from portable_context.maintenance import active_mcp; from pathlib import Path; import os,signal,time; r=Path.home()/'.local/share/portable-context-server'; [os.kill(p,signal.SIGTERM) for p in active_mcp(r)]; time.sleep(1); assert not active_mcp(r), 'MCP process still active; close it and rerun install'"
-    run([python,'-c',stop_script],stdout=sys.stderr)
+    stop_script = "from portable_context.maintenance import active_mcp; from pathlib import Path; import os,sys,signal,time; r=Path(sys.argv[1]); [os.kill(p,signal.SIGTERM) for p in active_mcp(r)]; time.sleep(1); assert not active_mcp(r), 'MCP process still active; close it and rerun install'"
+    run([python,'-c',stop_script,str(root)],stdout=sys.stderr)
     service_lock=(root/'service.lock').open('a')
     fcntl.flock(service_lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    if not pending.get('checkpoint_complete'):
+        # Capture writes made while the candidate venv was preparing, before
+        # migration. A resumed partially migrated DB must not invoke old code.
+        if current.exists() and (root/'bin/backup').exists():run([str(root/'bin/backup')],stdout=sys.stderr)
+        pending['checkpoint_complete']=True;write(maintenance,json.dumps(pending))
     # The new Store performs a restic checkpoint before a legacy schema migration.
     run([python,'-m','portable_context','--home',str(memory),'init'],stdout=sys.stderr)
     run(restic_cmd+['backup'],stdout=sys.stderr)
     # Validate a complete self-contained restoration before changing the active release or schedule.
-    verify_script = "from portable_context.restic_backup import Manager; from pathlib import Path; import tempfile; r=Path.home()/'.local/share/portable-context-server'; m=Manager(r/'memory',r/'restic-config.json'); s=m.snapshots()[-1]['id']; t=tempfile.TemporaryDirectory(dir=r); m.restore(s,Path(t.name)/'restore'); t.cleanup()"
-    run([python,'-c',verify_script],stdout=sys.stderr)
+    verify_script = "from portable_context.restic_backup import Manager; from pathlib import Path; import sys,tempfile; r=Path(sys.argv[1]); m=Manager(r/'memory',r/'restic-config.json'); s=m.snapshots()[-1]['id']; t=tempfile.TemporaryDirectory(dir=r); m.restore(s,Path(t.name)/'restore'); t.cleanup()"
+    run([python,'-c',verify_script,str(root)],stdout=sys.stderr)
     if current.exists() and current.resolve()!=release:
         previous=root/'previous'; previous.unlink(missing_ok=True); previous.symlink_to(current.resolve(),target_is_directory=True)
     new=root/'current.new'; new.unlink(missing_ok=True); new.symlink_to(release,target_is_directory=True); new.replace(current)
@@ -160,8 +186,15 @@ def install(payload):
     status = subprocess.check_output([str(bin_dir / 'status')], text=True)
     maintenance.unlink()
     service_lock.close()
+    if https:
+        # A failure leaves maintenance closed and the HTTP writer stopped. Retry
+        # this same release; never roll an old binary back over a migrated DB.
+        https_runtime.start_mcp(root,https)
+    if rotation_lock:rotation_lock.close()
+    install_lock.close()
     return {'ready': True, 'root': str(root), 'release': digest, 'backup': 'restic S3 verified' if (root / 'backup-config.json').exists() else 'restic local verified',
-            'schedule': timer, 'memory': json.loads(status)}
+            'schedule': timer, 'memory': json.loads(status),'https':{'ready':True,'origin':https['origin'],
+            'rotation_configured':(root/'gateway-rotation/config.json').exists()} if https else None}
 
 
 if __name__ == '__main__':

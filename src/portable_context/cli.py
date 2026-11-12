@@ -72,6 +72,7 @@ def main(argv=None):
     p = commands.add_parser("mcp")
     p.add_argument("--transport", choices=("stdio", "streamable-http"), default="stdio")
     p.add_argument("--port", type=int, default=8766)
+    p.add_argument("--oauth-config", type=Path, help="Owner-pinned OAuth configuration for HTTPS behind a loopback proxy")
     p.add_argument("--source-root", action="append", help="Explicit server directories readable by source registration")
     p.add_argument("--allow-unauthenticated-local", action="store_true", help="Explicit opt-out for trusted loopback-only use")
     p = commands.add_parser("serve-ingest")
@@ -165,16 +166,26 @@ def main(argv=None):
                 server.server_close()
         elif args.command == "mcp":
             from .mcp_server import build_server
-            server = build_server(store, args.source_root)
+            oauth_config = None
+            if args.oauth_config:
+                if args.transport != 'streamable-http' or args.allow_unauthenticated_local:
+                    raise ValueError('OAuth requires streamable-http and cannot disable authentication')
+                from .oauth import OAuthConfig
+                oauth_config = OAuthConfig.load(args.oauth_config)
+            server = build_server(store, args.source_root, oauth_config=oauth_config)
             if args.transport == "stdio":
                 server.run()
             else:
                 import uvicorn
                 from .auth import BearerAuth
-                app = server.streamable_http_app(host='127.0.0.1')
-                if not args.allow_unauthenticated_local:
+                if oauth_config:
+                    from .oauth import http_app
+                    app = http_app(server, oauth_config)
+                else:
+                    app = server.streamable_http_app(host='127.0.0.1')
+                if not oauth_config and not args.allow_unauthenticated_local:
                     app = BearerAuth(app, os.environ.get('PC_MCP_TOKEN', ''))
-                uvicorn.run(app, host='127.0.0.1', port=args.port)
+                uvicorn.run(app, host='127.0.0.1', port=args.port, access_log=False, proxy_headers=False)
         return 0
     except KeyboardInterrupt:
         return 130
