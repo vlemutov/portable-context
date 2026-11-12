@@ -140,6 +140,41 @@ Desktop Chat/Cowork и Claude Code — разные клиенты, эту на�
 Если независимый отзыв каждого устройства необходим, нужны отдельные client IDs:
 общий desktop ID означает общий отзыв разрешения приложения, даже при разных токенах.
 
+## Cursor Desktop — экспериментальный чистый тест
+
+Это отдельная проверка совместимости, не уже проверенный клиент. Сначала зафиксируй версию
+Cursor и ОС. По [официальной документации Cursor](https://prod.cursor.com/docs/mcp)
+статический OAuth задаётся через `auth.CLIENT_ID`; desktop callback —
+`http://localhost:8787/callback`. Сверь контракт с установленной версией до настройки.
+
+После первого входа владельца в **новую** память открой её Pocket ID и настройки OIDC-клиента
+`portable-context-desktop`. Добавь точный desktop callback, сохрани имеющиеся адреса,
+public client, PKCE, согласие и права API memory:read/write. Bootstrap пока добавляет callbacks
+Codex/Claude Code, поэтому этот шаг для Cursor выполняется владельцем через UI с помощью агента.
+Не добавляй wildcard, web callback, client secret или memory:admin для этого desktop теста.
+Не меняй OAuth первой памяти. Если UI не позволяет сохранить эти настройки, зафиксируй блокер.
+
+В отдельной папке теста используй `.cursor/mcp.json` (или настройку текущей версии Cursor).
+Пример после замены URL на `mcp_url` из новой HTTPS receipt:
+
+```json
+{
+  "mcpServers": {
+    "portable-context-test": {
+      "url": "https://NEW-MEMORY-ORIGIN/mcp",
+      "auth": {
+        "CLIENT_ID": "portable-context-desktop",
+        "scopes": ["openid", "offline_access", "memory:read", "memory:write"]
+      }
+    }
+  }
+}
+```
+
+Выполни настоящий browser login и вызов memory_status из Cursor, сравни workspace_id с receipt.
+При ошибке не заменяй HTTPS на SSH незаметно: запись об успехе HTTPS требует этого транспорта.
+Выбранный официальный экспорт может быть первым импортом; native-адаптера истории Cursor нет.
+
 ## SSH/stdio или локальная память
 
 Возьми `command` и `args` из PRIVATE_STATE/client-config.json и перенеси в **штатный формат**

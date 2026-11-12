@@ -56,6 +56,9 @@ class CloudAPI:
     def request(self, service, path, *, method='GET', body=None, query=None):
         if not path.startswith('/') or path.startswith('//') or '?' in path or '#' in path:
             raise ValueError('Use an API path and a separate query mapping')
+        for values in (query, body):
+            if isinstance(values, dict) and 'projectId' in values and values['projectId'] != self.project_id:
+                raise ValueError('Cloud request belongs to another project')
         url = SERVICES[service] + path
         url += '?' + urllib.parse.urlencode({'projectId': self.project_id, **(query or {})})
         return self._request(url, method, body, {'Authorization': 'Bearer ' + self.token})

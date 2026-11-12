@@ -280,6 +280,32 @@ The skill now reports revision 1.0-preview.2 separately from package baseline 0.
 `claude mcp get` timeout is documented as inconclusive, not as proof of server failure or proof
 that authentication is the only possible cause. Full upstream CLI error wording is outside this fix.
 
+## Second-installation isolation review — 2026-11-12
+
+The next owner acceptance uses a separate Cloud.ru project in the same account,
+a fresh private state directory and Cursor Desktop on another computer. Start at
+[the clean test guide](clean-install-test.md), using a pinned checkout. No second
+cloud installation was created by this review; Cursor OAuth remains experimental.
+
+Local two-installation tests exercise unique deployment/bucket names, separate
+rendered Terraform variables, workspace IDs and journals, and preservation of the
+first installation's files. Existing recovery/HTTPS checks bind the workspace and
+issuer; S3 permissions target the installation's bucket, with per-workspace restic
+repositories. Separate VMs isolate the default service names, paths and ports.
+
+The review added guards against configure retargeting a used state directory,
+inherited Terraform data/workspace/argument/variable overrides, and cross-project
+HTTPS/API requests. Same-target SSH CIDR changes and normal configuration updates
+remain available. These guard accidental use through the supported installer;
+they are not an authorization boundary against manual state edits or account-wide
+cloud credentials. Use project-scoped credentials, not a copied production kit.
+
+Skill revision 1.0-preview.4 adds the additional-memory route and documented Cursor
+static OAuth setup. The existing installation was not upgraded by this review.
+Two memories on one VM/user and two installations in one Cloud.ru project are
+outside this acceptance scenario. Live creation, login, file capture and recall
+are still required before declaring the new-user journey complete.
+
 ## After 1.0
 
 - Investigate isolated provider/public-network 503/504/TLS failures, optionally

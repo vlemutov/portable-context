@@ -124,6 +124,11 @@ def bootstrap(state):
 
 def command_env(state, credentials=True):
     env = dict(os.environ)
+    # Never let another Terraform session select this installation's state,
+    # workspace, CLI arguments or input variables through the parent shell.
+    for name in list(env):
+        if name in ('TF_DATA_DIR', 'TF_WORKSPACE') or name.startswith(('TF_CLI_ARGS', 'TF_VAR_')):
+            env.pop(name)
     env['TF_IN_AUTOMATION'] = '1'
     env['TF_CLI_CONFIG_FILE'] = str(state / 'terraform.rc')
     # Debug logs may contain secrets or private plan values; never turn them on in the installer.
@@ -199,6 +204,32 @@ def validate_config(config):
             raise ValueError('Provide at least one IPv4 DNS resolver')
         for address in dns:
             ipaddress.IPv4Address(address)
+
+
+def configure(state, values):
+    """Configure one installation; a second memory needs a fresh state directory."""
+    config = read(state / 'deployment.json')
+    allowed = {'project_id', 'tenant_id', 'zone', 'image_id', 'flavor', 'ssh_cidr', 'bucket', 'disk_gb',
+               'ssh_user', 'ssh_port', 'host', 'identity_file', 'schedule_backup', 'storage_class', 'dns_servers',
+               'ssh_command', 'backup_repository'}
+    if set(values) - allowed:
+        raise ValueError('Unknown or secret configuration fields: ' + ', '.join(set(values) - allowed))
+    used = any((state / name).exists() for name in (
+        'plan-review.json', 'terraform/deployment.tfplan', 'terraform/terraform.tfstate',
+        'installed.json', 'https-plan.json', 'https-journal.json'))
+    protected = ('project_id', 'tenant_id', 'bucket', 'host', 'ssh_user', 'ssh_port',
+                 'identity_file', 'backup_repository')
+    changed = [name for name in protected if name in values and values[name] != config.get(name)]
+    if used and changed:
+        raise ValueError('This state directory already belongs to a planned or installed memory; '
+                         'use a new private state directory for another installation. '
+                         'Target changes require a separate reviewed migration: ' + ', '.join(changed))
+    config.update(values)
+    config.setdefault('bucket', config['name'] + '-backups')
+    config.setdefault('disk_gb', 40)
+    validate_config(config)
+    save(state / 'deployment.json', config)
+    return {'configured': True}
 
 
 def ensure_key(state):
@@ -558,19 +589,7 @@ def main(argv=None):
         save(state / 'credentials.json', values)
         result = {'saved': True, 'note': 'Stored privately. Managed HTTPS also uses this cloud key on the VM for certificate renewal; do not revoke it without updating the rotation controller.'}
     elif args.command == 'configure':
-        config = read(state / 'deployment.json')
-        values = read(args.file)
-        allowed = {'project_id', 'tenant_id', 'zone', 'image_id', 'flavor', 'ssh_cidr', 'bucket', 'disk_gb',
-                   'ssh_user', 'ssh_port', 'host', 'identity_file', 'schedule_backup', 'storage_class', 'dns_servers',
-                   'ssh_command','backup_repository'}
-        if set(values) - allowed:
-            raise ValueError('Unknown or secret configuration fields: ' + ', '.join(set(values) - allowed))
-        config.update(values)
-        config.setdefault('bucket', config['name'] + '-backups')
-        config.setdefault('disk_gb', 40)
-        validate_config(config)
-        save(state / 'deployment.json', config)
-        result = {'configured': True}
+        result = configure(state, read(args.file))
     elif args.command == 'doctor':
         local_tf = state / 'tools' / ('terraform.exe' if os.name == 'nt' else 'terraform')
         result = {'python': sys.version.split()[0], 'ssh': shutil.which('ssh'), 'ssh_keygen': shutil.which('ssh-keygen'),

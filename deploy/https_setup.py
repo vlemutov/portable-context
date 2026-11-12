@@ -28,6 +28,8 @@ def plan(state, options=None):
     allowed={'project_id','security_group_id','registry_id','container_id','container_name','image','origin_ip'}
     if set(options)-allowed:raise ValueError('Unsupported HTTPS options')
     project=str(uuid.UUID(options.get('project_id') or deployment.get('project_id','')))
+    if deployment.get('mode')=='cloudru' and project!=str(uuid.UUID(deployment['project_id'])):
+        raise ValueError('HTTPS project must match the VM deployment; use a separate state directory for another memory')
     import ipaddress
     address=str(ipaddress.IPv4Address(options.get('origin_ip') or deployment.get('host','')))
     group=options.get('security_group_id')
