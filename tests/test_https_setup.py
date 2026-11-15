@@ -219,7 +219,7 @@ class HTTPSSetupTests(unittest.TestCase):
                     self.container['configuration']['ingress']['publicUri']='memory.example'
                     if method=='PATCH' and self.lose:self.lose=False;raise ConnectionError('Lost PATCH reply')
                     return {'resourceId':'container-id'}
-                if self.container is None:raise CloudAPIError(404,method)
+                if self.container is None:raise CloudAPIError(499,method,'container_name_not_found')
                 return self.container
         cloud=Cloud();commands=[]
         def command(args,**kwargs):

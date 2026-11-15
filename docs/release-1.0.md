@@ -4,6 +4,28 @@ Status: in development. The memory package remains on 0.9.0 with a personal
 1.0-preview HTTPS/OAuth deployment. Do not advertise
 OAuth or the new HTTPS installation as released until the acceptance gates pass.
 
+## 1.0-preview.5 — interrupted Ubuntu/Cursor install
+
+- Exact Container Apps name-not-found HTTP 499 handling at the pre-create lookup;
+  unknown 499 and ambiguous CREATE replies do not authorize another resource.
+- Bounded GET/SSH read retries, short visibility grace for owned newly created
+  resources, fixed safe error categories and local stage/status reporting.
+- Same-source HTTPS resume verifies live workspace/release and a full installer
+  fingerprint before skipping the memory migration/backup restore exercise.
+  A changed source still uses the normal backed-up package update.
+- Network diagnostics include private registry data-plane hosts, cloud control
+  APIs, TLS/HTTP, missing owned routes and Linux policy routing. Cloud 443 and
+  VM SSH paths are diagnosed separately; no global VPN routing assumption.
+- Cloud VM readiness checks clock/dependencies and permits explicit acceptance
+  of reviewed historical cloud-init errors only for the same status/config/boot.
+- Quota discovery reads project/ancestor usage via Evolution v3, with numerical
+  comparison for reviewed API-code demands. Missing permissions/schema/data are
+  unknown; default limits are never substituted. Preflight without demands is
+  review-required, not an automatic guarantee or a physical capacity check.
+- [Resume guide](install-resume.md) and skill revision 1.0-preview.5 preserve the
+  existing installation. The actual second-memory Cursor OAuth pass is still a
+  release gate; mock API tests do not establish live provider compatibility.
+
 OAuth resource-server code and per-operation capabilities are now implemented in
 the branch; see [the OAuth preview contract](oauth-preview.md). The personal
 pilot completed owner passkey enrollment, native Codex OAuth login, and project

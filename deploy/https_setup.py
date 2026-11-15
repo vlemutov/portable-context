@@ -14,6 +14,7 @@ import subprocess
 import tempfile
 import time
 import uuid
+import sys
 
 from setup import ROOT, INSTALL_BOOTSTRAP, read, save, sha, private_directory, ssh_args, terraform, command_env
 from cloud_gateway import CloudAPI, CloudAPIError, CADDY_IMAGE, container_request, public_origin
@@ -21,6 +22,43 @@ from gateway import issue_credentials, edge_config
 
 
 def digest(value):return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+
+
+def container_absent(error):
+    # Only the pre-create name lookup uses this predicate. A generic 499 is not absence.
+    return error.status==404 or (error.status==499 and error.reason=='container_name_not_found')
+
+
+def image_failure(stderr):
+    value=(stderr or '').lower()
+    if any(s in value for s in ('unauthorized','denied','forbidden')):return 'registry authorization rejected'
+    if any(s in value for s in ('timeout','deadline exceeded','no such host','connection refused')):return 'registry network/DNS timeout'
+    if any(s in value for s in ('x509','certificate')):return 'registry TLS verification failed'
+    return 'unclassified transfer failure'
+
+
+def create_resource(api,service,path,body,intent,journal):
+    intent['submitted']=True;journal.save()
+    try:return api.request(service,path,method='POST',body=body)
+    except CloudAPIError as error:
+        # Only a definite rejected request can be resubmitted. Timeout/5xx stay ambiguous.
+        if error.status in (400,403,409,429) and error.reason in ('quota_exceeded','capacity_unavailable'):
+            intent.pop('submitted',None);journal.save()
+        raise
+
+
+def installation_status(state):
+    state=Path(state);deployment=read(state/'deployment.json')
+    journal=read(state/'https-journal.json') if (state/'https-journal.json').exists() else {}
+    installed=read(state/'installed.json') if (state/'installed.json').exists() else {}
+    stage=journal.get('stage','not_started')
+    ambiguous=[name for name,value in journal.get('intent',{}).items() if name in ('registry','container')
+               and value.get('submitted') and not value.get('resource_id')]
+    return {'deployment':deployment['name'],'project_id':deployment.get('project_id'),
+        'workspace_id':installed.get('memory',{}).get('workspace_id'), 'stage':stage,
+        'completed':list(journal.get('completed',{})), 'last_error':journal.get('last_error'),
+        'ambiguous_creation':bool(ambiguous),'ambiguous_stages':ambiguous,
+        'next':'Preserve this state. Resolve connectivity/quota errors; resume install --https. If creation reply was lost, review resource ID and use https-reconcile. Never init a replacement.'}
 
 
 def plan(state, options=None):
@@ -69,7 +107,8 @@ def plan(state, options=None):
     existing=state/'https-journal.json'
     if existing.exists() and read(existing)['config']!=config:raise ValueError('Existing HTTPS deployment differs; separate migration required')
     save(state/'https-plan.json',reviewed)
-    return reviewed
+    from quotas import check as quota_check
+    return {**reviewed,'quota_preflight':quota_check(state)}
 
 
 def firewall_fingerprint(folder):
@@ -98,14 +137,33 @@ class Journal:
     def save(self):save(self.path,self.value)
     def stage(self,name,fn):
         if name in self.value['completed']:return self.value['completed'][name]
-        self.value['stage']=name;self.value['intent'].setdefault(name,{'id':uuid.uuid4().hex});self.save()
-        value=fn(self.value['intent'][name]);self.value['completed'][name]=value;self.save();return value
+        self.value['intent'].setdefault(name,{'id':uuid.uuid4().hex})
+        value=self.operation(name,lambda:fn(self.value['intent'][name]))
+        self.value['completed'][name]=value;self.save();return value
+    def operation(self,name,fn):
+        self.value['stage']=name;self.save()
+        print('HTTPS stage: '+name, file=sys.stderr, flush=True)
+        try:
+            value=fn()
+        except Exception as error:
+            # Do not serialize arbitrary exception strings: commands may contain secrets.
+            self.value['last_error']={'stage':name,'type':type(error).__name__,
+                'reason':error.reason if isinstance(error,CloudAPIError) else 'stage_failed',
+                'http_status':error.status if isinstance(error,CloudAPIError) else None}
+            self.save();raise
+        self.value.pop('last_error',None)
+        self.save();return value
 
 
-def wait_for(fn, ready, timeout=600):
+def wait_for(fn, ready, timeout=600, newly_created=False):
     deadline=time.monotonic()+timeout
+    visibility_deadline=time.monotonic()+90
     while True:
-        value=fn()
+        try:value=fn()
+        except CloudAPIError as error:
+            if not (newly_created and error.status in (403,404) and time.monotonic()<visibility_deadline):raise
+            print('Waiting for newly created resource visibility (up to 90s)',file=sys.stderr,flush=True)
+            value={}
         if ready(value):return value
         if time.monotonic()>=deadline:raise ValueError('Cloud operation pending; rerun with the same state')
         time.sleep(5)
@@ -231,25 +289,32 @@ def install(state, approval=None):
 
 
 def install_locked(state,config):
-    from setup import install as install_memory
+    from setup import install as install_memory, resume_memory, ssh_read
     from rotation_setup import install as install_rotation
     journal=Journal(state,config);folder=private_directory(state/'https')
-    # Always run the package updater: a completed cloud journal is not proof of current code.
-    memory=install_memory(state)
-    machine=subprocess.run(ssh_args(state,read(state/'deployment.json'))+['uname -m'],capture_output=True,text=True,timeout=30)
-    if machine.returncode or machine.stdout.strip() not in ('x86_64','amd64'):
+    # Skip migrations only with a matching installer fingerprint AND a live identity check.
+    def memory_step():
+        value=resume_memory(state)
+        return install_memory(state) if value is None else value
+    memory=journal.operation('memory',memory_step)
+    machine=journal.operation('architecture',lambda:ssh_read(ssh_args(state,read(state/'deployment.json')), 'uname -m', label='Server architecture'))
+    if machine.returncode:raise ValueError('Server architecture command failed; architecture is unknown')
+    if machine.stdout.strip() not in ('x86_64','amd64'):
         raise ValueError('Automatic HTTPS identity profile requires a Linux AMD64 server; no edge resources created')
-    api=CloudAPI(state,config['project_id']);name=config['container_name']
+    api=journal.operation('cloud-api',lambda:CloudAPI(state,config['project_id']));name=config['container_name']
+    if read(state/'deployment.json').get('mode')=='cloudru':
+        from quotas import preflight
+        journal.operation('quotas',lambda:preflight(state,'https'))
     def registry(intent):
         resource=config.get('registry_id') or intent.get('resource_id')
         if not resource:
             if intent.get('submitted'):raise ValueError('Registry creation reply was lost; use https-reconcile --stage registry --resource-id REVIEWED_ID, then retry with the same state')
             existing=api.request('registry','/v1/registries').get('registries',[])
             if any(r['name']==name for r in existing):raise ValueError('Registry name occupied; explicitly review its ID or choose another name')
-            intent['submitted']=True;journal.save()
-            operation=api.request('registry','/v1/registries',method='POST',body={'projectId':config['project_id'],'name':name,'isPublic':False,'registryType':'DOCKER','tariff':'BASIC'})
+            operation=create_resource(api,'registry','/v1/registries',{'projectId':config['project_id'],'name':name,'isPublic':False,'registryType':'DOCKER','tariff':'BASIC'},intent,journal)
             resource=operation['resourceId'];intent['resource_id']=resource;journal.save()
-        value=wait_for(lambda:api.request('registry','/v1/registries/'+resource),lambda v:v.get('status')=='ACTIVE')
+        value=wait_for(lambda:api.request('registry','/v1/registries/'+resource),lambda v:v.get('status')=='ACTIVE',
+                       newly_created=bool(intent.get('submitted') and intent.get('resource_id')))
         if value.get('isPublic') or value.get('registryType')!='DOCKER':raise ValueError('Expected private Docker registry')
         return {'id':resource,'name':value['name']}
     reg=journal.stage('registry',registry)
@@ -270,7 +335,9 @@ def install_locked(state,config):
             env={**os.environ,'DOCKER_CONFIG':str(auth)}
             for args in ([str(crane),'copy','--platform','linux/amd64',CADDY_IMAGE,target],[str(crane),'digest',target]):
                 response=subprocess.run(args,env=env,capture_output=True,text=True,timeout=600)
-                if response.returncode:raise ValueError('Pinned registry image transfer failed; private output suppressed')
+                if response.returncode:
+                    reason=image_failure(response.stderr)
+                    raise ValueError('Registry image transfer failed: '+reason+'; run network.py inspect --scope cloud with the same state; private output suppressed')
             value=response.stdout.strip()
             if not re.fullmatch(r'sha256:[a-f0-9]{64}',value):raise ValueError('Invalid image digest')
         return {'image':host+'/edge-runtime@'+value}
@@ -281,14 +348,14 @@ def install_locked(state,config):
             if intent.get('submitted'):raise ValueError('Container creation reply was lost; use https-reconcile --stage container --resource-id REVIEWED_ID, then retry with the same state')
             try:api.request('containers','/v2/containers/'+name)
             except CloudAPIError as error:
-                if error.status!=404:raise
+                if not container_absent(error):raise
             else:raise ValueError('Container name occupied; explicitly select its ID')
             body=container_request(config['project_id'],name,image_value,config=b'',certificate=b'',ca=b'',key_secret='pending')
             app=body['template']['containers'][0];app.update(command=['caddy'],args=['respond','--listen',':8080','--body','Portable Context setup pending','--status','503'],env=[])
-            intent['submitted']=True;journal.save()
-            operation=api.request('containers','/v2/containers',method='POST',body=body)
+            operation=create_resource(api,'containers','/v2/containers',body,intent,journal)
             resource=operation['resourceId'];intent['resource_id']=resource;journal.save()
-        value=wait_for(lambda:api.request('containers','/v2/containers/'+name),lambda v:v.get('status')=='running')
+        value=wait_for(lambda:api.request('containers','/v2/containers/'+name),lambda v:v.get('status')=='running',
+                       newly_created=bool(intent.get('submitted') and intent.get('resource_id')))
         if value['id']!=resource or value.get('projectId')!=config['project_id']:raise ValueError('Container ownership mismatch')
         validate_placeholder(value,image_value)
         return {'id':resource,'origin':public_origin(value)}

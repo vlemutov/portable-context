@@ -3,12 +3,12 @@ name: portable-context
 description: Deploy a personal Portable Context memory on Cloud.ru or an existing server, import selected or all accessible conversation history, preserve source relationships, and build or update its knowledge wiki through MCP. Use for setup, migration, recall, shared graph enrichment, or resuming another agent's work.
 metadata:
   version: "0.9.0"
-  revision: "1.0-preview.4"
+  revision: "1.0-preview.5"
 ---
 
 # Portable Context
 
-Skill revision: **1.0-preview.4**. Package/protocol baseline: **0.9.0**.
+Skill revision: **1.0-preview.5**. Package/protocol baseline: **0.9.0**.
 Report both when identifying this installed copy; record its source commit on installation.
 The preview revision distinguishes updated instructions without claiming a released 1.0 server.
 

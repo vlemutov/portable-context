@@ -8,6 +8,9 @@ import base64
 import json
 from pathlib import Path
 import re
+import random
+import time
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -27,9 +30,52 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class CloudAPIError(RuntimeError):
-    def __init__(self, status, method):
+    def __init__(self, status, method, reason='unclassified'):
         self.status = status
-        super().__init__(f'Cloud API HTTP {status}; operation {method}; response body suppressed')
+        self.reason = reason
+        super().__init__(f'Cloud API HTTP {status}; operation {method}; reason {reason}; response body suppressed')
+
+
+def error_reason(raw):
+    """Return fixed labels only. Never expose arbitrary provider text or echoed secrets."""
+    try:
+        value = json.loads(raw)
+    except (ValueError, UnicodeError):
+        value = {'message':raw.decode('utf-8','replace')} if isinstance(raw,bytes) else {'message':raw}
+    if not isinstance(value, dict):
+        return 'unclassified'
+    messages = [value.get('message'), value.get('code')]
+    if isinstance(value.get('error'), dict):
+        messages += [value['error'].get('message'), value['error'].get('code')]
+    elif isinstance(value.get('error'), str):
+        messages.append(value['error'])
+    for message in messages:
+        if not isinstance(message, str):
+            continue
+        if message.strip() == 'Serverless with name is not found':
+            return 'container_name_not_found'
+        normalized = message.lower().replace('_', ' ')
+        if any(marker in normalized for marker in ('quota exceeded', 'quota limit exceeded', 'exceeded quota')):
+            return 'quota_exceeded'
+        if any(marker in normalized for marker in ('insufficient capacity', 'not enough resources', 'insufficient resources')):
+            return 'capacity_unavailable'
+    return 'unclassified'
+
+
+def read_retry(fn, *, attempts=4, label='Cloud read', statuses=(429, 500, 502, 503, 504)):
+    """Bounded retries for reads only; callers must never pass a mutation."""
+    for attempt in range(attempts):
+        try:
+            return fn()
+        except CloudAPIError as error:
+            if error.status not in statuses or error.reason in ('quota_exceeded', 'capacity_unavailable'):
+                raise
+        except (urllib.error.URLError, TimeoutError, ConnectionError):
+            pass
+        if attempt == attempts - 1:
+            raise ValueError(f'{label} unavailable after {attempts} attempts; preserve state and retry later') from None
+        print(f'{label}: temporary failure; retry {attempt + 2}/{attempts}', file=sys.stderr, flush=True)
+        time.sleep(min(2 ** attempt, 8) + random.uniform(0, .5))
 
 
 class CloudAPI:
@@ -51,7 +97,8 @@ class CloudAPI:
                 raw = response.read()
                 return json.loads(raw) if raw else {}
         except urllib.error.HTTPError as error:
-            raise CloudAPIError(error.code, method) from None
+            reason = error_reason(error.read(8192))
+            raise CloudAPIError(error.code, method, reason) from None
 
     def request(self, service, path, *, method='GET', body=None, query=None):
         if not path.startswith('/') or path.startswith('//') or '?' in path or '#' in path:
@@ -61,7 +108,19 @@ class CloudAPI:
                 raise ValueError('Cloud request belongs to another project')
         url = SERVICES[service] + path
         url += '?' + urllib.parse.urlencode({'projectId': self.project_id, **(query or {})})
-        return self._request(url, method, body, {'Authorization': 'Bearer ' + self.token})
+        call = lambda: self._request(url, method, body, {'Authorization': 'Bearer ' + self.token})
+        return read_retry(call, label=service + ' GET') if method == 'GET' else call()
+
+    def organization(self, path, query=None):
+        """Read-only quota metadata; never mutate organization limits or permissions."""
+        if not re.fullmatch(r'/v3/(projects/[a-f0-9-]{36}|quotas/(resourceTypes|usages))', path):
+            raise ValueError('Unsupported organization read')
+        if path.startswith('/v3/projects/') and path.rsplit('/', 1)[-1] != self.project_id:
+            raise ValueError('Quota lookup belongs to another project')
+        url = 'https://organization.api.cloud.ru' + path
+        if query:
+            url += '?' + urllib.parse.urlencode(query, doseq=True)
+        return read_retry(lambda: self._request(url, 'GET', None, {'Authorization': 'Bearer ' + self.token}), label='Quota GET')
 
 
 def container_request(project_id, name, image, *, config, certificate, ca, key_secret):
