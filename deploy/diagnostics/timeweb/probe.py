@@ -85,7 +85,7 @@ class Probe:
             'code': query['code'][0], 'code_verifier': verifier,
             'redirect_uri': params['redirect_uri'], 'resource': self.base + '/mcp'}
 
-    def run(self):
+    def run(self, long_stream_seconds=65):
         status, _ = self.request('/_diag/configure', {'origin': self.base})
         self.check('bootstrap_unauthorized_denied', status == 401)
         status, configured = self.request('/_diag/configure', {'origin': self.base},
@@ -109,9 +109,19 @@ class Probe:
         self.check('pkce_exchange', status == 200 and bool(tokens.get('refresh_token')))
         status, _ = self.request('/api/oidc/token', payload, form=True)
         self.check('code_replay_denied', status == 400)
+        # Code reuse revokes tokens issued from that code (RFC 6749 4.1.2).
+        # Do not mistake the provider's replay protection for a broken userinfo.
+        status, _ = self.request('/api/oidc/userinfo', headers={'Authorization': 'Bearer ' + tokens['access_token']})
+        self.check('code_replay_revokes_access', status == 401)
+        payload = self.code()
+        status, tokens = self.request('/api/oidc/token', payload, form=True)
+        self.check('fresh_grant_after_replay_test', status == 200 and bool(tokens.get('refresh_token')))
         access = tokens['access_token']
         headers = {'Authorization': 'Bearer ' + access}
         status, identity = self.request('/api/oidc/userinfo', headers=headers)
+        self.results['userinfo_response'] = {'status': status, 'keys': sorted(identity),
+            'subject_matches': identity.get('sub') == login['owner'],
+            'error': identity.get('error'), 'code': identity.get('code')}
         self.check('owner_identity', status == 200 and identity.get('sub') == login['owner'])
         for path in ('/files/not-a-file', '/events'):
             status, _ = self.request(path)
@@ -130,7 +140,7 @@ class Probe:
         with self.open('/files/' + digest, headers=headers) as response:
             actual = response.read(len(data) + 1)
             self.check('file_download_sha256', response.status == 200 and hashlib.sha256(actual).hexdigest() == digest)
-        for seconds, last_id in ((6, 0), (3, 6), (65, 0)):
+        for seconds, last_id in ((6, 0), (3, 6), (long_stream_seconds, 0)):
             received, ids = [], []
             started = time.monotonic()
             with self.open('/events?seconds=' + str(seconds), headers={**headers, 'Last-Event-ID': str(last_id)}) as response:

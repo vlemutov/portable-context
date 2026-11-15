@@ -6,7 +6,7 @@ RUN curl --fail --location --retry 3 https://github.com/pocket-id/pocket-id/rele
     && echo '85881ea87d78710c34f127b2d849d27dd7e69963723d9e590f66de26e87fc4fb  /usr/local/bin/pocket-id' | sha256sum -c - \
     && chmod 755 /usr/local/bin/pocket-id
 WORKDIR /diagnostic
-COPY server.py smoke.py VERSION ./
+COPY server.py probe.py smoke.py VERSION ./
 RUN python smoke.py
 ENV PORT=8080 PYTHONUNBUFFERED=1
 EXPOSE 8080
