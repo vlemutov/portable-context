@@ -62,7 +62,7 @@ def configure(origin):
             'STATIC_API_KEY': STATE['admin_key'], 'ANALYTICS_DISABLED': 'true',
             'VERSION_CHECK_DISABLED': 'true', 'ICON_LIBRARY_URL': 'disabled',
             'ALLOW_USER_SIGNUPS': 'disabled', 'REQUIRE_USER_EMAIL': 'false',
-            'APP_NAME': 'Disposable Portable Context diagnostic', 'LOG_LEVEL': 'error',
+            'APP_NAME': 'PC transport diagnostic', 'LOG_LEVEL': 'error',
             'LOG_QUERY_ARGS': 'false', 'CIMD_URL_ALLOWLIST': '[]'}
         env.pop('DIAG_KEY', None)
         log_path = Path(directory) / 'startup.log'
