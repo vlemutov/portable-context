@@ -17,11 +17,13 @@ from pathlib import Path
 import platform
 import re
 import socket
+import ssl
 import subprocess
 import time
 
 CLOUD_HOSTS = ('console.cloud.ru', 'iam.api.cloud.ru', 'compute.api.cloud.ru',
-               'vpc.api.cloud.ru', 'organization.api.cloud.ru', 's3.cloud.ru')
+               'vpc.api.cloud.ru', 'organization.api.cloud.ru', 's3.cloud.ru',
+               'ar.api.cloud.ru','containers.api.cloud.ru','secretmanager.api.cloud.ru')
 METRIC = 17383
 
 
@@ -152,19 +154,38 @@ def command(system, action, record):
     raise ValueError('Unsupported operating system')
 
 
-def targets(config, scope):
+def registry_hosts(state):
+    """Derive the data-plane hostname from this deployment's receipts, not user guesses."""
+    hosts=set()
+    path=state/'https-journal.json'
+    if path.exists():
+        value=read(path);config=read(state/'deployment.json')
+        if value.get('config',{}).get('project_id')!=config.get('project_id'):
+            raise ValueError('HTTPS journal belongs to another project')
+        name=value.get('completed',{}).get('registry',{}).get('name','')
+        if name:
+            if not re.fullmatch(r'[a-z0-9][a-z0-9-]{1,62}',name):raise ValueError('Invalid recorded registry name')
+            hosts.add(name+'.cr.cloud.ru')
+    return sorted(hosts)
+
+
+def targets(config, scope, state=None, tolerate_dns=False):
     endpoints = []
     if scope in ('cloud', 'all'):
         if config['mode'] != 'cloudru':
             raise ValueError('Cloud endpoints apply only to a cloudru deployment')
         endpoints.extend((host, 443) for host in CLOUD_HOSTS)
+        if state:endpoints.extend((host,443) for host in registry_hosts(state))
     if scope in ('server', 'all'):
         if not config.get('host'):
             raise ValueError('Server not created yet; use --scope cloud first')
         endpoints.append((config['host'], int(config.get('ssh_port', 22))))
     resolved = []
     for host, port in endpoints:
-        addresses = sorted({ipv4(row[4][0]) for row in socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM)})
+        try:addresses = sorted({ipv4(row[4][0]) for row in socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM)})
+        except OSError:
+            if not tolerate_dns:raise ValueError('DNS lookup failed for '+host) from None
+            resolved.append({'host':host,'port':port,'addresses':[],'dns':'failed'});continue
         if not addresses:
             raise ValueError('No IPv4 addresses for ' + host)
         resolved.append({'host': host, 'port': port, 'addresses': addresses})
@@ -175,21 +196,41 @@ def probe(endpoint):
     results = []
     for ip in endpoint['addresses']:
         try:
-            with socket.create_connection((ip, endpoint['port']), timeout=3):
-                results.append({'address': ip, 'tcp': 'reachable'})
+            with socket.create_connection((ip, endpoint['port']), timeout=3) as connection:
+                result={'address':ip,'tcp':'reachable'}
+                results.append(result)
+                if endpoint['port']==443:
+                    try:
+                        with ssl.create_default_context().wrap_socket(connection,server_hostname=endpoint['host']) as tls:
+                            result['tls']='verified'
+                            tls.sendall(('HEAD / HTTP/1.1\r\nHost: '+endpoint['host']+'\r\nConnection: close\r\n\r\n').encode('ascii'))
+                            line=tls.recv(512).split(b'\r\n',1)[0].split()
+                            if len(line)>=2 and line[0].startswith(b'HTTP/') and line[1].isdigit():result['http_status']=int(line[1])
+                    except (OSError,ValueError):result['tls_or_http']='failed'
         except OSError as exc:
-            results.append({'address': ip, 'tcp': 'failed', 'reason': str(exc)})
+            results.append({'address': ip, 'tcp': 'failed', 'reason': type(exc).__name__})
     return dict(endpoint, results=results)
 
 
 def inspect(state, scope):
     system = platform.system()
     network = snapshot(system)
-    endpoints = targets(read(state / 'deployment.json'), scope)
+    endpoints = targets(read(state / 'deployment.json'), scope,state,tolerate_dns=True)
     with ThreadPoolExecutor(max_workers=6) as pool:
         checks = list(pool.map(probe, endpoints))
-    return {'os': system, **network, 'endpoints': checks,
-            'note': 'TCP only; no proof of country, TLS, credentials or SSH authorization. VPN policy routing/kill switches may override routes.'}
+    policy={}
+    if system=='Linux':
+        for key,args in [('rules',['ip','-j','-4','rule','show']),('all_tables',['ip','-j','-4','route','show','table','all'])]:
+            try:policy[key]=json.loads(run(args))
+            except (OSError,ValueError,RuntimeError,subprocess.SubprocessError):policy[key]='unavailable'
+        policy['effective_routes']=[]
+        for ip in sorted({ip for e in endpoints for ip in e['addresses']}):
+            try:policy['effective_routes'].append({'address':ip,'route':json.loads(run(['ip','-j','-4','route','get',ip]))})
+            except (OSError,ValueError,RuntimeError,subprocess.SubprocessError):policy['effective_routes'].append({'address':ip,'route':'unavailable'})
+    ledger=read(state/'network-routes.json') if (state/'network-routes.json').exists() else {}
+    return {'os': system, **network, 'endpoints': checks,'linux_policy':policy,
+            'missing_owned_routes':[r for r in ledger.get('owned',[]) if r not in network['routes']],
+            'note': 'IPv4 current path only; TCP/TLS/HTTP do not prove country or authorization. Cloud HTTPS and VM SSH may need DIFFERENT paths. Linux route-get does not model every VPN fwmark/kill switch. No VPN/default route changes.'}
 
 
 def make_plan(state, scope, interface=None, gateway=None):
@@ -205,7 +246,7 @@ def make_plan(state, scope, interface=None, gateway=None):
     selected = candidates[0]
     if system == 'Darwin' and len([c for c in network['candidates'] if c['gateway'] == selected['gateway']]) > 1:
         raise ValueError('Multiple macOS interfaces share this gateway; configure VPN split routing explicitly')
-    endpoints = targets(config, scope)
+    endpoints = targets(config, scope,state)
     desired = [route_record(ip, **selected) for ip in sorted({ip for e in endpoints for ip in e['addresses']})]
     ledger = read(state / 'network-routes.json') if (state / 'network-routes.json').exists() else None
     plan = {'format': 1, 'os': system, 'created': time.time(), 'configuration': digest(config),
@@ -311,7 +352,7 @@ def apply(state, approval):
         candidates = snapshot(platform.system())['candidates']
         if any({'interface': r['interface'], 'gateway': r['gateway']} not in candidates for r in plan['desired']):
             raise ValueError('Network changed; regenerate the plan with the current gateway')
-        expected = targets(read(state / 'deployment.json'), plan['scope'])
+        expected = targets(read(state / 'deployment.json'), plan['scope'],state)
         if expected != plan['endpoints']:
             raise ValueError('DNS changed; regenerate the plan')
         if {r['destination'] for r in plan['desired']} != {ip for e in expected for ip in e['addresses']}:

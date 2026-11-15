@@ -34,6 +34,8 @@ def main():
         setup.save(state / 'deployment.json', config)
         first = setup.install(state)
         asyncio.run(append(state))
+        resumed = setup.resume_memory(state)
+        assert resumed['workspace_id'] == first['workspace_id']
         second = setup.install(state)
         assert first['workspace_id'] == second['workspace_id']
         result = asyncio.run(setup.check(state))

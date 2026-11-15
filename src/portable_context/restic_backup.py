@@ -75,6 +75,28 @@ def configured(home):
     return Manager(home,path)
 
 
+def oauth_backup_status(home):
+    """Read only redacted receipts; never load identity keys/config into MCP."""
+    base = Path(home).resolve().parent
+    if not (base/'identity-backup-config.json').exists():
+        return {'configured': False}
+    state = base/'identity-backup-state'
+    fields = {'status.json': ('at', 'status', 'snapshot_id', 'files'),
+              'check.json': ('at', 'verified', 'snapshot_id', 'files', 'activated'),
+              'failure.json': ('at', 'operation'),
+              'schedule.json': ('backup', 'check', 'prune', 'timezone', 'retention')}
+    result = {'configured': True, 'backend': 'separate encrypted restic repository',
+              'recovery': 'Fresh identity and new passkeys/consent; historical credentials are not activated'}
+    for name, allowed in fields.items():
+        path = state/name
+        try:
+            value = json.loads(path.read_text(encoding='utf-8')) if path.exists() else None
+            result[name.removesuffix('.json')] = {k: value[k] for k in allowed if k in value} if value else None
+        except (OSError, ValueError, TypeError):
+            result[name.removesuffix('.json')] = {'unavailable': True}
+    return result
+
+
 def protection(home,run_id,reason='before_import'):
     manager=configured(home)
     return manager.checkpoint(reason,run_id) if manager else {'status':'not_configured'}
@@ -524,7 +546,7 @@ class Manager:
                 r=con.execute('SELECT at,details FROM events WHERE kind=? ORDER BY seq DESC LIMIT 1',(kind,)).fetchone()
                 latest[kind]={'at':r['at'],**json.loads(r['details'])} if r else None
         return {'configured':True,'enabled':self.enabled(),'backend':'restic','policy':self.policy(),'latest':latest,
-                'originals_included':True,'secret_values':'never exposed'}
+                'originals_included':True,'secret_values':'never exposed','oauth':oauth_backup_status(self.home)}
 
 
 def main(argv=None):

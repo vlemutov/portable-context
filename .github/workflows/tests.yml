@@ -18,7 +18,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - run: python -m pip install -e ".[mcp]"
+      - run: python -m pip install -e ".[mcp,deployment]"
       - name: Install pinned restic for real backup tests
         run: python deploy/restic_tools.py --ci
       - run: python -m unittest discover -s tests -v

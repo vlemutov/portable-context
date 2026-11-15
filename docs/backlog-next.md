@@ -1,7 +1,9 @@
 # Backlog after the 0.7 pilot
 
-Status: 0.9 shipped and the two-conversation end-to-end pilot verified, 2026-11-09. At the owner's request,
-return to data/import stabilization as the next release; the access/authentication proposal is deferred.
+Status: 0.9 shipped and the two-conversation end-to-end pilot verified, 2026-11-09.
+The owner subsequently approved 1.0 HTTPS/OAuth and onboarding; see
+[the active 1.0 plan](release-1.0.md). A Cloud.ru stateless HTTPS edge is being tested;
+the VM, SQLite and S3 placement remain unchanged. Domain purchase is not required.
 0.8 and 0.9 are shipped. Destructive cleanup still requires its concrete preview.
 R-numbers refer to the sixteen-item pilot. Raw diagnostics and personal source examples remain private.
 

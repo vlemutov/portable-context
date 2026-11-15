@@ -2,14 +2,15 @@
 import json
 import uuid
 from .core import canonical,now,key
+from .errors import InputError
 
 
 def executor(value=None):
-    value=value or {}
+    value={} if value is None else value
     if not isinstance(value,dict) or set(value)-{'client','version','agent'}:
-        raise ValueError('Executor accepts client, version, agent labels')
+        raise InputError('executor accepts only client, version, agent; remove other fields. Preserve records and raw.')
     if any(v is not None and (not isinstance(v,str) or len(v)>200) for v in value.values()):
-        raise ValueError('Executor labels must be <=200 characters')
+        raise InputError('executor.client, executor.version and executor.agent must be strings of at most 200 characters or null.')
     return {'client':value.get('client') or 'unknown','version':value.get('version'),
             'agent':value.get('agent'),'identity_basis':'sender_reported'}
 
@@ -52,7 +53,7 @@ def progress(con,run_id,counts,records,complete=False,receipt=None,error=None,ac
     row=con.execute('SELECT * FROM import_runs WHERE id=?',(run_id,)).fetchone()
     if not row:
         raise ValueError('Unknown import run')
-    if row['status']=='complete':
+    if row['status'] in ('complete','cancelled'):
         return
     details=json.loads(row['details'])
     if batch_key:
@@ -93,6 +94,21 @@ def progress(con,run_id,counts,records,complete=False,receipt=None,error=None,ac
     if complete or error:
         con.execute('INSERT INTO import_events(run_id,at,event,details) VALUES (?,?,?,?)',
                     (run_id,at,status,canonical(details)))
+
+
+def cancel(con, run_id, reason, remaining):
+    row=con.execute('SELECT * FROM import_runs WHERE id=?',(run_id,)).fetchone()
+    if not row or row['status']=='complete':
+        raise InputError('Only an unfinished import can be cancelled.')
+    if row['status']=='cancelled':
+        return
+    at=now(); details=json.loads(row['details'])
+    details['cancellation']={'reason':reason,'remaining_items':remaining,'at':at,
+                             'effect':'Pending records will not be imported; committed records are retained.'}
+    con.execute('UPDATE import_runs SET status=?,updated_at=?,details=? WHERE id=?',
+                ('cancelled',at,canonical(details),run_id))
+    con.execute('INSERT INTO import_events(run_id,at,event,details) VALUES (?,?,?,?)',
+                (run_id,at,'cancelled',canonical(details['cancellation'])))
 
 
 def compact(details):

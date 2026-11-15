@@ -32,6 +32,24 @@ class ResticTests(unittest.TestCase):
             binary=os.environ['PC_TEST_RESTIC'],repository=str(self.root/'repository'),password_file=str(password))))
         self.manager=Manager(self.store.root,config); self.manager.initialize()
 
+    def test_cancelled_import_survives_backup_reuse_and_restore(self):
+        ws=Workspace(self.store);ws.register_source('host','Host','events','fixture')
+        job=ws.stage_records('host',[dict(record(),text='x')],'accidental')
+        before=self.manager.checkpoint()
+        signature=self.manager.source_signature()
+        ws.cancel_import(job['id'],'Accidental diagnostic')
+        self.assertNotEqual(self.manager.source_signature(),signature)
+        after=self.manager.checkpoint('before_import','after-cancellation')
+        self.assertEqual(after['status'],'created')
+        self.assertNotEqual(after['snapshot_id'],before['snapshot_id'])
+        ws.cancel_import(job['id'],'Retry')
+        self.assertEqual(self.manager.checkpoint()['status'],'skipped')
+        target=self.root/'cancelled-restored'
+        self.assertTrue(self.manager.restore(after['snapshot_id'],target)['verified'])
+        restored=Workspace(Store(target))
+        self.assertEqual(restored.job(job['id'])['status'],'cancelled')
+        with self.assertRaisesRegex(ValueError,'cancelled'):restored.run_import(job['id'])
+
     def test_no_change_originals_and_self_contained_restore(self):
         f=self.root/'document.txt'; f.write_text('original content')
         original=self.store.archive(f)

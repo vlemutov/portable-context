@@ -124,6 +124,11 @@ def bootstrap(state):
 
 def command_env(state, credentials=True):
     env = dict(os.environ)
+    # Never let another Terraform session select this installation's state,
+    # workspace, CLI arguments or input variables through the parent shell.
+    for name in list(env):
+        if name in ('TF_DATA_DIR', 'TF_WORKSPACE') or name.startswith(('TF_CLI_ARGS', 'TF_VAR_')):
+            env.pop(name)
     env['TF_IN_AUTOMATION'] = '1'
     env['TF_CLI_CONFIG_FILE'] = str(state / 'terraform.rc')
     # Debug logs may contain secrets or private plan values; never turn them on in the installer.
@@ -201,6 +206,32 @@ def validate_config(config):
             ipaddress.IPv4Address(address)
 
 
+def configure(state, values):
+    """Configure one installation; a second memory needs a fresh state directory."""
+    config = read(state / 'deployment.json')
+    allowed = {'project_id', 'tenant_id', 'zone', 'image_id', 'flavor', 'ssh_cidr', 'bucket', 'disk_gb',
+               'ssh_user', 'ssh_port', 'host', 'identity_file', 'schedule_backup', 'storage_class', 'dns_servers',
+               'ssh_command', 'backup_repository'}
+    if set(values) - allowed:
+        raise ValueError('Unknown or secret configuration fields: ' + ', '.join(set(values) - allowed))
+    used = any((state / name).exists() for name in (
+        'plan-review.json', 'terraform/deployment.tfplan', 'terraform/terraform.tfstate',
+        'installed.json', 'https-plan.json', 'https-journal.json'))
+    protected = ('project_id', 'tenant_id', 'bucket', 'host', 'ssh_user', 'ssh_port',
+                 'identity_file', 'backup_repository')
+    changed = [name for name in protected if name in values and values[name] != config.get(name)]
+    if used and changed:
+        raise ValueError('This state directory already belongs to a planned or installed memory; '
+                         'use a new private state directory for another installation. '
+                         'Target changes require a separate reviewed migration: ' + ', '.join(changed))
+    config.update(values)
+    config.setdefault('bucket', config['name'] + '-backups')
+    config.setdefault('disk_gb', 40)
+    validate_config(config)
+    save(state / 'deployment.json', config)
+    return {'configured': True}
+
+
 def ensure_key(state):
     key = state / 'id_ed25519'
     if not key.exists():
@@ -250,10 +281,13 @@ def plan(state):
     terraform(state, ['plan', '-input=false', '-no-color', '-out=deployment.tfplan'], capture=True)
     data = json.loads(terraform(state, ['show', '-json', 'deployment.tfplan'], capture=True, credentials=False).stdout)
     resources = summarize_plan(data)
+    from quotas import check as quota_check
+    quotas=quota_check(state)
     report = {'plan_sha256': sha(state / 'terraform/deployment.tfplan'), 'configuration_sha256': fingerprint(state),
               'changes': resources, 'deployment': config['name'],
               'costs': 'Paid VM, SSD disk, public IPv4, S3 storage/requests/traffic. No live price quote is calculated.',
               'pricing_url': 'https://cloud.ru/calculator',
+              'quotas':quotas,
               'next': 'Review changes and current costs; apply only with --approve-plan <plan_sha256>.'}
     save(state / 'plan-review.json', report)
     return report
@@ -264,6 +298,8 @@ def apply(state, approved):
     if (approved != review['plan_sha256'] or sha(state / 'terraform/deployment.tfplan') != approved
             or fingerprint(state) != review['configuration_sha256']):
         raise ValueError('Plan is missing, changed or not approved; run plan again')
+    from quotas import preflight
+    preflight(state,'infrastructure')
     # Prevent double apply after an interrupted run: Terraform rejects stale state plans too.
     terraform(state, ['apply', '-input=false', '-no-color', 'deployment.tfplan'])
     outputs = json.loads(terraform(state, ['output', '-json'], capture=True).stdout)
@@ -369,19 +405,109 @@ def ssh_args(state, config):
     return [executable, '-T', '-F', str(ssh_config.resolve()), 'portable-context']
 
 
-def wait_cloud_init(ssh):
-    completed = subprocess.run(ssh + ['sudo cloud-init status --wait --format json'],
-                               capture_output=True, text=True, encoding='utf-8')
+def ssh_read(ssh, command, *, label, timeout=30, attempts=3):
+    """Retry transport failure only, for commands known to be read-only."""
+    for attempt in range(attempts):
+        try:
+            result=subprocess.run(ssh+[command],capture_output=True,text=True,encoding='utf-8',timeout=timeout)
+            if result.returncode!=255:return result
+            stderr=(result.stderr or '').lower()
+            if any(s in stderr for s in ('permission denied','host key verification failed','remote host identification has changed')):
+                raise ValueError(label+': SSH authentication/host-key check failed; remote state was not checked')
+        except subprocess.TimeoutExpired:
+            pass
+        if attempt+1<attempts:
+            print(f'{label}: SSH transport unavailable; attempt {attempt+2}/{attempts}',file=sys.stderr,flush=True)
+            time.sleep(2**attempt)
+    raise ValueError(label+': SSH transport unavailable; remote state is unknown. Check network and the allowed source /32; preserve the same deployment.')
+
+
+def wait_cloud_init(ssh, state=None):
+    completed = ssh_read(ssh, 'sudo -n cloud-init status --wait --format json',label='Cloud-init status',timeout=180,attempts=2)
     try:
         status = json.loads(completed.stdout)
     except (ValueError, TypeError):
         raise ValueError('Cannot read cloud-init status; inspect the server before retrying install') from None
     # Exit 2 means completed with recoverable warnings, not a fatal initialization failure.
     # Do not bypass real errors (e.g. failed package installation after a DNS failure).
-    if completed.returncode not in (0, 2) or status.get('status') != 'done' or status.get('errors'):
+    recovered=False
+    if state and (state/'cloud-init-recovery.json').exists():
+        receipt=read(state/'cloud-init-recovery.json')
+        recovered=receipt.get('status_sha256')==hashlib.sha256(json.dumps(status,sort_keys=True).encode()).hexdigest() and receipt.get('deployment_sha256')==sha(state/'deployment.json')
+        if recovered:
+            readiness=server_readiness(ssh)
+            recovered=receipt.get('boot_id')==readiness['boot_id']
+    if completed.returncode not in (0, 2) or status.get('status') != 'done' or (status.get('errors') and not recovered):
         raise ValueError('Cloud-init failed. Inspect sudo cloud-init status --long and /var/log/cloud-init-output.log; repair the same server, then retry install.')
     if status.get('recoverable_errors'):
         print('Cloud-init completed with recoverable warnings; server dependencies will be checked during install.', file=sys.stderr)
+
+
+READINESS_SCRIPT = '''import json,time,sys,importlib.util,subprocess,pathlib,shutil
+def active(unit):
+ return subprocess.run(['systemctl','is-active','--quiet',unit]).returncode==0
+print(json.dumps({'utc_epoch':time.time(),'python_ok':sys.version_info>=(3,11),
+ 'venv':importlib.util.find_spec('venv') is not None,'ensurepip':importlib.util.find_spec('ensurepip') is not None,
+ 'cron':bool(shutil.which('crontab')) and active('cron'),
+ 'package_setup_running':active('apt-daily.service') or active('apt-daily-upgrade.service'),
+ 'boot_id':pathlib.Path('/proc/sys/kernel/random/boot_id').read_text().strip()}))
+'''
+
+
+def server_readiness(ssh):
+    result=ssh_read(ssh,'python3 -c '+shlex.quote(READINESS_SCRIPT),label='Server dependencies')
+    if result.returncode:raise ValueError('Server readiness command failed; inspect Python and systemd on the same VM')
+    value=json.loads(result.stdout)
+    if abs(time.time()-value['utc_epoch'])>300:raise ValueError('Server clock differs by more than 5 minutes; repair time synchronization on the same VM')
+    if not all(value.get(k) for k in ('python_ok','venv','ensurepip','cron')) or value.get('package_setup_running'):
+        raise ValueError('Server dependencies not ready (Python 3.11+, venv/ensurepip, cron, apt completion). Wait for package setup or repair the same VM; never delete apt locks.')
+    return value
+
+
+def accept_cloud_init_recovery(state):
+    """Explicit owner action after inspecting/repairing historical cloud-init errors."""
+    ssh=ssh_args(state,read(state/'deployment.json'))
+    result=ssh_read(ssh,'sudo -n cloud-init status --format json',label='Cloud-init recovery')
+    status=json.loads(result.stdout)
+    if result.returncode not in (0,2) or status.get('status')!='done':
+        raise ValueError('Cloud-init has not completed; repair the same VM first')
+    readiness=server_readiness(ssh)
+    receipt={'status_sha256':hashlib.sha256(json.dumps(status,sort_keys=True).encode()).hexdigest(),
+        'deployment_sha256':sha(state/'deployment.json'),'boot_id':readiness['boot_id']}
+    save(state/'cloud-init-recovery.json',receipt)
+    return {'accepted':True,'scope':'Reviewed historical cloud-init status on this VM and boot only; dependencies and clock checked'}
+
+
+def install_fingerprint(state):
+    # Covers lifecycle helpers as well as the package. Configuration includes backup/schedule choices.
+    files={p.name:sha(p) for p in sorted((ROOT/'deploy').glob('*.py'))}
+    settings={name:sha(state/name) for name in ('deployment.json','backup-config.json','restic-password') if (state/name).exists()}
+    return hashlib.sha256(json.dumps({'bundle':bundle()['sha256'],'files':files,
+        'settings':settings},sort_keys=True).encode()).hexdigest()
+
+
+def resume_memory(state):
+    checkpoint=state/'memory-install-checkpoint.json'
+    if not checkpoint.exists() or not (state/'installed.json').exists():return None
+    receipt=read(checkpoint)
+    if receipt.get('fingerprint')!=install_fingerprint(state):return None
+    installed=read(state/'installed.json')
+    if receipt.get('installed_sha256')!=sha(state/'installed.json'):return None
+    script='''import json,pathlib,subprocess,sys
+r=pathlib.Path(sys.argv[1]);c=(r/'current').resolve()
+assert not (r/'maintenance.json').exists(), 'pending maintenance'
+assert (c/'.ready').exists(), 'release not ready'
+s=json.loads(subprocess.check_output([str(r/'bin/status')],text=True))
+print(json.dumps({'workspace_id':s['workspace_id'],'release':c.name}))
+'''
+    result=ssh_read(ssh_args(state,read(state/'deployment.json')),
+        'python3 -c '+shlex.quote(script)+' '+shlex.quote(installed['root']),label='Installed memory verification',timeout=60)
+    if result.returncode:raise ValueError('Installed memory health check failed; inspect the same VM before resuming')
+    live=json.loads(result.stdout)
+    if live!={'workspace_id':installed['memory']['workspace_id'],'release':installed['release']}:
+        raise ValueError('Installed memory identity/release changed; refusing automatic resume')
+    print('Verified installed memory; skipping package migration and backup restore test',file=sys.stderr,flush=True)
+    return receipt['result']
 
 
 INSTALL_BOOTSTRAP = 'import io,json,sys; p=json.load(sys.stdin); sys.stdin=io.StringIO(json.dumps(p["payload"])); exec(p["script"])'
@@ -392,16 +518,13 @@ def install(state):
     ssh = ssh_args(state, config)
     if config['mode'] == 'cloudru':
         # Retry only readiness checks; never create new cloud resources on connection failure.
-        for attempt in range(30):
-            ready = subprocess.run(ssh + ['true'], capture_output=True)
-            if ready.returncode == 0:
-                break
-            if attempt == 29:
-                raise ValueError('SSH not ready. Check host, allowed CIDR and cloud-init; rerun install using the same state.')
-            print('Waiting for SSH readiness...', file=sys.stderr, flush=True)
-            time.sleep(10)
-        wait_cloud_init(ssh)
+        ready=ssh_read(ssh,'true',label='SSH readiness',attempts=5)
+        if ready.returncode:raise ValueError('SSH connected but remote readiness command failed')
+        wait_cloud_init(ssh,state)
+        server_readiness(ssh)
     payload = bundle()
+    payload['https_helpers'] = {name:(ROOT/'deploy'/name).read_text(encoding='utf-8')
+        for name in ('https_runtime.py','gateway.py','pocketid.py','setup.py')}
     backup_file = state / 'backup-config.json'
     if config['mode'] == 'cloudru' and not backup_file.exists():
         # Recover outputs if apply completed before the local result was saved.
@@ -428,10 +551,37 @@ def install(state):
     args = ssh[1:] + [command]
     client = {'mcpServers': {'portable-context': {'command': ssh[0], 'args': args}}}
     save(state / 'client-config.json', client)
-    return {'installed': True, 'workspace_id': result['memory']['workspace_id'], 'backup': result['backup'],
+    if (result.get('https') or {}).get('rotation_configured'):
+        from rotation_setup import refresh
+        refresh(state)
+    kit = recovery_kit(state)
+    if result.get('https') and not (state/'https-journal.json').exists():
+        from https_setup import connection_receipt
+        connection_receipt(state)
+    response={'installed': True, 'workspace_id': result['memory']['workspace_id'], 'backup': result['backup'],
             'client_config': str(state / 'client-config.json'),
             'recovery_password_file':str(recovery),
+            'recovery_kit':kit,
+            'https':result.get('https'),
             'next': 'Save the recovery password privately outside the server (e.g. password manager); never paste it in chat. Reconnect MCP and check.'}
+    save(state/'memory-install-checkpoint.json',{'fingerprint':install_fingerprint(state),
+         'installed_sha256':sha(state/'installed.json'),'result':response})
+    return response
+
+
+def recovery_kit(state, runtime=None, output=None):
+    from recovery_setup import REMOTE, receive_kit
+    config = read(state/'deployment.json')
+    installed = read(state/'installed.json')
+    names = ('recovery_setup.py','oauth_recovery.py','pocketid.py','setup.py','gateway.py')
+    payload = {'root':installed['root'], 'workspace':installed['memory']['workspace_id'],
+        'runtime':runtime, 'schedule':config.get('schedule_backup',True),
+        'files':{name:(ROOT/'deploy'/name).read_text(encoding='utf-8') for name in names}}
+    envelope = {'script':REMOTE,'payload':payload}
+    completed = checked(ssh_args(state,config)+['python3 -c '+shlex.quote(INSTALL_BOOTSTRAP)],
+        input=json.dumps(envelope),capture_output=True,text=True,encoding='utf-8')
+    # Contains credentials: consume in memory, never print the remote response.
+    return receive_kit(json.loads(completed.stdout),state,output)
 
 def maintenance(state,args):
     config=read(state/'deployment.json'); ssh=ssh_args(state,config)
@@ -483,6 +633,11 @@ def main(argv=None):
     p = sub.add_parser('configure')
     p.add_argument('--file', type=Path, required=True, help='Non-secret JSON options; merged with persistent config')
     sub.add_parser('doctor')
+    sub.add_parser('install-status',help='Show completed HTTPS stages and the safe resume action; no secrets')
+    sub.add_parser('accept-cloud-init-recovery',help='After reviewing/repairing historical errors: verify dependencies/clock and accept only this completed cloud-init status and boot')
+    p=sub.add_parser('quota-check',help='Read current project and ancestor quotas without changing them')
+    p.add_argument('--requirements',type=Path,help='Reviewed JSON mapping of API resource codes to additional amounts in API units')
+    p.add_argument('--phase',choices=('infrastructure','https'),default='https',help='Bind reviewed demands to this exact phase/plan/resource state')
     p = sub.add_parser('catalog')
     p.add_argument('--project-id', required=True)
     p = sub.add_parser('discover', help='Read Object Storage tenant ID without creating a bucket')
@@ -490,7 +645,25 @@ def main(argv=None):
     sub.add_parser('plan')
     p = sub.add_parser('apply')
     p.add_argument('--approve-plan', required=True, help='Exact SHA-256 of reviewed paid infrastructure plan')
-    sub.add_parser('install')
+    p=sub.add_parser('install')
+    p.add_argument('--https',action='store_true',help='Use the reviewed resumable Cloud.ru HTTPS/OAuth installer')
+    p.add_argument('--approve-plan',help='Reviewed HTTPS plan SHA-256; approval persists for resume')
+    sub.add_parser('update',help='Update the same memory and its managed HTTPS/OAuth services')
+    p=sub.add_parser('https-plan',help='Review additional Cloud.ru HTTPS resources and costs')
+    p.add_argument('--file',type=Path,help='Optional non-secret edge options')
+    sub.add_parser('owner-login',help='Write a new private one-time owner enrollment code locally')
+    sub.add_parser('https-check',help='Check public authentication boundary and server identity')
+    p=sub.add_parser('oauth-client',help='Enable a supported native callback on the existing OAuth client')
+    p.add_argument('--client',choices=('claude-code',),required=True)
+    p=sub.add_parser('https-reconcile',help='Record an explicitly reviewed resource ID after a lost creation reply')
+    p.add_argument('--stage',choices=('registry','container'),required=True)
+    p.add_argument('--resource-id',required=True)
+    p = sub.add_parser('recovery-kit', help='Verify OAuth backups and save an offline secret kit locally')
+    p.add_argument('--runtime', help='Explicit OAuth runtime directory on the server, if detection is ambiguous')
+    p.add_argument('--output', type=Path, help='New private local directory; defaults inside --state')
+    p = sub.add_parser('rotation-setup', help='Install automatic mTLS renewal on the owner VM')
+    p.add_argument('--config', type=Path, required=True, help='Reviewed non-secret Cloud.ru edge identifiers')
+    p.add_argument('--generation', type=Path, required=True, help='Private current certificate generation')
     sub.add_parser('check')
     p=sub.add_parser('restore'); group=p.add_mutually_exclusive_group(required=True)
     group.add_argument('--snapshot'); group.add_argument('--archive',help='Existing ZIP path on the server'); p.add_argument('--target',required=True)
@@ -512,21 +685,9 @@ def main(argv=None):
         if not all(values.values()):
             raise ValueError('Both values are required')
         save(state / 'credentials.json', values)
-        result = {'saved': True, 'note': 'Credentials stay on this computer; remove them after provisioning if desired.'}
+        result = {'saved': True, 'note': 'Stored privately. Managed HTTPS also uses this cloud key on the VM for certificate renewal; do not revoke it without updating the rotation controller.'}
     elif args.command == 'configure':
-        config = read(state / 'deployment.json')
-        values = read(args.file)
-        allowed = {'project_id', 'tenant_id', 'zone', 'image_id', 'flavor', 'ssh_cidr', 'bucket', 'disk_gb',
-                   'ssh_user', 'ssh_port', 'host', 'identity_file', 'schedule_backup', 'storage_class', 'dns_servers',
-                   'ssh_command','backup_repository'}
-        if set(values) - allowed:
-            raise ValueError('Unknown or secret configuration fields: ' + ', '.join(set(values) - allowed))
-        config.update(values)
-        config.setdefault('bucket', config['name'] + '-backups')
-        config.setdefault('disk_gb', 40)
-        validate_config(config)
-        save(state / 'deployment.json', config)
-        result = {'configured': True}
+        result = configure(state, read(args.file))
     elif args.command == 'doctor':
         local_tf = state / 'tools' / ('terraform.exe' if os.name == 'nt' else 'terraform')
         result = {'python': sys.version.split()[0], 'ssh': shutil.which('ssh'), 'ssh_keygen': shutil.which('ssh-keygen'),
@@ -534,6 +695,14 @@ def main(argv=None):
                   'configured': (state / 'deployment.json').exists(),
                   'credentials_present': (state / 'credentials.json').exists() or bool(os.environ.get('AUTH_SECRET')),
                   'state': str(state)}
+    elif args.command == 'install-status':
+        from https_setup import installation_status
+        result=installation_status(state)
+    elif args.command == 'accept-cloud-init-recovery':
+        result=accept_cloud_init_recovery(state)
+    elif args.command == 'quota-check':
+        from quotas import check as quota_check,review as quota_review
+        result=quota_review(state,read(args.requirements),args.phase) if args.requirements else quota_check(state)
     elif args.command == 'catalog':
         result = catalog(state, args.project_id)
     elif args.command == 'discover':
@@ -543,7 +712,36 @@ def main(argv=None):
     elif args.command == 'apply':
         result = apply(state, args.approve_plan)
     elif args.command == 'install':
-        result = install(state)
+        if args.https:
+            from https_setup import install as https_install
+            result=https_install(state,args.approve_plan)
+        else: result = install(state)
+    elif args.command == 'update':
+        if (state/'https-journal.json').exists():
+            from https_setup import install as https_install
+            result=https_install(state)
+        else: result=install(state)
+    elif args.command == 'https-plan':
+        from https_setup import plan as https_plan
+        result=https_plan(state,read(args.file) if args.file else None)
+    elif args.command == 'owner-login':
+        from https_setup import owner_login
+        result=owner_login(state)
+    elif args.command == 'https-check':
+        from https_setup import check_public,remote,connection_receipt
+        receipt=connection_receipt(state)
+        result={'server':remote(state,'check',receipt['origin']),'public':check_public(receipt['origin'])}
+    elif args.command == 'oauth-client':
+        from https_setup import claude_code_client
+        result=claude_code_client(state)
+    elif args.command == 'https-reconcile':
+        from https_setup import reconcile
+        result=reconcile(state,args.stage,args.resource_id)
+    elif args.command == 'recovery-kit':
+        result = recovery_kit(state,args.runtime,args.output)
+    elif args.command == 'rotation-setup':
+        from rotation_setup import install as install_rotation
+        result = install_rotation(state,args.config,args.generation)
     elif args.command in ('restore','activate','cleanup','cleanup-s3'):
         result=maintenance(state,args)
     else:
@@ -555,9 +753,11 @@ def main(argv=None):
 if __name__ == '__main__':
     try:
         main()
-    except (ValueError, OSError, KeyError, subprocess.CalledProcessError) as exc:
+    except (ValueError, OSError, KeyError, RuntimeError, subprocess.SubprocessError) as exc:
         # Captured Terraform output can contain secrets. Never echo its stdout/stderr automatically.
-        if isinstance(exc, subprocess.CalledProcessError):
+        if isinstance(exc, subprocess.TimeoutExpired):
+            print('Setup: command timed out; outcome may be unknown. Preserve state, inspect install-status and reconcile submitted operations before retrying.',file=sys.stderr)
+        elif isinstance(exc, subprocess.CalledProcessError):
             print('Command failed (exit ' + str(exc.returncode) + '). Retry the same deployment; consult the setup guide.', file=sys.stderr)
         else:
             print('Setup: ' + str(exc), file=sys.stderr)

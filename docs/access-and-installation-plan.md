@@ -1,4 +1,10 @@
-# Access and installation: deferred proposal, 2026-11-07
+# Access and installation: original proposal, 2026-11-07
+
+**Update, 2026-11-10:** the owner approved this work for 1.0 after the 0.9 pilot.
+See [the current implementation plan](release-1.0.md). The historical deferred
+labels below describe the earlier decision, not the current priority. The Cloud.ru
+candidate is a provider-issued HTTPS address with a stateless Container Apps edge;
+the existing VM and memory stay in place. Domain purchase is not a prerequisite.
 
 Deferred at the owner's request: data stabilization is again release 0.8. No release is assigned to
 this access proposal. Planning only; not an implemented feature list or permission to change a running installation.
