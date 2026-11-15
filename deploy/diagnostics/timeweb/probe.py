@@ -87,8 +87,9 @@ class Probe:
     def run(self):
         status, _ = self.request('/_diag/configure', {'origin': self.base})
         self.check('bootstrap_unauthorized_denied', status == 401)
-        status, _ = self.request('/_diag/configure', {'origin': self.base},
+        status, configured = self.request('/_diag/configure', {'origin': self.base},
             headers={'X-Diagnostic-Key': self.key})
+        self.results['configure_response'] = {'status': status, **{k: configured[k] for k in ('error', 'stage', 'reason') if k in configured}}
         self.check('configure', status == 200)
         status, discovery = self.request('/.well-known/openid-configuration')
         self.check('https_discovery_issuer', status == 200 and discovery.get('issuer') == self.base)

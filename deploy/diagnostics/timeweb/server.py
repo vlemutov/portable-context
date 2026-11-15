@@ -53,7 +53,7 @@ def configure(origin):
             if STATE['origin'] != origin or not STATE.get('ready'):
                 raise ValueError('configuration requires a fresh test container')
             return
-        STATE.update(origin=origin, admin_key=secrets.token_urlsafe(48))
+        STATE.update(origin=origin, admin_key=secrets.token_urlsafe(48), stage='start_provider')
         directory = tempfile.mkdtemp(prefix='synthetic-identity-')
         env = {**os.environ, 'APP_URL': origin, 'HOST': '127.0.0.1', 'PORT': '14112',
             'ACTORS_HOST': '127.0.0.1', 'ACTORS_PORT': '14113',
@@ -75,12 +75,15 @@ def configure(origin):
             time.sleep(.2)
         else:
             raise RuntimeError('identity startup timeout')
+        STATE['stage'] = 'create_owner'
         owner = admin('/api/users', {'username': 'pc-lab-owner', 'firstName': 'Synthetic owner',
             'isAdmin': True, 'email': 'owner@example.invalid', 'emailVerified': True})
         STATE['owner'] = owner['id']
+        STATE['stage'] = 'create_client'
         admin('/api/oidc/clients', {'id': 'pc-lab-client', 'name': 'Disposable transport test',
             'callbackURLs': ['http://localhost:14111/callback'], 'isPublic': True,
             'pkceEnabled': True, 'skipConsent': False})
+        STATE['stage'] = 'grant_api'
         api = admin('/api/apis', {'name': 'Synthetic memory', 'resource': origin + '/mcp'})
         admin('/api/apis/' + api['id'] + '/permissions', {'permissions': [
             {'key': 'memory:read', 'name': 'Read synthetic data'},
@@ -160,9 +163,10 @@ class Handler(BaseHTTPRequestHandler):
                 origin = json.loads(self.body())['origin']
                 parsed = urlsplit(origin)
                 if (parsed.scheme != 'https' or parsed.path or parsed.query or parsed.fragment
-                        or parsed.netloc != self.headers.get('Host')
                         or not re.fullmatch(r'[A-Za-z0-9.-]+', parsed.netloc)):
                     raise ValueError('invalid HTTPS origin')
+                # The authenticated controller supplies the canonical origin.
+                # Managed proxies may replace Host with their internal target.
                 configure(origin)
                 return self.reply(200, {'configured': True})
             if path == '/_diag/login-code' and self.command == 'POST' and STATE.get('ready'):
@@ -232,7 +236,12 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:
             self.close_connection = True
             # Do not log request paths, authorization codes, cookies or bodies.
-            self.reply(500 if isinstance(exc, RuntimeError) else 400, {'error': type(exc).__name__})
+            detail = {'error': type(exc).__name__}
+            if hmac.compare_digest(self.headers.get('X-Diagnostic-Key', ''), KEY):
+                detail['stage'] = STATE.get('stage', 'request_validation')
+                if isinstance(exc, RuntimeError):
+                    detail['reason'] = str(exc)[:120]
+            self.reply(500 if isinstance(exc, RuntimeError) else 400, detail)
 
     do_POST = do_GET
     do_DELETE = do_GET
