@@ -50,6 +50,7 @@ class Probe:
 
     def check(self, name, condition, evidence=True):
         self.results[name] = evidence if condition else False
+        print(name + ': ' + ('pass' if condition else 'FAIL'), flush=True)
         if not condition:
             raise RuntimeError('Check failed: ' + name)
 
