@@ -1,4 +1,6 @@
 import json
+import http.client
+import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -44,6 +46,29 @@ class TokenBoundaryTests(unittest.TestCase):
             return self.upstream(method, path) if path.endswith('jwks.json') else (401, [], b'{}')
         with patch.object(server, 'upstream', revoked):
             self.assertFalse(server.authorized(self.token(), 'memory:read'))
+
+
+class ProxyConnectionTests(unittest.TestCase):
+    def test_rejected_post_does_not_poison_next_request(self):
+        app = server.ThreadingHTTPServer(('127.0.0.1', 0), server.Handler)
+        worker = threading.Thread(target=app.serve_forever, daemon=True)
+        worker.start()
+        connection = http.client.HTTPConnection('127.0.0.1', app.server_port)
+        try:
+            connection.request('POST', '/_diag/configure', b'{"origin":"https://test.example"}')
+            response = connection.getresponse()
+            self.assertEqual(response.status, 401)
+            response.read()
+            self.assertTrue(response.will_close)
+            connection.request('GET', '/health')
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(json.loads(response.read())['fixture'], 'portable-context-transport')
+        finally:
+            connection.close()
+            app.shutdown()
+            app.server_close()
+            worker.join()
 
 
 if __name__ == '__main__':

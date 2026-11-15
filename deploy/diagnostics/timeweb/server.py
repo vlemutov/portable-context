@@ -128,8 +128,12 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def reply(self, status, data, content_type='application/json', extra=()):
+        # A rejected request may still have an unread body. Never let a managed
+        # proxy reuse that socket and mistake the body for the next request line.
+        self.close_connection = True
         raw = json.dumps(data).encode() if isinstance(data, (dict, list)) else data
         self.send_response(status)
+        self.send_header('Connection', 'close')
         self.send_header('Content-Type', content_type)
         self.send_header('Content-Length', str(len(raw)))
         self.send_header('Cache-Control', 'no-store')
