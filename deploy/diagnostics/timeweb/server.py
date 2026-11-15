@@ -55,6 +55,7 @@ def configure(origin):
             return
         STATE.update(origin=origin, admin_key=secrets.token_urlsafe(48), stage='start_provider')
         directory = tempfile.mkdtemp(prefix='synthetic-identity-')
+        STATE['directory'] = directory
         env = {**os.environ, 'APP_URL': origin, 'HOST': '127.0.0.1', 'PORT': '14112',
             'ACTORS_HOST': '127.0.0.1', 'ACTORS_PORT': '14113',
             'UI_CONFIG_DISABLED': 'true', 'ENCRYPTION_KEY': secrets.token_urlsafe(48),
@@ -64,9 +65,19 @@ def configure(origin):
             'APP_NAME': 'Disposable Portable Context diagnostic', 'LOG_LEVEL': 'error',
             'LOG_QUERY_ARGS': 'false', 'CIMD_URL_ALLOWLIST': '[]'}
         env.pop('DIAG_KEY', None)
-        STATE['process'] = subprocess.Popen(['/usr/local/bin/pocket-id'], cwd=directory,
-            env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        log_path = Path(directory) / 'startup.log'
+        with log_path.open('wb') as log:
+            STATE['process'] = subprocess.Popen(['/usr/local/bin/pocket-id'], cwd=directory,
+                env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=log)
+        def startup_failure():
+            detail = log_path.read_text(errors='replace')[-1800:]
+            for secret in (STATE['admin_key'], env['ENCRYPTION_KEY'], KEY):
+                if secret:
+                    detail = detail.replace(secret, '[redacted]')
+            return RuntimeError('identity exit=' + str(STATE['process'].poll()) + ' ' + detail)
         for _ in range(100):
+            if STATE['process'].poll() is not None:
+                raise startup_failure()
             try:
                 if upstream('GET', '/.well-known/openid-configuration')[0] == 200:
                     break
@@ -74,7 +85,7 @@ def configure(origin):
                 pass
             time.sleep(.2)
         else:
-            raise RuntimeError('identity startup timeout')
+            raise startup_failure()
         STATE['stage'] = 'create_owner'
         owner = admin('/api/users', {'username': 'pc-lab-owner', 'firstName': 'Synthetic owner',
             'isAdmin': True, 'email': 'owner@example.invalid', 'emailVerified': True})
@@ -244,7 +255,7 @@ class Handler(BaseHTTPRequestHandler):
             if hmac.compare_digest(self.headers.get('X-Diagnostic-Key', ''), KEY):
                 detail['stage'] = STATE.get('stage', 'request_validation')
                 if isinstance(exc, RuntimeError):
-                    detail['reason'] = str(exc)[:120]
+                    detail['reason'] = str(exc)[:1800]
             self.reply(500 if isinstance(exc, RuntimeError) else 400, detail)
 
     do_POST = do_GET
