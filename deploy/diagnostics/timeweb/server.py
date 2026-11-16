@@ -174,6 +174,10 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith('/_diag/'):
             if not KEY or not hmac.compare_digest(self.headers.get('X-Diagnostic-Key', ''), KEY):
                 return self.reply(401, {'error': 'diagnostic authorization required'})
+            if path == '/_diag/dns' and self.command == 'POST':
+                from dns_probe import collect
+                parameters = json.loads(self.body())
+                return self.reply(200, collect(parameters['hostname'], parameters.get('cloud_ip')))
             if path == '/_diag/configure' and self.command == 'POST':
                 origin = json.loads(self.body())['origin']
                 parsed = urlsplit(origin)
