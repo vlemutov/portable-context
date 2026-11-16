@@ -60,6 +60,40 @@ DNS failures from application health, and retain evidence when public resolvers
 disagree. An IP override is a diagnostic aid, not a permanent user configuration.
 The root cause of that DNS disagreement has not been established.
 
+### Follow-up DNS comparison: 2026-11-16
+
+A separate disposable app compared the same live technical hostname from Windows
+with VPN and from inside the Timeweb container. The protected `POST /_diag/dns`
+probe checks system resolution, Google/Cloudflare DoH, all four Timeweb
+authorities directly over UDP and TCP with recursion disabled, and `.net`
+delegation. Local system lookup uses the original resolver, independent of the
+transport probe's process-local IP override.
+
+Initially, all four authorities returned authoritative `NXDOMAIN` from both
+locations. After waiting more than the observed 300-second negative-cache TTL,
+some paths returned the correct A record while others still returned authoritative
+`NXDOMAIN`. From the cloud, ns1/ns2 returned A over UDP but NXDOMAIN over TCP in
+the same batch; ns3 returned NXDOMAIN from both locations; ns4 returned A.
+Public recursive resolvers also disagreed. System DNS and ordinary client HTTPS
+still failed approximately eight minutes after the successful deployment.
+
+This establishes provider-side DNS publication/serving inconsistency during
+propagation, independent of the user's VPN. It does **not** establish a permanent
+outage, country-based blocking, the exact internal mechanism, or eventual convergence
+time. Changing Google ECS parameters did not provide a stable explanation across
+the two locations. Parent delegation matched the expected four nameservers.
+
+[Timeweb's documentation](https://timeweb.cloud/docs/apps/domain) says the technical
+domain and certificate are attached automatically; no separate manual DNS step is
+documented. Installer readiness must allow bounded propagation retries, then check
+ordinary system DNS and HTTPS before reporting success. If the deadline expires,
+preserve the installation and diagnostics for resume rather than creating duplicate
+resources or asking the user to edit hosts, routes or DNS settings.
+
+The follow-up app and its temporary Git connection were deleted and inventory was
+verified against baseline. Raw evidence and budget receipts are stored privately;
+no cloud credentials or real memory were included in the fixture.
+
 The probe intentionally obtains a new grant after its authorization-code replay
 test: Pocket ID revokes tokens issued from the reused code. Reusing such a token
 for a positive userinfo test would incorrectly report a provider failure.
