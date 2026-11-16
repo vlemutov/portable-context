@@ -215,7 +215,7 @@ def configure(state, values):
     allowed = {'project_id', 'tenant_id', 'zone', 'image_id', 'flavor', 'ssh_cidr', 'bucket', 'disk_gb',
                'ssh_user', 'ssh_port', 'host', 'identity_file', 'schedule_backup', 'storage_class', 'dns_servers',
                'ssh_command', 'backup_repository', 'server_preset_id','storage_preset_id','app_preset_id','os_id',
-               'source_url','source_branch','source_commit','dns_timeout'}
+               'source_url','source_branch','source_commit','dns_timeout','availability_zone'}
     if set(values) - allowed:
         raise ValueError('Unknown or secret configuration fields: ' + ', '.join(set(values) - allowed))
     used = any((state / name).exists() for name in (
@@ -476,6 +476,21 @@ def server_readiness(ssh):
     return value
 
 
+def prepare_timeweb_dependencies(ssh):
+    """Finish package setup once the Timeweb VM has a public network address."""
+    result=ssh_read(ssh,'python3 -c '+shlex.quote(READINESS_SCRIPT),label='Timeweb dependency preflight')
+    if result.returncode:raise ValueError('Timeweb dependency preflight failed; inspect the same VM')
+    value=json.loads(result.stdout)
+    if not value.get('python_ok'):raise ValueError('Timeweb requires Ubuntu 24.04 with Python 3.11+')
+    if all(value.get(k) for k in ('venv','ensurepip','cron')) and not value.get('package_setup_running'):return
+    # Use apt's lock waiting; never remove lock files or restart cloud-init.
+    command=('sudo -n env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=180 update && '
+        'sudo -n env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=180 install -y python3-venv python3-pip cron ufw && '
+        'sudo -n systemctl enable --now cron')
+    result=ssh_read(ssh,command,label='Timeweb dependencies after network assignment',timeout=600,attempts=1)
+    if result.returncode:raise ValueError('Timeweb package setup failed; inspect apt on the same VM and resume. Resources retained.')
+
+
 def accept_cloud_init_recovery(state):
     """Explicit owner action after inspecting/repairing historical cloud-init errors."""
     ssh=ssh_args(state,read(state/'deployment.json'))
@@ -533,6 +548,7 @@ def install(state):
         ready=ssh_read(ssh,'true',label='SSH readiness',attempts=5)
         if ready.returncode:raise ValueError('SSH connected but remote readiness command failed')
         wait_cloud_init(ssh,state)
+        if config['mode']=='timeweb':prepare_timeweb_dependencies(ssh)
         server_readiness(ssh)
     payload = bundle()
     payload['https_helpers'] = {name:(ROOT/'deploy'/name).read_text(encoding='utf-8')
@@ -676,6 +692,13 @@ def main(argv=None):
     p.add_argument('--resource-id',required=True)
     p=sub.add_parser('timeweb-retry-deploy',help='Preview a retry of a failed/ambiguous app deployment, then approve its exact hash')
     p.add_argument('--approve-plan')
+    p=sub.add_parser('timeweb-vm-options',help='List matching VM alternatives within explicit locations and monthly price ceiling; capacity is unknown')
+    p.add_argument('--location',action='append')
+    p.add_argument('--max-monthly-price',type=float)
+    p=sub.add_parser('timeweb-select-vm',help='Review a fallback after definitive VM creation rejection; retain project/key, never replace an existing VM')
+    p.add_argument('--preset-id',type=int,required=True)
+    p.add_argument('--availability-zone',required=True)
+    p.add_argument('--approve-plan')
     p = sub.add_parser('recovery-kit', help='Verify OAuth backups and save an offline secret kit locally')
     p.add_argument('--runtime', help='Explicit OAuth runtime directory on the server, if detection is ambiguous')
     p.add_argument('--output', type=Path, help='New private local directory; defaults inside --state')
@@ -778,6 +801,12 @@ def main(argv=None):
     elif args.command == 'timeweb-retry-deploy':
         from timeweb_setup import retry_deploy
         result=retry_deploy(state,args.approve_plan)
+    elif args.command == 'timeweb-vm-options':
+        from timeweb_selection import options
+        result=options(state,args.location,args.max_monthly_price)
+    elif args.command == 'timeweb-select-vm':
+        from timeweb_selection import select
+        result=select(state,args.preset_id,args.availability_zone,args.approve_plan)
     elif args.command == 'recovery-kit':
         result = recovery_kit(state,args.runtime,args.output)
     elif args.command == 'rotation-setup':

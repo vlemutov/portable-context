@@ -31,6 +31,8 @@ def validate(config):
         if type(config[key]) is not int:raise ValueError(key+' must be a JSON integer')
         integer(config[key])
     if config.get('project_id') is not None:integer(config['project_id'])
+    if not re.fullmatch(r'[a-z0-9-]{2,30}',config.get('availability_zone','')):
+        raise ValueError('Select an explicit availability_zone from the locations catalog')
     network=ipaddress.ip_network(config['ssh_cidr'],strict=True)
     if network.version!=4 or network.prefixlen<8:raise ValueError('Use an explicit SSH IPv4 CIDR')
     if not re.fullmatch(r'[a-z0-9][a-z0-9-]{2,62}',config['bucket']):raise ValueError('Invalid bucket name')
@@ -48,7 +50,7 @@ def catalog(state):
     # These endpoints contain product metadata, not credentials or account resources.
     return {name:api.request(path) for name,path in (
         ('servers','/api/v1/presets/servers'),('storage','/api/v1/presets/storages'),
-        ('apps','/api/v1/presets/apps'),('operating_systems','/api/v1/os/servers'))}
+        ('apps','/api/v1/presets/apps'),('operating_systems','/api/v1/os/servers'),('locations','/api/v2/locations'))}
 
 
 def find_row(value, ident):
@@ -64,17 +66,21 @@ def find_row(value, ident):
     return None
 
 
-def plan(state):
-    config=read(state/'deployment.json');validate(config)
+def plan(state,*,config=None,persist=True):
+    config=read(state/'deployment.json') if config is None else config;validate(config)
     catalogs=catalog(state);prices={}
     for kind,key in (('servers','server_preset_id'),('storage','storage_preset_id'),('apps','app_preset_id')):
         row=find_row(catalogs[kind],integer(config[key]))
         if row is None:raise ValueError('Selected '+kind+' preset not in current catalog')
-        prices[kind]={k:row[k] for k in ('id','price','location','cpu','ram','disk') if k in row}
+        prices[kind]={k:row[k] for k in ('id','price','location','cpu','ram','disk','cpu_frequency','disk_type','bandwidth','tags','description_short') if k in row}
         if 'location' in row and not str(row['location']).startswith(('ru','msk','spb')):
             raise ValueError('Select a Russian location for '+kind)
         if kind=='servers' and (float(row.get('ram',0))<2048 or float(row.get('disk',0))<20480):
             raise ValueError('Select a VM with at least 2 GiB RAM and 20 GiB disk')
+        if kind=='servers':
+            locations=catalogs['locations'].get('locations',[])
+            if not any(v.get('location')==row.get('location') and config['availability_zone'] in v.get('availability_zones',[]) for v in locations):
+                raise ValueError('VM availability zone does not match the selected preset location')
     operating_system=find_row(catalogs['operating_systems'],integer(config['os_id']))
     if operating_system is None:raise ValueError('OS not in catalog')
     if 'ubuntu' not in str(operating_system.get('name','')).lower() or not str(operating_system.get('version','')).startswith('24.04'):
@@ -87,11 +93,15 @@ def plan(state):
         'credential_scope':'Timeweb bucket API may return account-wide S3 credentials. These are kept privately and sent only to the owner VM. Cloud API token is stored on the VM for gateway renewal.',
         'preservation':'No automatic deletion on failure. Retained resources remain billable.',
         'pricing_url':'https://timeweb.cloud/prices','dns_wait_seconds':config.get('dns_timeout',1800)}
-    value['plan_sha256']=digest(value);save(state/'timeweb-plan.json',value)
+    value['plan_sha256']=digest(value)
+    if persist:save(state/'timeweb-plan.json',value)
     return value
 
 
 def approved(state, approval=None):
+    transition=state/'timeweb-vm-selection.json'
+    if transition.exists() and not read(transition).get('complete'):
+        raise ValueError('VM selection interrupted. Resume timeweb-select-vm with its approved hash before applying.')
     review=read(state/'timeweb-plan.json');expected=review['plan_sha256']
     if digest({k:v for k,v in review.items() if k!='plan_sha256'})!=expected:raise ValueError('Timeweb plan changed')
     if target(read(state/'deployment.json'))!=review['config'] or sha((state/'id_ed25519').with_suffix('.pub'))!=review['ssh_key_sha256']:
@@ -113,25 +123,32 @@ class Journal:
         print('Timeweb stage: '+stage,file=sys.stderr,flush=True)
         try:result=fn()
         except Exception as error:
-            self.value['last_error']={'stage':stage,'type':type(error).__name__,'http_status':error.status if isinstance(error,TimewebError) else None}
+            self.value['last_error']={'stage':stage,'type':type(error).__name__,'http_status':error.status if isinstance(error,TimewebError) else None,
+                'provider_error_code':error.error_code if isinstance(error,TimewebError) else None}
             self.save();raise
         self.value.pop('last_error',None);self.save();return result
     def resource(self,api,name,path,key,body,verify):
+        def unpack(response,required=False):
+            # Timeweb's SSH-key docs name `ssh-key`; the live API returns `ssh_key`.
+            for candidate in ((key,'ssh_key') if key=='ssh-key' else (key,)):
+                if candidate in response:return response[candidate]
+            if required:raise ValueError('Missing resource response envelope: '+name+'. Reconcile the recorded creation before retrying.')
+            return response
         item=self.value['resources'].setdefault(name,{'path':path,'key':key,'body_sha256':digest(body)})
         if item['body_sha256']!=digest(body):raise ValueError('Resource request changed: '+name)
         if item.get('id') is None:
             if item.get('submitted'):raise ValueError('Creation outcome unknown for '+name+'. Inspect the cloud and run timeweb-reconcile with its reviewed ID. No duplicate created.')
             item['submitted']=True;self.save()
             try:
-                value=api.request(path,method='POST',body=body)[key]
+                value=unpack(api.request(path,method='POST',body=body),required=True)
             except TimewebError as error:
-                if error.status in (400,401,403,422,429):
+                if error.status in (400,401,403,422,429) or (error.status==409 and error.error_code=='no_free_node'):
                     item['submitted']=False;self.save()
                 raise
             item['id']=value.get('id',value.get('provider_id'));self.save()
             if item['id'] is None:raise ValueError('Creation returned no resource ID. Reconcile before continuing')
         value=api.request(path+'/'+str(item['id']))
-        value=value.get(key,value)
+        value=unpack(value)
         returned=value.get('id',value.get('provider_id'))
         if returned is not None and str(returned)!=str(item['id']):raise ValueError('Returned resource ID differs: '+name)
         if not verify(value):raise ValueError('Resource identity/configuration mismatch: '+name)
@@ -231,6 +248,34 @@ def apply(state,approval=None):
         return provision(state,config)
 
 
+def verify_server(value,config,public_key):
+    if str(value.get('cloud_init','')).strip()=='hidden-by-api-key-policy':
+        raise ValueError('Timeweb token masks secrets. Disable "Hide passwords and sensitive data" for the installer token, then resume the same state.')
+    return (value.get('name')==config['name'] and value.get('cloud_init')==cloud_init(config,public_key)
+        and value.get('preset_id')==config['server_preset_id'] and value.get('availability_zone')==config['availability_zone'])
+
+
+def ensure_server_ipv4(api,j,vm):
+    """One explicit IPv4 purchase; a lost response is reconciled from the same VM."""
+    try:return server_ip(vm)
+    except ValueError:pass
+    # Never buy an additional address if a public IPv4 exists but is ambiguous.
+    if any(row.get('type')=='ipv4' for network in vm.get('networks',[]) for row in network.get('ips',[]) if isinstance(row,dict)):
+        raise ValueError('Review existing VM IPv4 addresses before continuing')
+    item=j.value.setdefault('server_ipv4',{'server_id':vm['id']})
+    if item['server_id']!=vm['id']:raise ValueError('IPv4 target changed')
+    if item.get('submitted'):
+        raise ValueError('IPv4 creation outcome pending or unknown. Inspect the same VM and resume after its address appears; no duplicate IP purchased.')
+    item['submitted']=True;j.save()
+    # No automatic retry after any error: reconcile through the VM network list.
+    reply=api.request('/api/v1/servers/'+str(vm['id'])+'/ips',method='POST',body={'type':'ipv4'})
+    address=(reply.get('server_ip') or {}).get('ip')
+    if address:item['ip']=address;j.save()
+    current=api.request('/api/v1/servers/'+str(vm['id']))['server']
+    try:return server_ip(current)
+    except ValueError:raise ValueError('IPv4 requested; assignment pending. Resume the same state, no second address will be requested.') from None
+
+
 def provision(state,config):
     api=API(state);j=Journal(state,config);name=config['name']
     def infrastructure():
@@ -243,18 +288,15 @@ def provision(state,config):
         key=j.resource(api,'ssh_key','/api/v1/ssh-keys','ssh-key',{'name':name,'body':public_key,'is_default':False},lambda v:v.get('name')==name and v.get('body','').strip()==public_key)
         vm=j.resource(api,'server','/api/v1/servers','server',{'name':name,'project_id':project,
             'preset_id':config['server_preset_id'],'os_id':config['os_id'],'ssh_keys_ids':[key['id']],
-            'cloud_init':cloud_init(config,public_key)},lambda v:v.get('name')==name and v.get('cloud_init')==cloud_init(config,public_key)
-            and v.get('preset_id')==config['server_preset_id'])
-        deadline=time.monotonic()+900
-        while True:
-            try:host=server_ip(vm);break
-            except ValueError:
-                if time.monotonic()>=deadline:raise ValueError('VM IP still pending. Resume apply with same state.')
-                time.sleep(10);vm=api.request('/api/v1/servers/'+str(vm['id']))['server']
+            'availability_zone':config['availability_zone'],
+            'cloud_init':cloud_init(config,public_key)},lambda v:verify_server(v,config,public_key))
+        host=ensure_server_ipv4(api,j,vm)
         bucket=j.resource(api,'bucket','/api/v1/storages/buckets','bucket',{'name':config['bucket'],'type':'private',
             'preset_id':config['storage_preset_id'],'project_id':project,'description':'Portable Context backups'},
             lambda v:v.get('name')==config['bucket'] and v.get('project_id')==project and v.get('type')=='private')
         endpoint=bucket['hostname']
+        if any(str(bucket.get(k,'')).strip() in ('','hidden-by-api-key-policy') for k in ('access_key','secret_key')):
+            raise ValueError('S3 credentials missing or hidden by token policy. Disable secret masking and resume; bucket retained.')
         if not endpoint.startswith('https://'):endpoint='https://'+endpoint
         from urllib.parse import urlsplit
         parsed=urlsplit(endpoint)

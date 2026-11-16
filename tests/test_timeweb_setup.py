@@ -1,4 +1,5 @@
 import copy
+import io
 import json
 from pathlib import Path
 import sys
@@ -12,6 +13,7 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'deploy'))
 import setup
 import timeweb_setup as tw
 import timeweb_api
+import timeweb_selection as selection
 import dns_ready
 
 
@@ -21,11 +23,12 @@ class FakeAPI:
         self.catalogs={'/api/v1/presets/servers':{'server_presets':[{'id':1,'price':500,'location':'ru-1','ram':2048,'disk':40960}]},
             '/api/v1/presets/storages':{'storages_presets':[{'id':2,'price':10,'location':'ru-1'}]},
             '/api/v1/presets/apps':{'backend_presets':[{'id':3,'price':510,'location':'ru-1'}]},
-            '/api/v1/os/servers':{'servers_os':[{'id':4,'name':'ubuntu','version':'24.04'}]}}
+            '/api/v1/os/servers':{'servers_os':[{'id':4,'name':'ubuntu','version':'24.04'}]},
+            '/api/v2/locations':{'locations':[{'location':'ru-1','availability_zones':['spb-3']}]} }
     def request(self,path,method='GET',body=None):
         if path in self.catalogs:return copy.deepcopy(self.catalogs[path])
         canonical=path.replace('/api/v2/apps','/api/v1/apps')
-        keys={'/api/v1/projects':'project','/api/v1/ssh-keys':'ssh-key','/api/v1/servers':'server',
+        keys={'/api/v1/projects':'project','/api/v1/ssh-keys':'ssh_key','/api/v1/servers':'server',
               '/api/v1/storages/buckets':'bucket','/api/v1/vcs-provider':'provider','/api/v1/apps':'app'}
         if method=='POST':
             self.posts.append((path,copy.deepcopy(body)));self.counter+=1
@@ -53,7 +56,7 @@ class TimewebTests(unittest.TestCase):
         self.config={'format':1,'mode':'timeweb','name':'pc-test','ssh_user':'pcadmin','ssh_port':22,
             'bucket':'pc-test-backups','server_preset_id':1,'storage_preset_id':2,'app_preset_id':3,'os_id':4,
             'ssh_cidr':'203.0.113.1/32','source_url':'https://github.com/example/memory.git',
-            'source_branch':'main','source_commit':'a'*40,'dns_timeout':1800}
+            'source_branch':'main','source_commit':'a'*40,'dns_timeout':1800,'availability_zone':'spb-3'}
         setup.save(self.state/'deployment.json',self.config)
         (self.state/'id_ed25519').write_text('private-test-key')
         (self.state/'id_ed25519.pub').write_text('ssh-ed25519 synthetic')
@@ -116,6 +119,98 @@ class TimewebTests(unittest.TestCase):
         self.assertIn(['ufw','allow','from','203.0.113.1/32','to','any','port','22','proto','tcp'],cloud['runcmd'])
         self.assertIn(['ufw','allow','9443/tcp'],cloud['runcmd'])
 
+    def test_zone_must_match_preset_and_is_sent_in_server_request(self):
+        config={**self.config,'availability_zone':'msk-1'};setup.save(self.state/'deployment.json',config)
+        with self.assertRaisesRegex(ValueError,'does not match'):self.plan()
+        self.assertEqual(self.api.posts,[])
+        setup.save(self.state/'deployment.json',self.config)
+        plan=self.plan();tw.apply(self.state,plan['plan_sha256'])
+        body=next(v for p,v in self.api.posts if p=='/api/v1/servers')
+        self.assertEqual(body['availability_zone'],'spb-3')
+
+    def test_masked_credentials_are_actionable_and_not_saved(self):
+        plan=self.plan();tw.apply(self.state,plan['plan_sha256'])
+        vm=next(v['server'] for v in self.api.items.values() if 'server' in v)
+        vm['cloud_init']='hidden-by-api-key-policy'
+        with self.assertRaisesRegex(ValueError,'token masks secrets'):tw.apply(self.state)
+        vm['cloud_init']=tw.cloud_init(self.config,'ssh-ed25519 synthetic')
+        bucket=next(v['bucket'] for v in self.api.items.values() if 'bucket' in v)
+        bucket['secret_key']='hidden-by-api-key-policy'
+        before=(self.state/'backup-config.json').read_bytes()
+        with self.assertRaisesRegex(ValueError,'hidden by token'):tw.apply(self.state)
+        self.assertEqual(before,(self.state/'backup-config.json').read_bytes())
+
+    def test_ipv4_lost_response_never_purchases_twice(self):
+        j=tw.Journal(self.state,self.config)
+        vm={'id':123,'networks':[{'type':'public','ips':[]}]}
+        api=Mock();api.request.side_effect=timeweb_api.TimewebError(0,'POST')
+        with self.assertRaises(timeweb_api.TimewebError):tw.ensure_server_ipv4(api,j,vm)
+        with self.assertRaisesRegex(ValueError,'pending or unknown'):tw.ensure_server_ipv4(api,j,vm)
+        self.assertEqual(api.request.call_count,1)
+        vm['networks'][0]['ips']=[{'type':'ipv4','ip':'8.8.4.4'}]
+        self.assertEqual(tw.ensure_server_ipv4(api,j,vm),'8.8.4.4')
+        self.assertEqual(api.request.call_count,1)
+
+    def test_dependencies_prepared_only_when_missing(self):
+        ready={'python_ok':True,'venv':True,'ensurepip':True,'cron':True,'package_setup_running':False}
+        with patch('setup.ssh_read',return_value=SimpleNamespace(returncode=0,stdout=json.dumps(ready))) as ssh:
+            setup.prepare_timeweb_dependencies(['ssh']);self.assertEqual(ssh.call_count,1)
+        missing={**ready,'ensurepip':False}
+        with patch('setup.ssh_read',side_effect=[SimpleNamespace(returncode=0,stdout=json.dumps(missing)),SimpleNamespace(returncode=0)]) as ssh:
+            setup.prepare_timeweb_dependencies(['ssh'])
+            self.assertIn('DPkg::Lock::Timeout=180',ssh.call_args.args[1])
+            self.assertEqual(ssh.call_args.kwargs['attempts'],1)
+    def fallback_fixture(self):
+        source=self.api.catalogs['/api/v1/presets/servers']['server_presets'][0]
+        source.update({'cpu':1,'cpu_frequency':'3.3','disk_type':'nvme','tags':['msk_nvme']})
+        self.api.catalogs['/api/v1/presets/servers']['server_presets'].append({**source,'id':5,'price':800,'tags':['ultra_msk_nvme']})
+        self.plan()
+        j=tw.Journal(self.state,self.config)
+        j.value['resources']={'project':{'id':55},'ssh_key':{'id':56},'server':{'submitted':False}}
+        j.value['last_error']={'stage':'infrastructure','type':'TimewebError','http_status':409,'provider_error_code':'no_free_node'}
+        j.save();self.api.items['/api/v1/servers']={'servers':[]}
+        api_patch=patch('timeweb_selection.API',return_value=self.api);api_patch.start();self.addCleanup(api_patch.stop)
+
+    def test_fallback_price_review_preserves_project_and_key(self):
+        self.fallback_fixture()
+        self.assertEqual(len(selection.options(self.state)['options']),1)
+        options=selection.options(self.state,max_price=800)['options']
+        self.assertEqual(options[1]['family'],'ultra');self.assertEqual(options[1]['capacity'],'unknown')
+        preview=selection.select(self.state,5,'spb-3')
+        self.assertEqual(preview['monthly_vm_price_delta'],300)
+        self.assertEqual(setup.read(self.state/'deployment.json')['server_preset_id'],1)
+        with self.assertRaises(ValueError):selection.select(self.state,5,'spb-3','wrong')
+        selection.select(self.state,5,'spb-3',preview['plan_sha256'])
+        j=setup.read(self.state/'timeweb-journal.json')
+        self.assertEqual(j['resources'],{'project':{'id':55},'ssh_key':{'id':56}})
+        self.assertEqual(j['config']['server_preset_id'],5);self.assertEqual(self.api.posts,[])
+        with self.assertRaises(ValueError):tw.approved(self.state)
+
+    def test_fallback_blocks_ambiguous_or_existing_vm_and_price_changes(self):
+        self.fallback_fixture();path=self.state/'timeweb-journal.json';j=setup.read(path)
+        j['last_error']['http_status']=0;setup.save(path,j)
+        with self.assertRaisesRegex(ValueError,'definitive'):selection.select(self.state,5,'spb-3')
+        j['last_error']['http_status']=409;setup.save(path,j)
+        self.api.items['/api/v1/servers']['servers']=[{'id':88,'name':self.config['name']}]
+        with self.assertRaisesRegex(ValueError,'Matching VM'):selection.select(self.state,5,'spb-3')
+        self.api.items['/api/v1/servers']['servers']=[]
+        preview=selection.select(self.state,5,'spb-3')
+        self.api.catalogs['/api/v1/presets/servers']['server_presets'][1]['price']=900
+        with self.assertRaisesRegex(ValueError,'preview changed'):selection.select(self.state,5,'spb-3',preview['plan_sha256'])
+        self.assertEqual(self.api.posts,[])
+
+    def test_fallback_resumes_interrupted_local_transition(self):
+        self.fallback_fixture();preview=selection.select(self.state,5,'spb-3');real=setup.save
+        def fail(path,value):
+            if path.name=='timeweb-journal.json':raise OSError('interrupted')
+            return real(path,value)
+        with patch('timeweb_selection.save',side_effect=fail):
+            with self.assertRaises(OSError):selection.select(self.state,5,'spb-3',preview['plan_sha256'])
+        with self.assertRaisesRegex(ValueError,'interrupted'):tw.approved(self.state)
+        selection.select(self.state,5,'spb-3',preview['plan_sha256'])
+        self.assertTrue(setup.read(self.state/'timeweb-vm-selection.json')['complete'])
+        self.assertEqual(setup.read(self.state/'deployment.json')['server_preset_id'],5)
+
     def test_dns_wait_resets_streak_and_resumes_without_cached_success(self):
         ticks=[0];sleep=lambda seconds:ticks.__setitem__(0,ticks[0]+seconds)
         ready={'dns':True,'https':True,'reason':'ready'};bad={'dns':False,'https':False,'reason':'dns_pending'}
@@ -173,6 +268,28 @@ class TimewebTests(unittest.TestCase):
             with self.assertRaises(timeweb_api.TimewebError) as caught:api.request('/api/v1/projects',method='POST',body={'name':'test'})
         self.assertEqual(request.call_count,1);self.assertNotIn('secret-token',str(caught.exception))
         with self.assertRaises(ValueError):api.request('//attacker.test')
+
+    def test_provider_error_code_survives_without_secret_message_or_post_retry(self):
+        setup.save(self.state/'credentials.json',{'TIMEWEB_TOKEN':'secret-token'})
+        api=timeweb_api.API(self.state)
+        body=json.dumps({'error_code':'no_free_node','message':'secret-token and private details'}).encode()
+        error=urllib.error.HTTPError('https://api.timeweb.cloud/api/v1/servers',409,'Conflict',{},io.BytesIO(body))
+        with patch.object(api.opener,'open',side_effect=error) as request:
+            with self.assertRaises(timeweb_api.TimewebError) as caught:api.request('/api/v1/servers',method='POST',body={})
+        self.assertEqual(request.call_count,1)
+        self.assertEqual(caught.exception.error_code,'no_free_node')
+        self.assertNotIn('secret-token',str(caught.exception))
+
+    def test_capacity_rejection_is_retryable_but_unknown_conflict_is_not(self):
+        for code,unresolved in [('no_free_node',False),(None,True)]:
+            with self.subTest(code=code):
+                folder=self.state/('capacity' if code else 'unknown');folder.mkdir()
+                journal=tw.Journal(folder,self.config);api=Mock()
+                api.request.side_effect=timeweb_api.TimewebError(409,'POST',code)
+                with self.assertRaises(timeweb_api.TimewebError):
+                    journal.resource(api,'server','/api/v1/servers','server',{'name':'test'},lambda v:True)
+                self.assertEqual(journal.value['resources']['server']['submitted'],unresolved)
+                self.assertEqual(api.request.call_count,1)
 
     def test_retry_deploy_needs_exact_review_and_never_runs_while_pending(self):
         setup.save(self.state/'timeweb-journal.json',{'config':self.config,'resources':{'app':{'id':123}}})

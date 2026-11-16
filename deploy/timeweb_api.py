@@ -11,9 +11,11 @@ from setup import read
 
 
 class TimewebError(RuntimeError):
-    def __init__(self, status, method):
+    def __init__(self, status, method, error_code=None):
         self.status, self.method = status, method
-        super().__init__(f'Timeweb HTTP {status} during {method}; response suppressed. Preserve state and resume.')
+        self.error_code=error_code if isinstance(error_code,str) and re.fullmatch(r'[a-z][a-z_]{0,79}',error_code) else None
+        detail=' ('+self.error_code+')' if self.error_code else ''
+        super().__init__(f'Timeweb HTTP {status}{detail} during {method}; response suppressed. Preserve state and resume.')
 
 
 class API:
@@ -37,9 +39,14 @@ class API:
                     raw = response.read()
                     return json.loads(raw) if raw else {}
             except urllib.error.HTTPError as error:
+                code=None
+                try:
+                    value=json.loads(error.read(32768))
+                    if isinstance(value,dict):code=value.get('error_code')
+                except (ValueError,OSError,TypeError):pass
                 error.close()
                 if method != 'GET' or error.code not in (429, 500, 502, 503, 504) or attempt == 3:
-                    raise TimewebError(error.code, method) from None
+                    raise TimewebError(error.code, method,code) from None
             except (urllib.error.URLError, TimeoutError, OSError):
                 if method != 'GET' or attempt == 3:
                     raise TimewebError(0, method) from None
