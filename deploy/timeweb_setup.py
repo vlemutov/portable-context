@@ -195,7 +195,7 @@ def retry_deploy(state,approval=None):
             path=state/'timeweb-bootstrap-publish.json'
             attempt={'desired':digest({'env':{},'commit':j['config']['source_commit']})}
         rows=api.request('/api/v1/apps/'+str(ident)+'/deploys').get('deploys',[])
-        if any(v.get('status') not in ('success','failed','failure','error','cancelled','canceled') for v in rows):
+        if any(v.get('status') not in ('success','failed','failure','error','cancelled','canceled','stopped') for v in rows):
             raise ValueError('A deployment is still pending. Wait and resume; no repeated POST allowed')
         preview={'app_id':ident,'desired':attempt['desired'],'deploys':[{k:v.get(k) for k in ('id','status','commit_sha')} for v in rows],
             'effect':'Allow one new deployment of the same app/configuration on the next install --https. No resource creation or deletion.'}

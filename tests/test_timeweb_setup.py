@@ -299,7 +299,7 @@ class TimewebTests(unittest.TestCase):
         running={'deploys':[{'id':'d','status':'prepare','commit_sha':'a'*40}]}
         api.request.side_effect=[app,running]
         with patch('timeweb_setup.API',return_value=api),self.assertRaisesRegex(ValueError,'pending'):tw.retry_deploy(self.state)
-        failed={'deploys':[{'id':'d','status':'failure','commit_sha':'a'*40}]}
+        failed={'deploys':[{'id':'d','status':'failure','commit_sha':'a'*40},{'id':'superseded','status':'stopped','commit_sha':'a'*40}]}
         api.request.side_effect=[app,failed,app,failed,app,failed]
         with patch('timeweb_setup.API',return_value=api):
             preview=tw.retry_deploy(self.state)
