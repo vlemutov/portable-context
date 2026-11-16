@@ -56,7 +56,7 @@ def measured(label, action):
     return label, {**result, 'seconds': round(time.monotonic() - start, 3)}
 
 
-def collect(hostname, cloud_ip=None):
+def collect(hostname, cloud_ip=None, system_lookup=None):
     if not re.fullmatch(r'[a-z0-9-]{1,63}\.twc1\.net', hostname):
         raise ValueError('Expected one Timeweb technical hostname')
     if cloud_ip and not ipaddress.ip_address(cloud_ip).is_global:
@@ -64,7 +64,7 @@ def collect(hostname, cloud_ip=None):
     evidence = {'observed_at': datetime.now(timezone.utc).isoformat(), 'hostname': hostname,
         'queries': {}, 'authority_addresses': {}}
     tasks = {
-        'system_A': lambda: sorted({v[4][0] for v in socket.getaddrinfo(hostname, 443, socket.AF_INET)}),
+        'system_A': lambda: sorted({v[4][0] for v in (system_lookup or socket.getaddrinfo)(hostname, 443, socket.AF_INET)}),
         'google_A_default': lambda: doh(hostname),
         'google_A_no_ecs': lambda: doh(hostname, ecs='0.0.0.0/0'),
         'google_AAAA_no_ecs': lambda: doh(hostname, kind='AAAA', ecs='0.0.0.0/0'),
