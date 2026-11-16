@@ -19,6 +19,7 @@ def check_container(image,env,expected):
     ident=run(['docker','run','--rm','-d','-p','127.0.0.1::8080',*env,image])
     try:
         details=json.loads(run(['docker','inspect',ident]))[0]
+        assert set(details['Config']['ExposedPorts'])=={'8080/tcp'}, 'Unexpected inherited ports confuse provider discovery'
         port=details['NetworkSettings']['Ports']['8080/tcp'][0]['HostPort']
         url='http://127.0.0.1:'+port
         deadline=time.monotonic()+30
@@ -29,6 +30,11 @@ def check_container(image,env,expected):
             except OSError:
                 if time.monotonic()>deadline:raise
                 time.sleep(.5)
+        while True:
+            health=json.loads(run(['docker','inspect',ident]))[0]['State']['Health']['Status']
+            if health=='healthy':break
+            if time.monotonic()>deadline:raise AssertionError('Image healthcheck did not pass: '+health)
+            time.sleep(.5)
         try:urllib.request.urlopen(url+'/mcp',timeout=3)
         except urllib.error.HTTPError as error:
             assert error.code in (404,503), error.code
