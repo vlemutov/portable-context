@@ -12,7 +12,13 @@ import subprocess
 from setup import ROOT, INSTALL_BOOTSTRAP, read, save, ssh_args, command_env, checked
 
 ALLOWED={'public_host','origin_ip','project_id','container_name','container_id','image',
-         'origin_port','application_port','identity_port','origin_service','drain_seconds'}
+         'origin_port','application_port','identity_port','origin_service','drain_seconds',
+         'backend','app_id','app_name','source_commit'}
+
+
+def source_names():
+    return ('rotation_setup.py','gateway_rotation.py','gateway_rotation_cloud.py','gateway_diagnostics.py',
+        'gateway.py','cloud_gateway.py','setup.py','edge/entrypoint.sh','timeweb_rotation.py','timeweb_api.py','timeweb_setup.py')
 
 REMOTE='''import sys,json,pathlib,base64,hashlib,subprocess
 p=json.load(sys.stdin);root=pathlib.Path(p['root']).resolve();state=root/'gateway-rotation'
@@ -37,6 +43,9 @@ sys.stdout.write(r.stdout)
 
 
 def configure_server(payload):
+    if payload.get('options',{}).get('backend')=='timeweb':
+        from timeweb_rotation import configure_server as configure_timeweb
+        return configure_timeweb(payload)
     import os,sys,tempfile
     from gateway_rotation import initialize, status, write, schedule, credentials_info
     from gateway_rotation_cloud import CloudBackend, desired_signature
@@ -90,7 +99,7 @@ def install(state,config,generation):
     if set(options)-ALLOWED:raise ValueError('Unsupported rotation options')
     credentials_info(generation,options['public_host'])
     env=command_env(state)
-    names=('rotation_setup.py','gateway_rotation.py','gateway_rotation_cloud.py','gateway_diagnostics.py','gateway.py','cloud_gateway.py','setup.py','edge/entrypoint.sh')
+    names=source_names()
     payload={'root':installed['root'],'workspace_id':installed['memory']['workspace_id'],'options':options,
         'credentials':{k:env[k] for k in ('AUTH_KEY_ID','AUTH_SECRET')},
         'generation':{name:base64.b64encode((generation/name).read_bytes()).decode() for name in FILES},
@@ -104,7 +113,7 @@ def install(state,config,generation):
 def refresh(state):
     """Update controller code using its existing server-bound config and keys."""
     state=Path(state);installed=read(state/'installed.json')
-    names=('rotation_setup.py','gateway_rotation.py','gateway_rotation_cloud.py','gateway_diagnostics.py','gateway.py','cloud_gateway.py','setup.py','edge/entrypoint.sh')
+    names=source_names()
     payload={'root':installed['root'],'workspace_id':installed['memory']['workspace_id'],'refresh':True,'allowed':sorted(ALLOWED),
         'files':{name:(ROOT/'deploy'/name).read_text(encoding='utf-8') for name in names}}
     response=checked(ssh_args(state,read(state/'deployment.json'))+['python3 -c '+shlex.quote(INSTALL_BOOTSTRAP)],

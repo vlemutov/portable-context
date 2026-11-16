@@ -95,7 +95,7 @@ the owner's explicit acceptance of their concrete preview. Keep the prior memory
 
 ### Setup and connection details
 
-When asked to deploy, install on Cloud.ru, or set up an existing/home server, read
+When asked to deploy, install on Cloud.ru or Timeweb, or set up an existing/home server, read
 [references/deployment.md](references/deployment.md). Use the reproducible owner-operated installer;
 there is no hosted service or shared developer backend. Finish planning and review actual costs before
 creating paid resources; reuse existing authorization and the same deployment state on retries.

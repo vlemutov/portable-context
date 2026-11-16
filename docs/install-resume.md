@@ -4,6 +4,11 @@
 Python 3.11+ с `.[mcp,deployment]`. `PRIVATE_STATE` — прежняя приватная папка вне checkout.
 Не запускайте `init`, не создавайте замену ВМ/памяти и не удаляйте intent после сетевой ошибки.
 
+Для `mode=timeweb` используйте [маршрут Timeweb](timeweb-install.md#ожидание-и-продолжение).
+Общие команды — `install-status` и повторный `install --https`. Команды Cloud.ru network/quota
+ниже не являются диагностикой Timeweb. Потерянный ответ создания обрабатывается через
+`timeweb-reconcile`, не через новый state или повторное создание ресурса.
+
 ## Проверка и продолжение
 
 ```text
