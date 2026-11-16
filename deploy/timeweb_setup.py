@@ -165,9 +165,18 @@ def retry_deploy(state,approval=None):
     from portable_context.restic_backup import file_lock
     with file_lock(state/'timeweb-install.lock'):
         j=read(state/'timeweb-journal.json');ident=j['resources']['app']['id']
-        path=state/'timeweb-publish.json';attempt=read(path);api=API(state)
+        path=state/'timeweb-publish.json';api=API(state)
         app=api.request('/api/v1/apps/'+str(ident))['app']
         if app.get('name')!=j['config']['name']+'-edge':raise ValueError('Wrong app')
+        if app.get('commit_sha')!=j['config']['source_commit']:raise ValueError('App source changed')
+        if path.exists():
+            attempt=read(path)
+        else:
+            # The very first build may fail before DNS or TLS configuration exists.
+            # Retry the same placeholder app, with its own durable publication intent.
+            if app.get('envs'):raise ValueError('Unexpected configuration on initial app')
+            path=state/'timeweb-bootstrap-publish.json'
+            attempt={'desired':digest({'env':{},'commit':j['config']['source_commit']})}
         rows=api.request('/api/v1/apps/'+str(ident)+'/deploys').get('deploys',[])
         if any(v.get('status') not in ('success','failed','failure','error','cancelled','canceled') for v in rows):
             raise ValueError('A deployment is still pending. Wait and resume; no repeated POST allowed')
@@ -337,6 +346,18 @@ def install_locked(state,config):
         return j.resource(AppAPI(),'app','/api/v2/apps','app',body,
             lambda v:v.get('name')==name and v.get('repository_id') in (None,repo['id']) and v.get('commit_sha')==config['source_commit'])
     app=j.operation('edge',create_edge)
+    bootstrap_path=state/'timeweb-bootstrap-publish.json'
+    if bootstrap_path.exists():
+        def retry_initial_build():
+            deadline=time.monotonic()+1200
+            while True:
+                current=api.request('/api/v1/apps/'+str(app['id']))['app']
+                if publish(api,current,{},config['source_commit'],bootstrap_path):return {'published':True}
+                if time.monotonic()>=deadline:raise ValueError('Initial edge deployment pending. Resume same state.')
+                time.sleep(10)
+        # A completed initial retry must not clear the later live TLS environment.
+        if not (state/'timeweb-publish.json').exists():
+            j.operation('edge-retry',retry_initial_build)
     app=j.operation('edge-deploy',lambda:wait_app(api,app['id'],name))
     public=origin(app);host=public.removeprefix('https://')
     folder=private_directory(state/'https');generation=folder/'generation'

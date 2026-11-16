@@ -178,7 +178,7 @@ class TimewebTests(unittest.TestCase):
         setup.save(self.state/'timeweb-journal.json',{'config':self.config,'resources':{'app':{'id':123}}})
         setup.save(self.state/'timeweb-publish.json',{'desired':'digest','submitted':True,'baseline_deploys':[]})
         api=Mock()
-        app={'app':{'id':123,'name':'pc-test-edge'}}
+        app={'app':{'id':123,'name':'pc-test-edge','commit_sha':'a'*40}}
         running={'deploys':[{'id':'d','status':'prepare','commit_sha':'a'*40}]}
         api.request.side_effect=[app,running]
         with patch('timeweb_setup.API',return_value=api),self.assertRaisesRegex(ValueError,'pending'):tw.retry_deploy(self.state)
@@ -190,6 +190,25 @@ class TimewebTests(unittest.TestCase):
             tw.retry_deploy(self.state,preview['plan_sha256'])
         self.assertFalse(setup.read(self.state/'timeweb-publish.json')['submitted'])
         self.assertTrue(all('method' not in c.kwargs for c in api.request.call_args_list))
+
+    def test_initial_failed_build_can_retry_before_tls_publication_exists(self):
+        setup.save(self.state/'timeweb-journal.json',{'config':self.config,'resources':{'app':{'id':123}}})
+        api=Mock();app={'id':123,'name':'pc-test-edge','commit_sha':'a'*40,'envs':{}}
+        failed={'deploys':[{'id':'first','status':'failure','commit_sha':'a'*40}]}
+        api.request.side_effect=[{'app':app},failed,{'app':app},failed]
+        path=self.state/'timeweb-bootstrap-publish.json'
+        with patch('timeweb_setup.API',return_value=api):
+            preview=tw.retry_deploy(self.state)
+            self.assertFalse(path.exists())
+            tw.retry_deploy(self.state,preview['plan_sha256'])
+        self.assertFalse((self.state/'timeweb-publish.json').exists())
+        api.reset_mock();api.request.side_effect=timeweb_api.TimewebError(0,'POST')
+        with self.assertRaises(timeweb_api.TimewebError):tw.publish(api,app,{},'a'*40,path)
+        api.reset_mock();api.request.side_effect=None
+        api.request.return_value={'deploys':[{'id':'retry','status':'success','commit_sha':'a'*40}]}
+        self.assertTrue(tw.publish(api,app,{},'a'*40,path))
+        self.assertEqual(api.request.call_count,1)
+        self.assertNotIn('method',api.request.call_args.kwargs)
 
     def test_renewal_reconciles_existing_deploy_and_keeps_edge_identity(self):
         from gateway import issue_credentials
