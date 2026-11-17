@@ -4,7 +4,8 @@ A shared memory operated through your agent: import selected conversations, pres
 relationships, build an evidence-linked Markdown wiki, and continue the work from another client.
 
 **This branch: 1.0 preview; package/skill version remains 0.9.0 until release.**
-HTTPS/OAuth installation and update are being prepared in `release/1.0`. Use that branch for
+HTTPS/OAuth installation and update are being prepared in `release/1.0` (Cloud.ru) and
+`feature/timeweb-installer` (Timeweb). Use the matching branch for
 the preview; do not assume the default branch already contains this onboarding or a 1.0 release.
 Start at **[START-HERE.md](START-HERE.md)** for the agent-guided setup.
 

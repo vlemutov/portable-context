@@ -146,6 +146,9 @@ class Rotation:
                 raise
 
     def _tick(self,force,interrupt):
+        upgrade=self.state/'source-update.json'
+        if upgrade.exists() and not read(upgrade).get('complete'):
+            return {'status':'busy','next':'Resume the pending Timeweb source update before certificate renewal'}
         active=read(self.state/'active.json'); now=self.clock()
         journal=read(self.state/'rotation.json') if (self.state/'rotation.json').exists() else None
         if not journal or journal.get('complete'):

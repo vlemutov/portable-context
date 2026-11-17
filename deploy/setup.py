@@ -542,6 +542,8 @@ INSTALL_BOOTSTRAP = 'import io,json,sys; p=json.load(sys.stdin); sys.stdin=io.St
 
 def install(state):
     config = read(state / 'deployment.json')
+    if config['mode']=='timeweb' and (state/'timeweb-cleanup.json').exists():
+        raise ValueError('This installation is being deleted or retired; no reinstallation allowed')
     ssh = ssh_args(state, config)
     if config['mode'] in ('cloudru','timeweb'):
         # Retry only readiness checks; never create new cloud resources on connection failure.
@@ -699,6 +701,13 @@ def main(argv=None):
     p.add_argument('--preset-id',type=int,required=True)
     p.add_argument('--availability-zone',required=True)
     p.add_argument('--approve-plan')
+    sub.add_parser('timeweb-diagnostics',help='Write an allowlisted support report without credentials, logs or memory content')
+    p=sub.add_parser('timeweb-cleanup',help='Review irreversible deletion of this installation, including all S3 backup versions; preserve other resources and local evidence')
+    p.add_argument('--approve-plan')
+    p=sub.add_parser('timeweb-update',help='Review/resume a pinned source upgrade on the same VM, gateway and renewal controller')
+    p.add_argument('--commit',required=True)
+    p.add_argument('--approve-plan')
+    p.add_argument('--retry-failed',action='store_true',help='Explicitly review another deployment after inspecting terminal failures')
     p = sub.add_parser('recovery-kit', help='Verify OAuth backups and save an offline secret kit locally')
     p.add_argument('--runtime', help='Explicit OAuth runtime directory on the server, if detection is ambiguous')
     p.add_argument('--output', type=Path, help='New private local directory; defaults inside --state')
@@ -807,6 +816,15 @@ def main(argv=None):
     elif args.command == 'timeweb-select-vm':
         from timeweb_selection import select
         result=select(state,args.preset_id,args.availability_zone,args.approve_plan)
+    elif args.command == 'timeweb-diagnostics':
+        from timeweb_lifecycle import diagnostics
+        result=diagnostics(state)
+    elif args.command == 'timeweb-cleanup':
+        from timeweb_lifecycle import cleanup
+        result=cleanup(state,args.approve_plan)
+    elif args.command == 'timeweb-update':
+        from timeweb_update import update
+        result=update(state,args.commit,args.approve_plan,args.retry_failed)
     elif args.command == 'recovery-kit':
         result = recovery_kit(state,args.runtime,args.output)
     elif args.command == 'rotation-setup':
@@ -817,7 +835,8 @@ def main(argv=None):
     else:
         import anyio
         result = anyio.run(check, state)
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    # ASCII JSON remains valid Unicode when decoded, including cp1252/redirected Windows terminals.
+    print(json.dumps(result, ensure_ascii=True, indent=2))
 
 
 if __name__ == '__main__':

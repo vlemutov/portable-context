@@ -4,6 +4,23 @@ Status: in development. The memory package remains on 0.9.0 with a personal
 1.0-preview HTTPS/OAuth deployment. Do not advertise
 OAuth or the new HTTPS installation as released until the acceptance gates pass.
 
+## 1.0-preview.6 — Timeweb lifecycle and independent onboarding
+
+- Timeweb hardware-tier fallback after definitive capacity rejection, explicit zones,
+  separately journaled public IPv4, secret-masking detection, dependency readiness,
+  and bounded ordinary DNS/HTTPS waiting.
+- `timeweb-update`: reviewed pinned gateway upgrade, coordinated with the VM renewal
+  controller; durable publication intent, same workspace/resources, resumable memory update.
+- `timeweb-diagnostics`: allowlisted support JSON without provider bodies, environment,
+  credentials or memory contents; works during interrupted local configuration transitions.
+- `timeweb-cleanup`: installation-scoped plan, irreversible S3-backup warning, deletion
+  receipts, retained IPv4 cleanup, shared metadata protection and retired-state guard.
+- Skill revision 1.0-preview.6, [Timeweb operations](timeweb-operations.md), and a
+  [clean Cursor starting prompt](timeweb-clean-test.md) that needs no developer chat context.
+- Infrastructure was exercised on the previous Timeweb pilot. New lifecycle commands,
+  human passkey/consent in Cursor and full first import require fresh live acceptance.
+  No claim of provider availability, automatic token replacement or spending enforcement.
+
 ## 1.0-preview.5 — interrupted Ubuntu/Cursor install
 
 - Exact Container Apps name-not-found HTTP 499 handling at the pre-create lookup;

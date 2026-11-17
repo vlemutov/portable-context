@@ -99,6 +99,11 @@ def plan(state,*,config=None,persist=True):
 
 
 def approved(state, approval=None):
+    if (state/'timeweb-cleanup.json').exists():
+        raise ValueError('Installation is being deleted or retired. Use a NEW state for a new memory.')
+    transition=state/'timeweb-update.json'
+    if transition.exists() and not read(transition).get('complete'):
+        raise ValueError('Resume timeweb-update before installing or changing this state')
     transition=state/'timeweb-vm-selection.json'
     if transition.exists() and not read(transition).get('complete'):
         raise ValueError('VM selection interrupted. Resume timeweb-select-vm with its approved hash before applying.')

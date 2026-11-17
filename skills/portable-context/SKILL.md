@@ -1,14 +1,14 @@
 ---
 name: portable-context
-description: Deploy a personal Portable Context memory on Cloud.ru or an existing server, import selected or all accessible conversation history, preserve source relationships, and build or update its knowledge wiki through MCP. Use for setup, migration, recall, shared graph enrichment, or resuming another agent's work.
+description: Deploy and maintain a personal Portable Context memory on Cloud.ru, Timeweb or an existing server, import accessible conversation history, preserve source relationships, and build or update its knowledge wiki through MCP. Use for setup, migration, recall, updates, diagnostics, cleanup or resuming another agent's work.
 metadata:
   version: "0.9.0"
-  revision: "1.0-preview.5"
+  revision: "1.0-preview.6"
 ---
 
 # Portable Context
 
-Skill revision: **1.0-preview.5**. Package/protocol baseline: **0.9.0**.
+Skill revision: **1.0-preview.6**. Package/protocol baseline: **0.9.0**.
 Report both when identifying this installed copy; record its source commit on installation.
 The preview revision distinguishes updated instructions without claiming a released 1.0 server.
 
@@ -59,6 +59,9 @@ Use [references/connection.md](references/connection.md) for HTTPS/OAuth or SSH/
 client compatibility. Cloud.ru HTTPS needs the full `release/1.0` checkout during preview; do not
 describe the still-0.9.0 package as a published 1.0 release. Keep the exact ref/commit in the handoff.
 For a skill-only copy, obtain the full matching checkout before using deployment files.
+For Timeweb setup, updates, diagnostics or deletion, read [references/timeweb.md](references/timeweb.md).
+During its preview use `feature/timeweb-installer`, not an older Cloud.ru-only checkout.
+The user's provider choice determines the route; do not copy another installation's state or credentials.
 
 Setup does not authorize exporting all history. Finish with real `memory_status` from the user's
 client, matching workspace ID, a chosen import/read-back and honest file/backup results. Save
