@@ -60,6 +60,26 @@ class API:
 
 
 class LifecycleTests(unittest.TestCase):
+    def test_live_project_categories_and_retained_resume(self):
+        core = {k: [] for k in ('servers', 'balancers', 'buckets', 'clusters', 'databases', 'dedicated_servers')}
+        extra = {k: [] for k in ('floating_ips', 'routers', 'network_drives', 'knowledgebases',
+            'registries', 'monitorings', 'monitoring_alerts', 'cdn', 'agents', 'apps', 'domains', 'mailboxes')}
+        path = '/api/v1/projects/4/resources'
+        self.api.items[path] = {**core, **extra, 'meta': {'total': 1}, 'apps': [{'id': 42}]}
+        plan = lifecycle.cleanup(self.state)
+        first = lifecycle.cleanup(self.state, plan['plan_sha256'])
+        self.assertIn('retained', first['steps']['project'])
+        self.assertIn('/api/v1/projects/4', self.api.items)
+        self.api.items[path] = {**core, **extra, 'meta': {'total': 0}, 'unknown_future_resource': []}
+        second = lifecycle.cleanup(self.state, plan['plan_sha256'])
+        self.assertIn('retained', second['steps']['project'])
+        self.api.items[path] = {**core, **extra, 'meta': {'total': 1}}
+        self.assertIn('retained', lifecycle.cleanup(self.state, plan['plan_sha256'])['steps']['project'])
+        self.api.items[path] = {**core, **extra, 'meta': {'total': 0}}
+        final = lifecycle.cleanup(self.state, plan['plan_sha256'])
+        self.assertTrue(final['all_planned_resources_absent'])
+        self.assertNotIn('retained', final['steps']['project'])
+
     def test_git_detail_is_repository_inventory_and_diagnostics_survives_bad_shape(self):
         api = API()
         api.items['/api/v1/vcs-provider/git1'] = {'repositories': [], 'meta': {'total': 0}}

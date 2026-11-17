@@ -203,6 +203,8 @@ def cleanup(state, approval=None):
         if digest({'config': config, 'resources': journal['resources']}) != review['binding']:
             raise ValueError('Installation changed since cleanup review')
         record = saved or {'plan': review, 'steps': {}, 'complete': False}
+        record['complete'] = False
+        record['all_planned_resources_absent'] = False
         save(path, record)  # tombstone before any DELETE; blocks re-installation
         for item in review['resources']:
             kind, ident = item['kind'], item['id']
@@ -218,6 +220,7 @@ def cleanup(state, approval=None):
                 verify_cleanup(kind, live, config, journal, pending)
                 endpoint = RESOURCES[kind][0]+'/'+str(ident)
             if live is None:
+                step.pop('retained', None)
                 step['absent'] = True
                 save(path, record)
                 continue
@@ -234,11 +237,17 @@ def cleanup(state, approval=None):
                     continue
                 if kind == 'project':
                     contents = api.request(endpoint+'/resources')
-                    keys = ('servers', 'balancers', 'buckets', 'clusters', 'databases', 'dedicated_servers')
-                    if any(contents.get(k) != [] for k in keys) or set(contents)-set(keys)-{'meta', 'response_id'}:
+                    required = {'servers', 'balancers', 'buckets', 'clusters', 'databases', 'dedicated_servers'}
+                    known = required | {'floating_ips', 'routers', 'network_drives', 'knowledgebases',
+                        'registries', 'monitorings', 'monitoring_alerts', 'cdn', 'agents', 'apps', 'domains', 'mailboxes'}
+                    fields = set(contents)-{'meta', 'response_id'}
+                    if (not required.issubset(fields) or fields-known or
+                            any(contents[k] != [] for k in fields) or
+                            ('meta' in contents and contents['meta'].get('total') != 0)):
                         step['retained'] = 'Project inventory is not proven empty; review separately.'
                         save(path, record)
                         continue
+            step.pop('retained', None)
             step['submitted'] = True
             save(path, record)
             try:
