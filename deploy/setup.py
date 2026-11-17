@@ -694,6 +694,8 @@ def main(argv=None):
     p.add_argument('--resource-id',required=True)
     p=sub.add_parser('timeweb-retry-deploy',help='Preview a retry of a failed/ambiguous app deployment, then approve its exact hash')
     p.add_argument('--approve-plan')
+    p=sub.add_parser('timeweb-retry-create',help='Review a single retry after an unresolved app creation; late duplicates remain possible')
+    p.add_argument('--approve-plan')
     p=sub.add_parser('timeweb-vm-options',help='List matching VM alternatives within explicit locations and monthly price ceiling; capacity is unknown')
     p.add_argument('--location',action='append')
     p.add_argument('--max-monthly-price',type=float)
@@ -810,6 +812,9 @@ def main(argv=None):
     elif args.command == 'timeweb-retry-deploy':
         from timeweb_setup import retry_deploy
         result=retry_deploy(state,args.approve_plan)
+    elif args.command == 'timeweb-retry-create':
+        from timeweb_retry import retry_create
+        result=retry_create(state,args.approve_plan)
     elif args.command == 'timeweb-vm-options':
         from timeweb_selection import options
         result=options(state,args.location,args.max_monthly_price)

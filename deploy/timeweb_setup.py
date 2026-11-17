@@ -142,8 +142,15 @@ class Journal:
         item=self.value['resources'].setdefault(name,{'path':path,'key':key,'body_sha256':digest(body)})
         if item['body_sha256']!=digest(body):raise ValueError('Resource request changed: '+name)
         if item.get('id') is None:
-            if item.get('submitted'):raise ValueError('Creation outcome unknown for '+name+'. Inspect the cloud and run timeweb-reconcile with its reviewed ID. No duplicate created.')
-            item['submitted']=True;self.save()
+            if item.get('submitted'):
+                if name == 'app':
+                    from timeweb_retry import before_create
+                    before_create(self,api,item)
+                else:raise ValueError('Creation outcome unknown for '+name+'. Inspect the cloud and run timeweb-reconcile with its reviewed ID. No duplicate created.')
+            if name == 'app' and item.get('retry_history'):
+                from timeweb_retry import inventory
+                inventory(api,self.value['config'],self.value)
+            item['submitted']=True;item['submitted_at']=int(time.time());self.save()
             try:
                 value=unpack(api.request(path,method='POST',body=body),required=True)
             except TimewebError as error:
@@ -154,6 +161,9 @@ class Journal:
                 raise
             item['id']=value.get('id',value.get('provider_id'));item.pop('creation_rejection',None);self.save()
             if item['id'] is None:raise ValueError('Creation returned no resource ID. Reconcile before continuing')
+        if name == 'app' and item.get('retry_history'):
+            from timeweb_retry import inventory
+            inventory(api,self.value['config'],self.value,known_id=item['id'])
         value=api.request(path+'/'+str(item['id']))
         value=unpack(value)
         returned=value.get('id',value.get('provider_id'))
