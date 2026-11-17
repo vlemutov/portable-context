@@ -29,6 +29,32 @@ def load(state, *, allow_transition=False):
     return config, journal
 
 
+def cleanup_context(state):
+    """An explicit destroy may supersede a stalled upgrade, never an unknown identity."""
+    config, journal = load(state, allow_transition=True)
+    path = state/'timeweb-update.json'
+    update = read(path) if path.exists() else None
+    pending = update if update and not update.get('complete') else None
+    if pending:
+        if config not in (pending['before']['deployment.json'], pending['after']['deployment.json']):
+            raise ValueError('Deployment differs from pending upgrade')
+        # Stages may advance during a resumable memory install, but IDs cannot change.
+        candidates = [pending[side]['timeweb-journal.json'] for side in ('before', 'after')]
+        if not any(journal['config'] == v['config'] and journal['resources'] == v['resources'] for v in candidates):
+            raise ValueError('Resource identities differ from pending upgrade')
+    elif journal['config'] != target(config):
+        raise ValueError('Installation configuration and journal differ')
+    return config, journal, pending
+
+
+def verify_cleanup(kind, value, config, journal, pending):
+    if kind == 'app' and value and pending:
+        if value.get('commit_sha') not in (pending['old'], pending['commit']):
+            raise ValueError('App source differs from both reviewed upgrade versions')
+        config = {**config, 'source_commit': value['commit_sha']}
+    verify(kind, value, config, journal)
+
+
 def complete_list(api, path, key):
     response = api.request(path)
     rows = response[key]
@@ -119,9 +145,7 @@ def diagnostics(state):
 
 
 def cleanup_plan(state, api):
-    config, journal = load(state)
-    if (state/'timeweb-update.json').exists() and not read(state/'timeweb-update.json').get('complete'):
-        raise ValueError('Finish the pending source update before cleanup')
+    config, journal, pending = cleanup_context(state)
     resources = []
     for kind in ('app', 'server', 'bucket', 'ssh_key', 'git', 'project'):
         item = journal['resources'].get(kind, {})
@@ -129,7 +153,7 @@ def cleanup_plan(state, api):
             raise ValueError('Reconcile ambiguous creation before cleanup: '+kind)
         if item.get('id') is not None:
             live = fetch(api, kind, item['id'])
-            verify(kind, live, config, journal)
+            verify_cleanup(kind, live, config, journal, pending)
             # Do not include pre-existing projects, keys, or Git connections outside this journal.
             resources.append({'kind': kind, 'id': item['id']})
     ips = complete_list(api, '/api/v1/floating-ips', 'ips')
@@ -142,6 +166,7 @@ def cleanup_plan(state, api):
             raise ValueError('Installation IP belongs to another resource')
         resources.insert(2, {'kind': 'ipv4', 'id': value['id'], 'ip': value['ip']})
     review = {'format': 1, 'installation': config['name'], 'binding': digest({'config': config, 'resources': journal['resources']}),
+              'abandons_pending_update': pending['operation'] if pending else None,
               'resources': resources, 'irreversible': 'Delete this VM, memory, OAuth accounts, app and S3 including ALL backup versions. Local state and recovery kit are retained; the kit alone cannot restore deleted S3 backups.',
               'preserved': 'Other installations, pre-existing project, account, balance, API token and local files'}
     review['plan_sha256'] = digest(review)
@@ -164,7 +189,7 @@ def cleanup(state, approval=None):
             return review
         if approval != review['plan_sha256'] or digest({k: v for k, v in review.items() if k != 'plan_sha256'}) != approval:
             raise ValueError('Cleanup plan changed')
-        config, journal = load(state)
+        config, journal, pending = cleanup_context(state)
         if digest({'config': config, 'resources': journal['resources']}) != review['binding']:
             raise ValueError('Installation changed since cleanup review')
         record = saved or {'plan': review, 'steps': {}, 'complete': False}
@@ -180,7 +205,7 @@ def cleanup(state, approval=None):
                 endpoint = '/api/v1/floating-ips/'+str(ident)
             else:
                 live = fetch(api, kind, ident)
-                verify(kind, live, config, journal)
+                verify_cleanup(kind, live, config, journal, pending)
                 endpoint = RESOURCES[kind][0]+'/'+str(ident)
             if live is None:
                 step['absent'] = True

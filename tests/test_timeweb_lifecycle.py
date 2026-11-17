@@ -271,13 +271,15 @@ class LocalUpdateTests(unittest.TestCase):
         self.assertTrue(upgrade.update(self.state, 'b'*40)['already_complete'])
         self.assertEqual(setup.read(self.state/'timeweb-journal.json')['resources']['server']['id'], 2)
 
-    def test_change_after_preview_rejected_and_cleanup_cannot_race_upgrade(self):
+    def test_change_after_preview_rejected_and_cleanup_can_supersede_stalled_upgrade(self):
         self.prepare_update()
         preview = upgrade.update(self.state, 'b'*40)
         with patch('timeweb_update.call_remote', return_value={'status': 'pending'}):
             upgrade.update(self.state, 'b'*40, preview['plan_sha256'])
-        with self.assertRaisesRegex(ValueError, 'pending source update'):
-            lifecycle.cleanup(self.state)
+        self.api.items['/api/v1/apps/1']['app']['commit_sha'] = 'b'*40
+        cleanup = lifecycle.cleanup(self.state)
+        self.assertEqual(cleanup['abandons_pending_update'], preview['operation'])
+        self.assertFalse(any(c[0] == 'DELETE' for c in self.api.calls))
         changed = setup.read(self.state/'deployment.json')
         changed['host'] = '203.0.113.99'
         setup.save(self.state/'deployment.json', changed)
@@ -286,6 +288,18 @@ class LocalUpdateTests(unittest.TestCase):
         # Diagnostics still work during partial local journal transitions.
         report = lifecycle.diagnostics(self.state)
         self.assertNotIn('SECRET', json.dumps(report))
+
+    def test_cleanup_after_failed_upgrade_retires_state_and_blocks_resume(self):
+        self.prepare_update()
+        preview = upgrade.update(self.state, 'b'*40)
+        with patch('timeweb_update.call_remote', return_value={'status': 'pending'}):
+            upgrade.update(self.state, 'b'*40, preview['plan_sha256'])
+        self.api.items['/api/v1/apps/1']['app']['commit_sha'] = 'b'*40
+        plan = lifecycle.cleanup(self.state)
+        result = lifecycle.cleanup(self.state, plan['plan_sha256'])
+        self.assertTrue(result['all_planned_resources_absent'])
+        with self.assertRaisesRegex(ValueError, 'retired'):
+            upgrade.update(self.state, 'b'*40, preview['plan_sha256'])
 
 
 if __name__ == '__main__':
