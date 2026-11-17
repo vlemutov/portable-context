@@ -148,9 +148,11 @@ class Journal:
                 value=unpack(api.request(path,method='POST',body=body),required=True)
             except TimewebError as error:
                 if error.status in (400,401,403,422,429) or (error.status==409 and error.error_code=='no_free_node'):
-                    item['submitted']=False;self.save()
+                    item['submitted']=False
+                    item['creation_rejection']={'status':error.status,'error_code':error.error_code}
+                    self.save()
                 raise
-            item['id']=value.get('id',value.get('provider_id'));self.save()
+            item['id']=value.get('id',value.get('provider_id'));item.pop('creation_rejection',None);self.save()
             if item['id'] is None:raise ValueError('Creation returned no resource ID. Reconcile before continuing')
         value=api.request(path+'/'+str(item['id']))
         value=unpack(value)
@@ -355,12 +357,36 @@ def install(state,approval=None):
         return install_locked(state,config)
 
 
+def git_request(journal, config):
+    """The plain Git provider needs a clone URL; preserve existing request identities."""
+    legacy={'provider_type':'git','url':config['source_url']}
+    clone={**legacy,'url':config['source_url'].removesuffix('.git')+'.git'}
+    item=journal.value['resources'].get('git')
+    if not item or item.get('body_sha256')==digest(clone):return clone
+    if item.get('body_sha256')!=digest(legacy):raise ValueError('Git source request differs from this installation')
+    if item.get('id') is not None:return legacy  # No need to replace a working connection.
+    error=journal.value.get('last_error') or {}
+    rejection=item.get('creation_rejection') or (
+        {'status':error.get('http_status'),'error_code':error.get('provider_error_code')}
+        if error.get('stage')=='edge' else {})
+    if item.get('submitted') is not False or rejection!={'status':400,'error_code':'url_is_not_valid_exception'}:
+        raise ValueError('Git creation outcome is not a confirmed URL rejection; reconcile before changing its request')
+    if journal.value['resources'].get('app',{}).get('id') is not None:
+        raise ValueError('App already exists; cannot repair an uncreated Git connection')
+    item['url_normalization']={'previous_body_sha256':item['body_sha256'],'reason':'confirmed URL validation rejection; add clone suffix'}
+    item['body_sha256']=digest(clone)
+    journal.save()
+    return clone
+
+
 def install_locked(state,config):
     from setup import install as memory_install, resume_memory, recovery_kit, ssh_read, ssh_args
     from https_setup import remote, check_public, save_client, owner_login
     from gateway import issue_credentials
     from dns_ready import wait as dns_wait
     api=API(state);name=config['name']+'-edge'
+    # Capture a definitive old rejection before successful infrastructure resume clears last_error.
+    git_body=git_request(Journal(state,config),config)
     provision(state,config)
     j=Journal(state,config)
     memory=j.operation('memory',lambda:resume_memory(state) or memory_install(state))
@@ -376,7 +402,7 @@ def install_locked(state,config):
                 result=api.request(path,**kwargs)
                 if 'repositories' in result:result['provider']={**result.get('provider',{}),'repositories':result['repositories']}
                 return result
-        provider=j.resource(GitAPI(),'git','/api/v1/vcs-provider','provider',{'provider_type':'git','url':config['source_url']},
+        provider=j.resource(GitAPI(),'git','/api/v1/vcs-provider','provider',git_body,
             lambda v:bool(v.get('repositories')))
         repos=provider.get('repositories',[])
         repo=next((x for x in repos if x.get('url','').rstrip('/').removesuffix('.git')==config['source_url'].rstrip('/').removesuffix('.git')),None)

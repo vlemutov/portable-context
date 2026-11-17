@@ -64,6 +64,27 @@ class TimewebTests(unittest.TestCase):
 
     def plan(self):return tw.plan(self.state)
 
+    def test_git_clone_url_normalization_preserves_existing_and_rejected_identity(self):
+        config={**self.config,'source_url':'https://github.com/example/memory'}
+        journal=tw.Journal(self.state,config)
+        body=tw.git_request(journal,config)
+        self.assertEqual(body['url'],config['source_url']+'.git')
+        legacy={'provider_type':'git','url':config['source_url']}
+        item={'body_sha256':tw.digest(legacy),'submitted':True}
+        journal.value['resources']['git']=item
+        with self.assertRaisesRegex(ValueError,'not a confirmed'):
+            tw.git_request(journal,config)
+        self.assertEqual(item['body_sha256'],tw.digest(legacy))
+        item['id']='existing-provider'
+        self.assertEqual(tw.git_request(journal,config),legacy)
+        item.pop('id');item['submitted']=False
+        journal.value['last_error']={'stage':'edge','http_status':400,'provider_error_code':'url_is_not_valid_exception'}
+        journal.value['resources']['server']={'id':123}
+        self.assertEqual(tw.git_request(journal,config),body)
+        self.assertEqual(item['body_sha256'],tw.digest(body))
+        self.assertEqual(journal.value['resources']['server']['id'],123)
+        self.assertIn('url_normalization',item)
+
     def test_approved_plan_bound_to_configuration_and_key(self):
         plan=self.plan()
         with self.assertRaises(ValueError):tw.apply(self.state,'wrong')
