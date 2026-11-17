@@ -60,6 +60,19 @@ class API:
 
 
 class LifecycleTests(unittest.TestCase):
+    def test_git_detail_is_repository_inventory_and_diagnostics_survives_bad_shape(self):
+        api = API()
+        api.items['/api/v1/vcs-provider/git1'] = {'repositories': [], 'meta': {'total': 0}}
+        api.items['/api/v1/vcs-provider'] = {'providers': [{'provider_id': 'git1'}], 'meta': {'total': 1}}
+        self.assertEqual(lifecycle.fetch(api, 'git', 'git1'), {'provider_id': 'git1'})
+        api.items['/api/v1/vcs-provider']['meta']['total'] = 2
+        with self.assertRaisesRegex(ValueError, 'Incomplete'):
+            lifecycle.fetch(api, 'git', 'git1')
+        self.api.items['/api/v1/apps/1'] = {'unexpected': []}
+        report = lifecycle.diagnostics(self.state)['report']
+        self.assertEqual(report['resources']['app']['observation_error'], 'unexpected_response_shape')
+        self.assertTrue(report['resources']['server']['exists'])
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)

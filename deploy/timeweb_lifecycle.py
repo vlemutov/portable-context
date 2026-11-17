@@ -70,6 +70,14 @@ def fetch(api, kind, ident):
     try:
         response = api.request(path+'/'+str(ident))
         value = response.get(key, response.get('ssh-key'))
+        if kind == 'git' and value is None and isinstance(response.get('repositories'), list):
+            # The detail endpoint lists repositories, not the connection itself.
+            # Verify its ID against the complete provider inventory instead of inventing it.
+            providers = complete_list(api, path, 'providers')
+            matches = [v for v in providers if str(v.get('provider_id')) == str(ident)]
+            if len(matches) != 1:
+                raise ValueError('Git provider inventory does not identify this connection')
+            value = matches[0]
         if not isinstance(value, dict):
             raise ValueError('Unexpected resource envelope')
         if str(value.get('id', value.get('provider_id'))) != str(ident):
@@ -128,6 +136,8 @@ def diagnostics(state):
                                          for v in deploys]
             except TimewebError as error:
                 row.update(http_status=error.status, provider_error_code=error.error_code)
+            except (ValueError, KeyError, TypeError):
+                row['observation_error'] = 'unexpected_response_shape'
         report['resources'][kind] = row
     for filename in ('installed.json', 'https-installed.json', 'rotation-installed.json', 'owner-enrollment.json', 'timeweb-cleanup.json', 'timeweb-update.json'):
         report['local'][filename] = (state/filename).exists()
