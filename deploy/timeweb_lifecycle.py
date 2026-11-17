@@ -92,7 +92,11 @@ def diagnostics(state):
                     status = live.get('status')
                     row['status'] = status if isinstance(status, str) and re.fullmatch('[a-z_]{1,40}', status) else None
                     if kind == 'app':
-                        deploys = complete_list(api, '/api/v1/apps/'+str(item['id'])+'/deploys', 'deploys')
+                        response = api.request('/api/v1/apps/'+str(item['id'])+'/deploys')
+                        deploys = response['deploys']
+                        row['deploy_history_complete'] = int(response.get('meta', {}).get('total', len(deploys))) == len(deploys)
+                        row['deploy_history_returned'] = len(deploys)
+                        row['deploy_history_total'] = int(response.get('meta', {}).get('total', len(deploys)))
                         row['deploys'] = [{k: v.get(k) if re.fullmatch(pattern, str(v.get(k, ''))) else None
                                           for k, pattern in (('id', '[A-Za-z0-9-]{1,80}'), ('status', '[a-z_]{1,40}'), ('commit_sha', '[a-f0-9]{40}'))}
                                          for v in deploys]

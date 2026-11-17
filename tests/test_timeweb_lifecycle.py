@@ -143,6 +143,18 @@ class LifecycleTests(unittest.TestCase):
         self.assertNotIn('envs', json.dumps(report))
         self.assertEqual(report['report']['resources']['app']['status'], 'active')
 
+    def test_partial_deploy_history_is_reported_not_silently_complete(self):
+        original = self.api.request
+        def request(path, **kwargs):
+            if path.endswith('/deploys'):
+                return {'deploys': [{'id': 1, 'status': 'failed', 'commit_sha': 'a'*40}], 'meta': {'total': 200}}
+            return original(path, **kwargs)
+        self.api.request = request
+        report = lifecycle.diagnostics(self.state)['report']['resources']['app']
+        self.assertFalse(report['deploy_history_complete'])
+        self.assertEqual(report['deploy_history_total'], 200)
+        self.assertEqual(len(report['deploys']), 1)
+
 
 class RemoteUpdateTests(unittest.TestCase):
     def setUp(self):
