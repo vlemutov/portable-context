@@ -114,6 +114,13 @@ def describe(state, journal, status):
         action = 'После согласования: apply --approve-plan '+str(plan.get('plan_sha256','<хэш плана>'))
     elif stage == 'infrastructure' and config.get('host') and 'bucket' in recorded and not status.get('last_error'):
         waiting = 'Доступ по SSH и установка памяти'
+    if (status.get('last_error') or {}).get('type') == 'PaymentReviewRequired' and not cleanup and plan:
+        from timeweb_payment import require, PaymentReviewRequired
+        scope = 'auto' if auto.get('status') == 'running' else 'install'
+        try:
+            require(state,scope)
+        except PaymentReviewRequired:
+            waiting, action = 'Согласование расходов и автопополнения', 'timeweb-payment --scope '+scope
     verified = {} if cleanup else journal.get('verified_stages', {})
     if not cleanup and stage in ('cloud-init','dependencies','memory-install'):
         confirmed.append('ssh_responded_this_install')

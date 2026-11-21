@@ -152,11 +152,11 @@ def execute(state, approval, payment_reviewed=False):
         run = read(path) if path.exists() else None
         if run and run['plan_sha256'] == expected and run['status'] != 'running':
             return run  # Exhaustion/fatal errors never silently start a new search.
+        from timeweb_payment import require
+        require(state,'auto')
         if not run or run['plan_sha256'] != expected:
             if run and run['status'] == 'running':
                 raise ValueError('Finish the previous automatic search first')
-            if not payment_reviewed:
-                raise ValueError('Review balance/autopay with the owner, then pass --payment-reviewed. This does not disable autopay.')
             if snapshot(state) != review['initial']:
                 raise ValueError('Installation changed after preview; prepare a new plan')
             context(state)

@@ -64,11 +64,11 @@ class Browser:
         status, value = self.request('/api/one-time-access-token/'+code, {})
         assert status == 200 and value['id'] == owner, 'Fresh owner login failed'
 
-    def authorize(self):
+    def authorize(self, redirect_uri='http://127.0.0.1:14881/callback'):
         verifier = secrets.token_urlsafe(48)
         challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip('=')
         params = {'client_id': 'portable-context-desktop', 'response_type': 'code',
-            'redirect_uri': 'http://127.0.0.1:14881/callback', 'scope': 'openid offline_access memory:read memory:write',
+            'redirect_uri': redirect_uri, 'scope': 'openid offline_access memory:read memory:write',
             'resource': 'https://memory.example/mcp', 'state': secrets.token_urlsafe(24),
             'code_challenge': challenge, 'code_challenge_method': 'S256'}
         status, result = self.request('/authorize?'+urllib.parse.urlencode(params))
@@ -89,6 +89,7 @@ class Browser:
                     status, result = self.request(completed['redirectUrl'])
                     query = urllib.parse.parse_qs(urllib.parse.urlsplit(result.get('redirect', '')).query)
                     break
+        assert result['redirect'].split('?',1)[0] == redirect_uri
         assert query.get('state') == [params['state']] and 'code' in query
         status, tokens = self.request('/api/oidc/token', {'grant_type': 'authorization_code',
             'client_id': params['client_id'], 'code': query['code'][0], 'code_verifier': verifier,

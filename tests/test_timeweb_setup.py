@@ -13,6 +13,7 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'deploy'))
 import setup
 import timeweb_setup as tw
 import timeweb_api
+import timeweb_payment as payment
 import timeweb_selection as selection
 import dns_ready
 
@@ -26,6 +27,8 @@ class FakeAPI:
             '/api/v1/os/servers':{'servers_os':[{'id':4,'name':'ubuntu','version':'24.04'}]},
             '/api/v2/locations':{'locations':[{'location':'ru-1','availability_zones':['spb-3']}]} }
     def request(self,path,method='GET',body=None):
+        if path == '/api/v1/account/finances':
+            return {'finances':{'balance':'123.45','autopay_card_info':{'private':'do-not-log'}}}
         if path in self.catalogs:return copy.deepcopy(self.catalogs[path])
         canonical=path.replace('/api/v2/apps','/api/v1/apps')
         keys={'/api/v1/projects':'project','/api/v1/ssh-keys':'ssh_key','/api/v1/servers':'server',
@@ -62,7 +65,39 @@ class TimewebTests(unittest.TestCase):
         (self.state/'id_ed25519.pub').write_text('ssh-ed25519 synthetic')
         self.patch=patch('timeweb_setup.API',return_value=self.api);self.patch.start();self.addCleanup(self.patch.stop)
 
-    def plan(self):return tw.plan(self.state)
+        mock_payment = patch('timeweb_payment.API',return_value=self.api)
+        mock_payment.start(); self.addCleanup(mock_payment.stop)
+
+    def plan(self):
+        plan = tw.plan(self.state)
+        preview = payment.review(self.state,'install',1,200,'unknown')
+        payment.review(self.state,'install',approval=preview['approval_sha256'])
+        return plan
+
+    def test_payment_prevents_orders_and_binds_terms_to_the_selected_tariff(self):
+        plan = tw.plan(self.state)
+        with self.assertRaisesRegex(ValueError,'Payment review required'):
+            tw.apply(self.state,plan['plan_sha256'])
+        self.assertEqual(self.api.posts,[])
+        preview = payment.review(self.state,'install',2,200,'enabled')
+        self.assertEqual(preview['estimated_monthly_rub'],[1220,1220])
+        self.assertEqual(preview['estimated_test_rub'],[3.34,3.34])
+        self.assertNotIn('do-not-log',json.dumps(preview))
+        with self.assertRaisesRegex(ValueError,'changed'):
+            payment.review(self.state,'install',approval='bad-hash')
+        payment.review(self.state,'install',approval=preview['approval_sha256'])
+        payment.require(self.state)
+        self.api.catalogs['/api/v1/presets/servers']['server_presets'][0]['price'] += 1
+        with self.assertRaisesRegex(ValueError,'Tariff changed'):
+            tw.apply(self.state)
+        self.assertNotIn('/api/v1/servers',[p for p,b in self.api.posts])
+        journal = setup.read(self.state/'timeweb-journal.json')
+        journal['app_selection']={'plan_sha256':'another-choice','preset':{'id':9,'price':810}}
+        setup.save(self.state/'timeweb-journal.json',journal)
+        with self.assertRaisesRegex(ValueError,'Payment review required'):
+            payment.require(self.state)
+        with self.assertRaisesRegex(ValueError,'changed'):
+            payment.review(self.state,'install',approval=preview['approval_sha256'])
 
     def test_git_clone_url_normalization_preserves_existing_and_rejected_identity(self):
         config={**self.config,'source_url':'https://github.com/example/memory'}
@@ -197,6 +232,7 @@ class TimewebTests(unittest.TestCase):
         self.assertEqual(before,(self.state/'backup-config.json').read_bytes())
 
     def test_ipv4_lost_response_never_purchases_twice(self):
+        self.plan()
         j=tw.Journal(self.state,self.config)
         vm={'id':123,'networks':[{'type':'public','ips':[]}]}
         api=Mock();api.request.side_effect=timeweb_api.TimewebError(0,'POST')

@@ -67,6 +67,18 @@ class DesktopCallbackTests(unittest.TestCase):
         self.assertEqual(self.client.pop('callbackURLs'), [*before.pop('callbackURLs'), pocketid.CLAUDE_CODE_CALLBACK])
         self.assertEqual(self.client, before)
 
+    def test_cursor_migration_preserves_existing_callbacks_and_grants(self):
+        self.client['callbackURLs'].append(pocketid.CLAUDE_CODE_CALLBACK)
+        before = copy.deepcopy(self.client)
+        with patch.object(self.api, 'request', side_effect=self.provider):
+            result = self.api.enable_desktop(self.receipt, self.backup, 'cursor')
+            self.assertTrue(result['changed'])
+            self.assertFalse(self.api.enable_desktop(self.receipt, self.backup, 'cursor')['changed'])
+        self.assertEqual(result['callback_url'], 'http://localhost:8787/callback')
+        before['callbackURLs'].append(result['callback_url'])
+        self.assertEqual(self.client, before)
+        self.assertEqual((self.writes, self.backups), (1, 1))
+
     def test_failed_checkpoint_or_concurrent_edit_prevents_put(self):
         def failed(): raise RuntimeError('Backup unavailable')
         with patch.object(self.api, 'request', side_effect=self.provider):

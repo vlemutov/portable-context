@@ -47,7 +47,9 @@ class AutoTests(unittest.TestCase):
                             kwargs.pop('total',2000),kwargs.pop('extras',200),**kwargs)
 
     def run_plan(self,review):
-        return auto.execute(self.state,review['plan_sha256'],True)
+        preview = fixtures.payment.review(self.state,'auto',1,None,'unknown')
+        fixtures.payment.review(self.state,'auto',approval=preview['approval_sha256'])
+        return auto.execute(self.state,review['plan_sha256'])
 
     def test_preview_prices_order_and_no_cloud_mutations(self):
         review=self.prepare(locations=['ru-3','ru-1'],max_attempts=2)
@@ -63,7 +65,7 @@ class AutoTests(unittest.TestCase):
     def test_review_and_payment_required_and_stale_state_blocks(self):
         review=self.prepare()
         with self.assertRaises(ValueError):auto.execute(self.state,'wrong',True)
-        with self.assertRaisesRegex(ValueError,'payment-reviewed'):auto.execute(self.state,review['plan_sha256'])
+        with self.assertRaisesRegex(ValueError,'Payment review required'):auto.execute(self.state,review['plan_sha256'],True)
         setup.save(self.state/'deployment.json',{**self.config,'name':'changed'})
         with self.assertRaisesRegex(ValueError,'changed'):self.run_plan(review)
         self.assertEqual(self.api.posts,[])
@@ -194,7 +196,7 @@ class AutoTests(unittest.TestCase):
         review=self.prepare()
         tampered=copy.deepcopy(review);tampered['max_attempts']=20
         setup.save(self.state/'timeweb-auto-plan.json',tampered)
-        with self.assertRaisesRegex(ValueError,'exact'):self.run_plan(review)
+        with self.assertRaisesRegex(ValueError,'exact'):auto.execute(self.state,review['plan_sha256'],True)
         setup.save(self.state/'timeweb-cleanup.json',{'complete':True})
         with self.assertRaisesRegex(ValueError,'retired'):self.prepare()
 

@@ -328,6 +328,8 @@ def ensure_server_ipv4(api,j,vm):
     if item['server_id']!=vm['id']:raise ValueError('IPv4 target changed')
     if item.get('submitted'):
         raise ValueError('IPv4 creation outcome pending or unknown. Inspect the same VM and resume after its address appears; no duplicate IP purchased.')
+    from timeweb_payment import require
+    require(j.state)
     item['submitted']=True;j.save()
     # No automatic retry after any error: reconcile through the VM network list.
     reply=api.request('/api/v1/servers/'+str(vm['id'])+'/ips',method='POST',body={'type':'ipv4'})
@@ -341,6 +343,16 @@ def ensure_server_ipv4(api,j,vm):
 def provision(state,config,*,vm_only=False,before_vm_create=None):
     api=API(state);j=Journal(state,config);name=config['name']
     def infrastructure():
+        from timeweb_payment import require, check_price
+        resources = j.value['resources']
+        if vm_only:
+            require(state,'auto')
+        elif any(resources.get(k,{}).get('id') is None for k in ('server','bucket')):
+            require(state)
+        def before_server():
+            check_price(api,state,'servers')
+            if before_vm_create:
+                before_vm_create()
         project=config.get('project_id')
         if project:
             if api.request('/api/v1/projects/'+str(integer(project)))['project']['id']!=project:raise ValueError('Wrong project')
@@ -351,7 +363,7 @@ def provision(state,config,*,vm_only=False,before_vm_create=None):
         vm=j.resource(api,'server','/api/v1/servers','server',{'name':name,'project_id':project,
             'preset_id':config['server_preset_id'],'os_id':config['os_id'],'ssh_keys_ids':[key['id']],
             'availability_zone':config['availability_zone'],
-            'cloud_init':cloud_init(config,public_key)},lambda v:verify_server(v,config,public_key),before_submit=before_vm_create)
+            'cloud_init':cloud_init(config,public_key)},lambda v:verify_server(v,config,public_key),before_submit=before_server)
         if vm_only:
             return {'server_id':vm['id'],'project_id':project,'preset_id':config['server_preset_id'],
                     'availability_zone':config['availability_zone'],'next':'Run apply on the selected plan to continue IPv4 and S3 provisioning.'}
@@ -360,7 +372,8 @@ def provision(state,config,*,vm_only=False,before_vm_create=None):
         j.value['ipv4_verified']=True;j.save()
         bucket=j.resource(api,'bucket','/api/v1/storages/buckets','bucket',{'name':config['bucket'],'type':'private',
             'preset_id':config['storage_preset_id'],'project_id':project,'description':'Portable Context backups'},
-            lambda v:v.get('name')==config['bucket'] and v.get('project_id')==project and v.get('type')=='private')
+            lambda v:v.get('name')==config['bucket'] and v.get('project_id')==project and v.get('type')=='private',
+            before_submit=lambda:check_price(api,state,'storage'))
         endpoint=bucket['hostname']
         if any(str(bucket.get(k,'')).strip() in ('','hidden-by-api-key-policy') for k in ('access_key','secret_key')):
             raise ValueError('S3 credentials missing or hidden by token policy. Disable secret masking and resume; bucket retained.')
@@ -456,6 +469,12 @@ def install_locked(state,config):
         return {'architecture':'amd64'}
     j.operation('architecture',architecture)
     def create_edge():
+        from timeweb_payment import require, check_price
+        item = j.value['resources'].get('app', {})
+        if (item.get('id') is None and not timeweb_app.rejected(item)
+                and (not item.get('submitted') or item.get('retry_permit'))):
+            require(state)
+            check_price(api,state,'apps')
         class GitAPI:
             def request(self,path,**kwargs):
                 result=api.request(path,**kwargs)

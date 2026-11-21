@@ -65,6 +65,8 @@ python deploy/setup.py --state PRIVATE_STATE credentials
 python deploy/setup.py --state PRIVATE_STATE catalog
 python deploy/setup.py --state PRIVATE_STATE configure --file OPTIONS.json
 python deploy/setup.py --state PRIVATE_STATE plan
+python deploy/setup.py --state PRIVATE_STATE timeweb-payment --hours HOURS --monthly-extras EXTRAS_RUB --autopay STATUS
+python deploy/setup.py --state PRIVATE_STATE timeweb-payment --approve-plan PAYMENT_SHA256
 python deploy/setup.py --state PRIVATE_STATE apply --approve-plan REVIEWED_SHA256
 python deploy/setup.py --state PRIVATE_STATE install --https
 ```
@@ -133,6 +135,8 @@ Premium в Москве, `ultra_msk_nvme` — Ultra. Их частота и вн
 python deploy/setup.py --state PRIVATE_STATE timeweb-vm-options --location ru-3 --max-monthly-price REVIEWED_MONTHLY_VM_PRICE
 python deploy/setup.py --state PRIVATE_STATE timeweb-select-vm --preset-id SELECTED_ID --availability-zone SELECTED_ZONE
 python deploy/setup.py --state PRIVATE_STATE timeweb-select-vm --preset-id SELECTED_ID --availability-zone SELECTED_ZONE --approve-plan SELECTION_SHA256
+python deploy/setup.py --state PRIVATE_STATE timeweb-payment --hours HOURS --monthly-extras EXTRAS_RUB --autopay STATUS
+python deploy/setup.py --state PRIVATE_STATE timeweb-payment --approve-plan PAYMENT_SHA256
 python deploy/setup.py --state PRIVATE_STATE apply --approve-plan NEW_PLAN_SHA256
 ```
 
@@ -203,7 +207,9 @@ IP/S3/App не созданы. Екатеринбург присутствова
 
 ```text
 python deploy/setup.py --state PRIVATE_STATE timeweb-auto-plan --location ru-3 --location ru-1 --max-monthly-total REVIEWED_TOTAL_RUB --monthly-extras REVIEWED_EXTRAS_RUB --max-attempts 6 --timeout 300
-python deploy/setup.py --state PRIVATE_STATE timeweb-auto-run --approve-plan AUTO_PLAN_SHA256 --payment-reviewed
+python deploy/setup.py --state PRIVATE_STATE timeweb-payment --scope auto --hours HOURS --autopay STATUS
+python deploy/setup.py --state PRIVATE_STATE timeweb-payment --scope auto --approve-plan PAYMENT_SHA256
+python deploy/setup.py --state PRIVATE_STATE timeweb-auto-run --approve-plan AUTO_PLAN_SHA256
 ```
 
 Первая команда читает каталог и сохраняет `timeweb-auto-plan.json`, не создавая облачных
@@ -211,10 +217,9 @@ python deploy/setup.py --state PRIVATE_STATE timeweb-auto-run --approve-plan AUT
 `max-monthly-total` покрывает ВМ + тариф S3 + HTTPS App + `monthly-extras` — отдельно
 проверенную оценку IPv4, запросов/трафика и других переменных расходов. Это оценка,
 не жёсткое ограничение счёта и не предел списания с карты. Агент должен сначала пройти
-[проверку баланса и автоплатежа](timeweb-billing.md). Флаг `--payment-reviewed` фиксирует
-выполненный шаг, сам настройки оплаты не проверяет и не меняет. Не ставьте его без проверки.
+[проверку баланса и автоплатежа](timeweb-billing.md) и получить согласие на показанный расчёт.
 
-После согласия на **весь точный список** агент запускает вторую команду. Она сохраняет
+После согласия на **весь точный список** агент запускает `timeweb-auto-run`. Она сохраняет
 `timeweb-auto-run.json` и использует тот же проект/ключ. Первое успешное выделение ВМ
 останавливает подбор. Проверяются ID и конфигурация; готовность ОС и памяти проверяется
 следующим этапом. Отдельные IP, бакет и приложение во время поиска не создаются.

@@ -6,6 +6,9 @@ OAuth or the new HTTPS installation as released until the acceptance gates pass.
 
 ## 1.0-preview.6 — Timeweb lifecycle and independent onboarding
 
+- Timeweb records owner-reviewed costs, expected test duration and autopay status in private state before new paid orders. The same approved automatic search covers continuation on its selected VM. Replacing the app tariff requires a new cost review.
+- Native Cursor Desktop setup uses a static public client and the exact localhost callback on port 8787. Existing owners can run `oauth-client --client cursor` for a checkpointed migration. The installer writes a mergeable `client-cursor.json`. Client login and ordinary-file read-back are verified separately.
+
 - `timeweb-auto-plan` / `timeweb-auto-run`: exact approved candidate list, region/tier
   preferences, baseline hardware floor, total monthly estimate including explicit extras,
   payment-review attestation, bounded attempts and durable deadline. Sequential VM-only

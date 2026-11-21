@@ -205,7 +205,7 @@ def server_action(p):
         try:owner_login(manifest['runtime'],output);return {'private_login':read(output)}
         finally:output.unlink(missing_ok=True)
     if p['action']=='check':return {'workspace_id':expected,**metadata(manifest)}
-    if p['action']=='claude-code':
+    if p['action'] in ('claude-code','cursor'):
         from oauth_recovery import runtime_info, IdentityBackups
         from pocketid import Bootstrap
         _,env,receipt,config=runtime_info(manifest['runtime'])
@@ -213,7 +213,7 @@ def server_action(p):
         backup=IdentityBackups(root/'identity-backup-config.json')
         if backup.runtime!=Path(manifest['runtime']).resolve() or backup.config.get('issuer')!=config.issuer:
             raise ValueError('Identity backup belongs to another runtime or issuer')
-        result=Bootstrap(int(env['PORT']),env['STATIC_API_KEY']).enable_claude_code(receipt,backup.backup)
+        result=Bootstrap(int(env['PORT']),env['STATIC_API_KEY']).enable_desktop(receipt,backup.backup,p['action'])
         return {'workspace_id':expected,**result}
     raise ValueError('Unsupported HTTPS server action')
 
@@ -249,7 +249,13 @@ def connection_receipt(state):
     return receipt
 
 
+def cursor_config(receipt):
+    return {'mcpServers': {'portable-context': {'url':receipt['mcp_url'],
+            'auth':{'CLIENT_ID':receipt['client_id'], 'scopes':receipt['scopes']}}}}
+
+
 def save_client(state,receipt):
+    save(state/'client-cursor.json',cursor_config(receipt))
     save(state/'client-https.json',{'mcpServers':{'portable-context':{'url':receipt['mcp_url']}},
         'oauth':{k:receipt[k] for k in ('client_id','callback_url','scopes')}})
 
@@ -260,12 +266,19 @@ def owner_login(state):
     return {'private_file':str(path),'expires_in_minutes':20,'next':'Owner reads this private file locally, enters code and enrolls passkey. Never paste the code into chat.'}
 
 
-def claude_code_client(state):
+def desktop_client(state, client):
     """Enable the exact localhost callback on an existing owner installation."""
     state=Path(state);receipt=connection_receipt(state)
-    result=remote(state,'claude-code',receipt['origin'])
+    if client not in ('claude-code','cursor'):
+        raise ValueError('Unsupported OAuth client')
+    installed=read(state/'installed.json')
+    if receipt.get('workspace_id') != installed['memory']['workspace_id']:
+        raise ValueError('HTTPS connection receipt belongs to a different workspace')
+    result=remote(state,client,receipt['origin'])
     result.update(mcp_url=receipt['mcp_url'],scopes=['openid','offline_access','memory:read','memory:write'])
-    save(state/'claude-code-client.json',result)
+    if client == 'cursor':
+        save(state/'client-cursor.json',cursor_config(result))
+    save(state/(client+'-client.json'),result)
     return result
 
 

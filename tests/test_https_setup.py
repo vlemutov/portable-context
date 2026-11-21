@@ -31,7 +31,7 @@ class HTTPSSetupTests(unittest.TestCase):
              patch('oauth_recovery.runtime_info',return_value=(identity,{'PORT':'14120','STATIC_API_KEY':'synthetic'},
                    {'clients':['portable-context-desktop']},SimpleNamespace(issuer=origin))), \
              patch('oauth_recovery.IdentityBackups') as manager, \
-             patch('pocketid.Bootstrap.enable_claude_code') as enable:
+             patch('pocketid.Bootstrap.enable_desktop') as enable:
             backup=manager.return_value; backup.runtime=self.root/'other'; backup.config={'issuer':origin}
             with self.assertRaisesRegex(ValueError,'another runtime'):
                 setup.server_action(payload)
@@ -41,7 +41,8 @@ class HTTPSSetupTests(unittest.TestCase):
                 setup.server_action(payload)
             enable.assert_not_called()
             backup.config={'issuer':origin}
-            def migrate(receipt,checkpoint):
+            def migrate(receipt,checkpoint,client):
+                self.assertEqual(client,'claude-code')
                 checkpoint(); return {'changed':True,'permissions_changed':False}
             enable.side_effect=migrate
             result=setup.server_action(payload)
@@ -158,6 +159,22 @@ class HTTPSSetupTests(unittest.TestCase):
             self.assertEqual(setup.connection_receipt(self.root),receipt);cloud.assert_not_called()
         self.assertTrue((self.root/'client-https.json').exists())
         self.assertFalse((self.root/'owner-enrollment.json').exists())
+
+    def test_cursor_command_emits_public_config_for_the_existing_workspace(self):
+        origin='https://memory.example'
+        setup.save(self.root/'installed.json',{'memory':{'workspace_id':'workspace'}})
+        setup.save(self.root/'https-installed.json',{'origin':origin,'workspace_id':'wrong','mcp_url':origin+'/mcp'})
+        with patch.object(setup,'remote',return_value={'workspace_id':'workspace','client_id':'portable-context-desktop'}) as remote:
+            with self.assertRaisesRegex(ValueError,'different workspace'):
+                setup.desktop_client(self.root,'cursor')
+            remote.assert_not_called()
+            receipt=setup.read(self.root/'https-installed.json')
+            setup.save(self.root/'https-installed.json',{**receipt,'workspace_id':'workspace'})
+            result=setup.desktop_client(self.root,'cursor')
+            remote.assert_called_once_with(self.root,'cursor',origin)
+        entry=setup.read(self.root/'client-cursor.json')['mcpServers']['portable-context']
+        self.assertEqual(entry,{'url':origin+'/mcp','auth':{'CLIENT_ID':'portable-context-desktop','scopes':result['scopes']}})
+        self.assertNotIn('memory:admin',result['scopes'])
 
     def test_existing_application_is_never_adopted_as_placeholder(self):
         app={'image':'pinned','command':['caddy'],'args':['run'],'env':[]}

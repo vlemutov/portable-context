@@ -80,7 +80,8 @@ def main():
                 time.sleep(.1)
             else:raise ValueError('Fixture HTTPS did not become ready')
             env=read(runtime/'identity/environment.json');api=Bootstrap(14212,env['STATIC_API_KEY'])
-            browser.login(api,owner);token=browser.authorize()['access_token']
+            browser.login(api,owner)
+            token=browser.authorize('http://localhost:8787/callback')['access_token']
             record={'source':'https-install-test','instance':'synthetic','conversation_id':'one','message_id':'one','role':'user','text':'Preserve installed memory across interrupted update.'}
             assert browser.mcp(token,'append_messages',{'records':[record]})['inserted']==1
             store=__import__('portable_context.core',fromlist=['Store']).Store(root/'memory')

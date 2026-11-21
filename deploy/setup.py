@@ -689,7 +689,7 @@ def main(argv=None):
     sub.add_parser('owner-login',help='Write a new private one-time owner enrollment code locally')
     sub.add_parser('https-check',help='Check public authentication boundary and server identity')
     p=sub.add_parser('oauth-client',help='Enable a supported native callback on the existing OAuth client')
-    p.add_argument('--client',choices=('claude-code',),required=True)
+    p.add_argument('--client',choices=('claude-code','cursor'),required=True)
     p=sub.add_parser('https-reconcile',help='Record an explicitly reviewed resource ID after a lost creation reply')
     p.add_argument('--stage',choices=('registry','container'),required=True)
     p.add_argument('--resource-id',required=True)
@@ -710,6 +710,12 @@ def main(argv=None):
     p.add_argument('--preset-id',type=int,required=True)
     p.add_argument('--availability-zone',required=True)
     p.add_argument('--approve-plan')
+    p=sub.add_parser('timeweb-payment',help='Preview or record owner approval for the cost of this exact Timeweb plan')
+    p.add_argument('--scope',choices=('install','auto'),default='install')
+    p.add_argument('--hours',type=float,help='Expected duration used for the test estimate')
+    p.add_argument('--monthly-extras',type=float,help='Expected monthly IPv4 and metered charges in RUB')
+    p.add_argument('--autopay',choices=('enabled','disabled','unknown'),help='Status reviewed with the account owner')
+    p.add_argument('--approve-plan',help='Exact approval_sha256 of the saved payment preview')
     p=sub.add_parser('timeweb-auto-plan',help='Preview a bounded ordered VM search with a reviewed total recurring-cost estimate; creates no cloud resources')
     p.add_argument('--location',action='append',required=True,help='Russian regions in preference order')
     p.add_argument('--zone',action='append',help='Optional allowlist of exact zones within those regions')
@@ -720,7 +726,7 @@ def main(argv=None):
     p.add_argument('--timeout',type=int,default=300)
     p=sub.add_parser('timeweb-auto-run',help='Execute/resume the approved search, stop at first VM; no automatic cleanup')
     p.add_argument('--approve-plan',required=True)
-    p.add_argument('--payment-reviewed',action='store_true',help='Owner reviewed balance and autopay risk; does not change payment settings')
+    p.add_argument('--payment-reviewed',action='store_true',help='Compatibility flag; the saved timeweb-payment approval is required')
     sub.add_parser('timeweb-diagnostics',help='Write an allowlisted support report without credentials, logs or memory content')
     p=sub.add_parser('timeweb-cleanup',help='Review irreversible deletion of this installation, including all S3 backup versions; preserve other resources and local evidence')
     p.add_argument('--approve-plan')
@@ -819,8 +825,8 @@ def main(argv=None):
         receipt=connection_receipt(state)
         result={'server':remote(state,'check',receipt['origin']),'public':check_public(receipt['origin'])}
     elif args.command == 'oauth-client':
-        from https_setup import claude_code_client
-        result=claude_code_client(state)
+        from https_setup import desktop_client
+        result=desktop_client(state,args.client)
     elif args.command == 'https-reconcile':
         from https_setup import reconcile
         result=reconcile(state,args.stage,args.resource_id)
@@ -842,6 +848,11 @@ def main(argv=None):
     elif args.command == 'timeweb-select-vm':
         from timeweb_selection import select
         result=select(state,args.preset_id,args.availability_zone,args.approve_plan)
+    elif args.command == 'timeweb-payment':
+        if mode != 'timeweb':
+            raise ValueError('Payment review requires a Timeweb installation')
+        from timeweb_payment import review
+        result=review(state,args.scope,args.hours,args.monthly_extras,args.autopay,args.approve_plan)
     elif args.command == 'timeweb-auto-plan':
         from timeweb_auto import prepare
         result=prepare(state,args.location,args.max_monthly_total,args.monthly_extras,args.max_attempts,args.timeout,args.family,args.zone)
