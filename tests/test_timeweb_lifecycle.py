@@ -176,6 +176,19 @@ class LifecycleTests(unittest.TestCase):
         self.assertNotIn('envs', json.dumps(report))
         self.assertEqual(report['report']['resources']['app']['status'], 'active')
 
+    def test_vm_rejection_diagnostics_keeps_correlation_not_raw_error(self):
+        self.journal['resources']['server']={'submitted':False,'submitted_at':1795246138,
+            'creation_rejection':{'status':400,'error_code':'servers_is_run_out_error'},
+            'creation_attempts':[{'submitted_at':1795246138,'status':400,
+                'error_code':'servers_is_run_out_error','response_id':'5a86f4e3-cb06-4ed5-b784-432119c3d092',
+                'message':'SECRET'}]}
+        setup.save(self.state/'timeweb-journal.json',self.journal)
+        result=lifecycle.diagnostics(self.state)['report']
+        self.assertEqual(result['vm_rejection']['cause'],'not_confirmed')
+        self.assertIn('timeweb-select-vm',result['next'])
+        self.assertEqual(result['vm_creation_attempts'][0]['submitted_at'],1795246138)
+        self.assertNotIn('SECRET',json.dumps(result))
+
     def test_partial_deploy_history_is_reported_not_silently_complete(self):
         original = self.api.request
         def request(path, **kwargs):

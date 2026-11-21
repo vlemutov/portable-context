@@ -232,6 +232,89 @@ class TimewebTests(unittest.TestCase):
         self.assertTrue(setup.read(self.state/'timeweb-vm-selection.json')['complete'])
         self.assertEqual(setup.read(self.state/'deployment.json')['server_preset_id'],5)
 
+    def test_run_out_rejection_blocks_blind_retry_and_supports_old_journal_fallback(self):
+        self.fallback_fixture()
+        j=setup.read(self.state/'timeweb-journal.json')
+        # Exact old preview.6 shape from the Ubuntu pilot; no response_id/history.
+        j['resources']['server']['creation_rejection']={'status':400,'error_code':'servers_is_run_out_error'}
+        j['last_error'].update(http_status=400,provider_error_code='servers_is_run_out_error')
+        setup.save(self.state/'timeweb-journal.json',j)
+        body={'name':'test'}
+        j['resources']['server']['body_sha256']=tw.digest(body)
+        setup.save(self.state/'timeweb-journal.json',j)
+        journal=tw.Journal(self.state,self.config)
+        with self.assertRaisesRegex(ValueError,'timeweb-vm-options'):
+            journal.operation('infrastructure',lambda:journal.resource(self.api,'server','/api/v1/servers','server',body,lambda v:True))
+        self.assertEqual(self.api.posts,[])
+        self.assertEqual(tw.status(self.state)['vm_rejection']['cause'],'not_confirmed')
+        opts=selection.options(self.state,max_price=800)
+        self.assertEqual([v['id'] for v in opts['options']],[5])
+        self.assertEqual(opts['excluded'][0]['preset_id'],1)
+        # last_error is now ValueError, but per-resource evidence must still work.
+        preview=selection.select(self.state,5,'spb-3')
+        selection.select(self.state,5,'spb-3',preview['plan_sha256'])
+        result=setup.read(self.state/'timeweb-journal.json')
+        self.assertEqual(result['resources'],{'project':{'id':55},'ssh_key':{'id':56}})
+        self.assertEqual(result['vm_selection_history'][0]['previous_server']['creation_rejection']['error_code'],'servers_is_run_out_error')
+        self.assertEqual([v['id'] for v in selection.options(self.state,max_price=800)['options']],[5])
+
+    def test_run_out_real_provision_stops_before_ip_bucket_or_app_and_retains_attempt(self):
+        plan=self.plan()
+        real=self.api.request
+        def request(path,method='GET',body=None):
+            if path=='/api/v1/servers' and method=='POST':
+                raise timeweb_api.TimewebError(400,'POST','servers_is_run_out_error','5a86f4e3-cb06-4ed5-b784-432119c3d092')
+            return real(path,method=method,body=body)
+        with patch.object(self.api,'request',side_effect=request),patch('timeweb_setup.ensure_server_ipv4') as ip:
+            with self.assertRaises(timeweb_api.TimewebError):tw.provision(self.state,self.config)
+            j=setup.read(self.state/'timeweb-journal.json')
+            self.assertEqual(set(j['resources']),{'project','ssh_key','server'})
+            self.assertFalse(j['resources']['server']['submitted'])
+            attempts=j['resources']['server']['creation_attempts']
+            self.assertEqual(len(attempts),1)
+            self.assertEqual(attempts[0]['response_id'],'5a86f4e3-cb06-4ed5-b784-432119c3d092')
+            with self.assertRaisesRegex(ValueError,'Do not repeat'):tw.provision(self.state,self.config)
+            ip.assert_not_called()
+            self.assertEqual(setup.read(self.state/'timeweb-journal.json')['resources']['server']['creation_attempts'],attempts)
+
+    def test_catalog_zone_is_not_orderability_and_preset_zone_is_respected(self):
+        self.fallback_fixture()
+        self.api.catalogs['/api/v2/locations']['locations'][0]['availability_zones'].append('spb-5')
+        row=self.api.catalogs['/api/v1/presets/servers']['server_presets'][1]
+        row['availability_zone']='spb-5'
+        opts=selection.options(self.state,max_price=800)['options']
+        self.assertEqual(opts[1]['availability_zones'],['spb-5'])
+        self.assertFalse(opts[1]['zone_evidence']['spb-5']['pilot_zone'])
+        self.assertEqual(opts[1]['zone_evidence']['spb-5']['panel_visibility'],'unknown')
+        with self.assertRaisesRegex(ValueError,'zone does not match'):selection.select(self.state,5,'spb-3')
+        preview=selection.select(self.state,5,'spb-5')
+        self.assertEqual(preview['availability']['capacity'],'unknown')
+
+    def test_run_out_fallback_still_blocks_possible_late_vm_and_wrong_code(self):
+        self.fallback_fixture()
+        path=self.state/'timeweb-journal.json';j=setup.read(path)
+        j['resources']['server']['creation_rejection']={'status':400,'error_code':'servers_is_run_out_error'}
+        setup.save(path,j)
+        self.api.items['/api/v1/servers']={'servers':[],'meta':{'total':1}}
+        with self.assertRaisesRegex(ValueError,'Incomplete'):selection.select(self.state,5,'spb-3')
+        self.api.items['/api/v1/servers']={'servers':[{'id':88,'name':self.config['name']}]}
+        with self.assertRaisesRegex(ValueError,'Matching VM'):selection.select(self.state,5,'spb-3')
+        self.api.items['/api/v1/servers']={'servers':[]}
+        for status,code,submitted in [(403,'servers_is_run_out_error',False),(400,'quota_exceeded',False),(400,'servers_is_run_out_error',True)]:
+            j['resources']['server'].update(creation_rejection={'status':status,'error_code':code},submitted=submitted)
+            setup.save(path,j)
+            with self.assertRaisesRegex(ValueError,'definitive'):selection.select(self.state,5,'spb-3')
+        self.assertEqual(self.api.posts,[])
+
+    def test_rejected_same_selection_requires_explicit_review(self):
+        self.fallback_fixture()
+        preview=selection.select(self.state,1,'spb-3')
+        self.assertTrue(preview['retry_same_selection'])
+        self.assertIn('server',setup.read(self.state/'timeweb-journal.json')['resources'])
+        selection.select(self.state,1,'spb-3',preview['plan_sha256'])
+        self.assertNotIn('server',setup.read(self.state/'timeweb-journal.json')['resources'])
+        self.assertEqual(self.api.posts,[])
+
     def test_dns_wait_resets_streak_and_resumes_without_cached_success(self):
         ticks=[0];sleep=lambda seconds:ticks.__setitem__(0,ticks[0]+seconds)
         ready={'dns':True,'https':True,'reason':'ready'};bad={'dns':False,'https':False,'reason':'dns_pending'}
@@ -293,13 +376,15 @@ class TimewebTests(unittest.TestCase):
     def test_provider_error_code_survives_without_secret_message_or_post_retry(self):
         setup.save(self.state/'credentials.json',{'TIMEWEB_TOKEN':'secret-token'})
         api=timeweb_api.API(self.state)
-        body=json.dumps({'error_code':'no_free_node','message':'secret-token and private details'}).encode()
+        body=json.dumps({'error_code':'no_free_node','response_id':'5a86f4e3-cb06-4ed5-b784-432119c3d092','message':'secret-token and private details'}).encode()
         error=urllib.error.HTTPError('https://api.timeweb.cloud/api/v1/servers',409,'Conflict',{},io.BytesIO(body))
         with patch.object(api.opener,'open',side_effect=error) as request:
             with self.assertRaises(timeweb_api.TimewebError) as caught:api.request('/api/v1/servers',method='POST',body={})
         self.assertEqual(request.call_count,1)
         self.assertEqual(caught.exception.error_code,'no_free_node')
+        self.assertEqual(caught.exception.response_id,'5a86f4e3-cb06-4ed5-b784-432119c3d092')
         self.assertNotIn('secret-token',str(caught.exception))
+        self.assertIsNone(timeweb_api.TimewebError(400,'POST','bad','secret-token').response_id)
 
     def test_capacity_rejection_is_retryable_but_unknown_conflict_is_not(self):
         for code,unresolved in [('no_free_node',False),(None,True)]:

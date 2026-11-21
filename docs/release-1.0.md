@@ -6,6 +6,14 @@ OAuth or the new HTTPS installation as released until the acceptance gates pass.
 
 ## 1.0-preview.6 — Timeweb lifecycle and independent onboarding
 
+- Ubuntu pilot follow-up (2026-11-21): recognize exact HTTP 400
+  `servers_is_run_out_error` as a reviewed VM-selection rejection, without inferring
+  a quota or capacity cause. Block blind replay, retain per-attempt timestamps and
+  UUID response IDs, expose next steps in status/diagnostics, and preserve old journals.
+  Alternatives exclude rejected preset/zone pairs, respect preset-specific zones when
+  supplied, and explicitly distinguish catalog membership from actual orderability.
+  No paid live retry was performed for this correction.
+
 - Timeweb hardware-tier fallback after definitive capacity rejection, explicit zones,
   separately journaled public IPv4, secret-masking detection, dependency readiness,
   and bounded ordinary DNS/HTTPS waiting.

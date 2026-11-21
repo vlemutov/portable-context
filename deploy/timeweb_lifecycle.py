@@ -8,6 +8,7 @@ import time
 from setup import read, save
 from timeweb_api import API, TimewebError
 from timeweb_setup import digest, target
+from timeweb_vm import rejection_guidance
 
 RESOURCES = {
     'app': ('/api/v1/apps', 'app'),
@@ -146,8 +147,11 @@ def diagnostics(state):
         report['workspace_id'] = receipt.get('workspace_id')
         report['checks_at_install'] = {k: receipt.get('checks', {}).get(k) is True for k in ('transport', 'oauth_metadata', 'unauthenticated_rejected')}
     error = journal.get('last_error') or {}
-    report['last_error'] = {k: error.get(k) for k in ('http_status', 'provider_error_code')}
-    report['next'] = 'Resume the same private state. These are infrastructure observations, not proof of client OAuth login or successful import.'
+    report['last_error'] = {k: error.get(k) for k in ('http_status', 'provider_error_code', 'response_id')}
+    report['vm_rejection'] = rejection_guidance(journal)
+    report['vm_creation_attempts'] = [{k:v.get(k) for k in ('submitted_at','status','error_code','response_id')}
+        for v in journal.get('resources', {}).get('server', {}).get('creation_attempts', [])]
+    report['next'] = report['vm_rejection']['next'] if report['vm_rejection'] else 'Resume the same private state. These are infrastructure observations, not proof of client OAuth login or successful import.'
     path = state/'timeweb-support.json'
     save(path, report)
     return {'report': report, 'support_file': str(path), 'contains_resource_ids': True,

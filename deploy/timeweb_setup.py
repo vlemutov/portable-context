@@ -16,6 +16,7 @@ import time
 
 from setup import ROOT, read, save, sha, private_directory, ensure_key
 from timeweb_api import API, TimewebError, integer, origin
+from timeweb_vm import is_vm_rejection, zones_for_preset, catalog_evidence, rejection_guidance
 
 
 def digest(value):
@@ -78,8 +79,7 @@ def plan(state,*,config=None,persist=True):
         if kind=='servers' and (float(row.get('ram',0))<2048 or float(row.get('disk',0))<20480):
             raise ValueError('Select a VM with at least 2 GiB RAM and 20 GiB disk')
         if kind=='servers':
-            locations=catalogs['locations'].get('locations',[])
-            if not any(v.get('location')==row.get('location') and config['availability_zone'] in v.get('availability_zones',[]) for v in locations):
+            if config['availability_zone'] not in zones_for_preset(row,catalogs['locations']):
                 raise ValueError('VM availability zone does not match the selected preset location')
     operating_system=find_row(catalogs['operating_systems'],integer(config['os_id']))
     if operating_system is None:raise ValueError('OS not in catalog')
@@ -93,6 +93,7 @@ def plan(state,*,config=None,persist=True):
         'credential_scope':'Timeweb bucket API may return account-wide S3 credentials. These are kept privately and sent only to the owner VM. Cloud API token is stored on the VM for gateway renewal.',
         'preservation':'No automatic deletion on failure. Retained resources remain billable.',
         'pricing_url':'https://timeweb.cloud/prices','dns_wait_seconds':config.get('dns_timeout',1800)}
+    value['vm_availability']=catalog_evidence(config['availability_zone'])
     value['plan_sha256']=digest(value)
     if persist:save(state/'timeweb-plan.json',value)
     return value
@@ -129,7 +130,8 @@ class Journal:
         try:result=fn()
         except Exception as error:
             self.value['last_error']={'stage':stage,'type':type(error).__name__,'http_status':error.status if isinstance(error,TimewebError) else None,
-                'provider_error_code':error.error_code if isinstance(error,TimewebError) else None}
+                'provider_error_code':error.error_code if isinstance(error,TimewebError) else None,
+                'response_id':error.response_id if isinstance(error,TimewebError) else None}
             self.save();raise
         self.value.pop('last_error',None);self.save();return result
     def resource(self,api,name,path,key,body,verify):
@@ -142,6 +144,9 @@ class Journal:
         item=self.value['resources'].setdefault(name,{'path':path,'key':key,'body_sha256':digest(body)})
         if item['body_sha256']!=digest(body):raise ValueError('Resource request changed: '+name)
         if item.get('id') is None:
+            rejection=item.get('creation_rejection',{})
+            if name=='server' and is_vm_rejection(rejection.get('status'),rejection.get('error_code')):
+                raise ValueError('VM creation rejected: '+rejection['error_code']+'. Do not repeat apply; use timeweb-vm-options and reviewed timeweb-select-vm in the same state.')
             if item.get('submitted'):
                 if name == 'app':
                     from timeweb_retry import before_create
@@ -154,10 +159,12 @@ class Journal:
             try:
                 value=unpack(api.request(path,method='POST',body=body),required=True)
             except TimewebError as error:
-                if error.status in (400,401,403,422,429) or (error.status==409 and error.error_code=='no_free_node'):
+                item.setdefault('creation_attempts',[]).append({'submitted_at':item['submitted_at'],
+                    'status':error.status,'error_code':error.error_code,'response_id':error.response_id})
+                if error.status in (400,401,403,422,429) or (name=='server' and is_vm_rejection(error.status,error.error_code)):
                     item['submitted']=False
-                    item['creation_rejection']={'status':error.status,'error_code':error.error_code}
-                    self.save()
+                    item['creation_rejection']={'status':error.status,'error_code':error.error_code,'response_id':error.response_id}
+                self.save()
                 raise
             item['id']=value.get('id',value.get('provider_id'));item.pop('creation_rejection',None);self.save()
             if item['id'] is None:raise ValueError('Creation returned no resource ID. Reconcile before continuing')
@@ -175,10 +182,12 @@ class Journal:
 def status(state):
     p=state/'timeweb-journal.json';j=read(p) if p.exists() else {}
     resources=j.get('resources',{})
+    guidance=rejection_guidance(j)
     return {'provider':'timeweb','stage':j.get('stage','not_started'),
         'resources':{k:{'id':v.get('id'),'creation_unresolved':bool(v.get('submitted') and v.get('id') is None)} for k,v in resources.items()},
-        'last_error':j.get('last_error'),'dns':read(state/'dns-readiness.json') if (state/'dns-readiness.json').exists() else None,
-        'next':'Resume the SAME --state. No resources are automatically deleted. For an unknown creation outcome, review its ID and use timeweb-reconcile.'}
+        'last_error':j.get('last_error'),'vm_rejection':guidance,
+        'dns':read(state/'dns-readiness.json') if (state/'dns-readiness.json').exists() else None,
+        'next':guidance['next'] if guidance else 'Resume the SAME --state. No resources are automatically deleted. For an unknown creation outcome, review its ID and use timeweb-reconcile.'}
 
 
 def reconcile(state,stage,ident):

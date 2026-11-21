@@ -4,6 +4,7 @@ import re
 import time
 import urllib.error
 import urllib.request
+import uuid
 from pathlib import Path
 
 from cloud_gateway import NoRedirect
@@ -11,10 +12,13 @@ from setup import read
 
 
 class TimewebError(RuntimeError):
-    def __init__(self, status, method, error_code=None):
+    def __init__(self, status, method, error_code=None, response_id=None):
         self.status, self.method = status, method
         self.error_code=error_code if isinstance(error_code,str) and re.fullmatch(r'[a-z][a-z_]{0,79}',error_code) else None
+        try:self.response_id=str(uuid.UUID(response_id)) if isinstance(response_id,str) else None
+        except ValueError:self.response_id=None
         detail=' ('+self.error_code+')' if self.error_code else ''
+        if self.response_id:detail+=' response_id='+self.response_id
         super().__init__(f'Timeweb HTTP {status}{detail} during {method}; response suppressed. Preserve state and resume.')
 
 
@@ -39,14 +43,14 @@ class API:
                     raw = response.read()
                     return json.loads(raw) if raw else {}
             except urllib.error.HTTPError as error:
-                code=None
+                code=None;response_id=None
                 try:
                     value=json.loads(error.read(32768))
-                    if isinstance(value,dict):code=value.get('error_code')
+                    if isinstance(value,dict):code=value.get('error_code');response_id=value.get('response_id')
                 except (ValueError,OSError,TypeError):pass
                 error.close()
                 if method != 'GET' or error.code not in (429, 500, 502, 503, 504) or attempt == 3:
-                    raise TimewebError(error.code, method,code) from None
+                    raise TimewebError(error.code, method,code,response_id) from None
             except (urllib.error.URLError, TimeoutError, OSError):
                 if method != 'GET' or attempt == 3:
                     raise TimewebError(0, method) from None
