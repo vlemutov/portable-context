@@ -540,18 +540,22 @@ print(json.dumps({'workspace_id':s['workspace_id'],'release':c.name}))
 INSTALL_BOOTSTRAP = 'import io,json,sys; p=json.load(sys.stdin); sys.stdin=io.StringIO(json.dumps(p["payload"])); exec(p["script"])'
 
 
-def install(state):
+def install(state,progress=None):
     config = read(state / 'deployment.json')
     if config['mode']=='timeweb' and (state/'timeweb-cleanup.json').exists():
         raise ValueError('This installation is being deleted or retired; no reinstallation allowed')
     ssh = ssh_args(state, config)
     if config['mode'] in ('cloudru','timeweb'):
         # Retry only readiness checks; never create new cloud resources on connection failure.
+        if progress:progress('ssh')
         ready=ssh_read(ssh,'true',label='SSH readiness',attempts=5)
         if ready.returncode:raise ValueError('SSH connected but remote readiness command failed')
+        if progress:progress('cloud-init')
         wait_cloud_init(ssh,state)
+        if progress:progress('dependencies')
         if config['mode']=='timeweb':prepare_timeweb_dependencies(ssh)
         server_readiness(ssh)
+    if progress:progress('memory-install')
     payload = bundle()
     payload['https_helpers'] = {name:(ROOT/'deploy'/name).read_text(encoding='utf-8')
         for name in ('https_runtime.py','gateway.py','pocketid.py','setup.py')}
@@ -863,6 +867,10 @@ def main(argv=None):
     else:
         import anyio
         result = anyio.run(check, state)
+    if (mode=='timeweb' or args.command=='init' and result.get('mode')=='timeweb') and args.command in (
+            'init','credentials','configure','plan','apply','timeweb-auto-plan','timeweb-auto-run','timeweb-select-app','timeweb-select-vm'):
+        from timeweb_setup import show_progress
+        show_progress(state)
     # ASCII JSON remains valid Unicode when decoded, including cp1252/redirected Windows terminals.
     print(json.dumps(result, ensure_ascii=True, indent=2))
 

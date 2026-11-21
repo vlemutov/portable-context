@@ -18,7 +18,7 @@ ALLOWED={'public_host','origin_ip','project_id','container_name','container_id',
 
 def source_names():
     return ('rotation_setup.py','gateway_rotation.py','gateway_rotation_cloud.py','gateway_diagnostics.py',
-        'gateway.py','cloud_gateway.py','setup.py','edge/entrypoint.sh','timeweb_rotation.py','timeweb_api.py','timeweb_setup.py','timeweb_vm.py','timeweb_app.py')
+        'gateway.py','cloud_gateway.py','setup.py','edge/entrypoint.sh','timeweb_rotation.py','timeweb_api.py','timeweb_setup.py','timeweb_vm.py','timeweb_app.py','timeweb_progress.py')
 
 REMOTE='''import sys,json,pathlib,base64,hashlib,subprocess
 p=json.load(sys.stdin);root=pathlib.Path(p['root']).resolve();state=root/'gateway-rotation'

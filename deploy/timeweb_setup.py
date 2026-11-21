@@ -127,15 +127,27 @@ class Journal:
         self.value=read(self.path) if self.path.exists() else {'config':config,'resources':{},'stage':'not_started'}
         if self.value['config']!=config:raise ValueError('Timeweb state belongs to another installation')
     def save(self):save(self.path,self.value)
+    def step(self,name):
+        self.value['step']=name
+        self.save()
+        show_progress(self.state)
     def operation(self,stage,fn):
-        self.value['stage']=stage;self.save()
+        self.value['stage']=stage
+        self.value.pop('step',None)
+        self.save()
         print('Timeweb stage: '+stage,file=sys.stderr,flush=True)
+        show_progress(self.state)
         try:result=fn()
         except Exception as error:
             self.value['last_error']={'stage':stage,'type':type(error).__name__,'http_status':error.status if isinstance(error,TimewebError) else None,
                 'provider_error_code':error.error_code if isinstance(error,TimewebError) else None,
                 'response_id':error.response_id if isinstance(error,TimewebError) else None}
-            self.save();raise
+            self.save()
+            show_progress(self.state)
+            raise
+        self.value.pop('step',None)
+        if stage != 'infrastructure':
+            self.value.setdefault('verified_stages',{})[stage]=int(time.time())
         self.value.pop('last_error',None);self.save();return result
     def resource(self,api,name,path,key,body,verify,before_submit=None):
         def unpack(response,required=False):
@@ -147,6 +159,7 @@ class Journal:
         item=self.value['resources'].setdefault(name,{'path':path,'key':key,'body_sha256':digest(body)})
         if item['body_sha256']!=digest(body):raise ValueError('Resource request changed: '+name)
         if item.get('id') is None:
+            self.step(name)
             rejection=item.get('creation_rejection',{})
             if name=='server' and is_vm_rejection(rejection.get('status'),rejection.get('error_code')):
                 raise ValueError('VM creation rejected: '+rejection['error_code']+'. Do not repeat apply; use timeweb-vm-options and reviewed timeweb-select-vm in the same state.')
@@ -188,21 +201,29 @@ class Journal:
         return value
 
 
+def show_progress(state):
+    # stderr preserves the CLI JSON result on stdout, including on Windows.
+    message=json.dumps(status(state)['progress'],ensure_ascii=False)
+    encoding=getattr(sys.stderr,'encoding',None) or 'utf-8'
+    print('Timeweb progress '+message.encode(encoding,'backslashreplace').decode(encoding),file=sys.stderr,flush=True)
+
+
 def status(state):
+    from timeweb_progress import describe
     p=state/'timeweb-journal.json';j=read(p) if p.exists() else {}
     resources=j.get('resources',{})
     guidance=rejection_guidance(j)
     auto=read(state/'timeweb-auto-run.json') if (state/'timeweb-auto-run.json').exists() else None
-    return {'provider':'timeweb','stage':j.get('stage','not_started'),
+    result={'provider':'timeweb','stage':j.get('stage','not_started'),
         'resources':{k:{'id':v.get('id'),'creation_unresolved':bool(v.get('submitted') and v.get('id') is None and not (k=='app' and timeweb_app.rejected(v)))} for k,v in resources.items()},
         'app_capacity_rejected':timeweb_app.rejected(resources.get('app', {})),
         'app_selection':j.get('app_selection',{}).get('preset'),
         'last_error':j.get('last_error'),'vm_rejection':guidance,
         'automatic_selection':{k:auto.get(k) for k in ('status','reason','plan_sha256','attempts','selected')} if auto else None,
-        'dns':read(state/'dns-readiness.json') if (state/'dns-readiness.json').exists() else None,
-        'next':('Resume timeweb-auto-run with the SAME state and approved hash.' if auto and auto.get('status')=='running'
-                else timeweb_app.GUIDANCE if timeweb_app.rejected(resources.get('app', {}))
-                else guidance['next'] if guidance else 'Resume the SAME --state. No resources are automatically deleted. For an unknown creation outcome, review its ID and use timeweb-reconcile.')}
+        'dns':read(state/'dns-readiness.json') if (state/'dns-readiness.json').exists() else None}
+    result['progress']=describe(state,j,result)
+    result['next']=result['progress']['resume']
+    return result
 
 
 def reconcile(state,stage,ident):
@@ -334,7 +355,9 @@ def provision(state,config,*,vm_only=False,before_vm_create=None):
         if vm_only:
             return {'server_id':vm['id'],'project_id':project,'preset_id':config['server_preset_id'],
                     'availability_zone':config['availability_zone'],'next':'Run apply on the selected plan to continue IPv4 and S3 provisioning.'}
+        j.step('ipv4')
         host=ensure_server_ipv4(api,j,vm)
+        j.value['ipv4_verified']=True;j.save()
         bucket=j.resource(api,'bucket','/api/v1/storages/buckets','bucket',{'name':config['bucket'],'type':'private',
             'preset_id':config['storage_preset_id'],'project_id':project,'description':'Portable Context backups'},
             lambda v:v.get('name')==config['bucket'] and v.get('project_id')==project and v.get('type')=='private')
@@ -425,7 +448,7 @@ def install_locked(state,config):
     git_body=git_request(Journal(state,config),config)
     provision(state,config)
     j=Journal(state,config)
-    memory=j.operation('memory',lambda:resume_memory(state) or memory_install(state))
+    memory=j.operation('memory',lambda:resume_memory(state) or memory_install(state,progress=j.step))
     def architecture():
         result=ssh_read(ssh_args(state,read(state/'deployment.json')),'uname -m',label='Timeweb server architecture')
         if result.returncode or result.stdout.strip() not in ('x86_64','amd64'):
@@ -500,6 +523,8 @@ def install_locked(state,config):
         'scopes':['openid','offline_access','memory:read','memory:write'],'checks':checks,'recovery_kit':kit,
         'rotation':read(state/'rotation-installed.json')['schedule']}
     save(state/'https-installed.json',receipt);save_client(state,receipt)
-    if not (state/'owner-enrollment.json').exists():save(state/'owner-enrollment.json',owner_login(state))
-    j.value['stage']='complete';j.save()
+    if not (state/'owner-enrollment.json').exists():
+        j.operation('owner',lambda:save(state/'owner-enrollment.json',owner_login(state)))
+    j.value['stage']='complete';j.value.pop('step',None);j.save()
+    show_progress(state)
     return {**receipt,'owner_login':str(state/'owner-enrollment.json'),'client_config':str(state/'client-https.json')}

@@ -104,6 +104,41 @@ class TimewebTests(unittest.TestCase):
         self.assertNotIn('secret-key',json.dumps(tw.status(self.state)))
         self.assertNotIn('secret-key',(self.state/'timeweb-journal.json').read_text())
 
+    def test_progress_prices_only_allocated_resources_and_distinguishes_client_login(self):
+        review=self.plan()
+        before=tw.status(self.state)['progress']
+        self.assertEqual(before['cost']['monthly_rub_by_resource'],{})
+        tw.apply(self.state,review['plan_sha256'])
+        progress=tw.status(self.state)['progress']
+        self.assertEqual(progress['cost']['monthly_rub_by_resource'],{'server':500,'bucket':10,'ipv4':None})
+        self.assertEqual(progress['cost']['known_monthly_subtotal_rub'],510)
+        self.assertEqual(progress['resume'],'install --https')
+        self.assertNotIn('memory_install_receipt',progress['confirmed_from_local_state'])
+        path=self.state/'timeweb-journal.json'
+        journal=setup.read(path)
+        journal.update(stage='memory',step='ssh')
+        setup.save(path,journal)
+        self.assertIn('SSH',tw.status(self.state)['progress']['waiting_for'])
+        journal['resources']['app']={'submitted':True,'id':None}
+        setup.save(path,journal)
+        unknown=tw.status(self.state)['progress']
+        self.assertEqual(unknown['cost']['unknown_creation'],['app'])
+        self.assertEqual(unknown['resume'],'timeweb-diagnostics')
+        journal.update(stage='complete',app_selection={'preset':{'id':99,'price':810}})
+        journal.pop('step')
+        journal['resources']['app']={'id':900}
+        setup.save(path,journal)
+        setup.save(self.state/'https-installed.json',{'checks':dict(transport=True,oauth_metadata=True,unauthenticated_rejected=True)})
+        ready=tw.status(self.state)['progress']
+        self.assertEqual(ready['cost']['known_monthly_subtotal_rub'],1320)
+        self.assertIn('memory_status',ready['resume'])
+        self.assertIn('https_oauth_checks_passed_at_install',ready['confirmed_from_local_state'])
+        setup.save(self.state/'timeweb-cleanup.json',{'all_planned_resources_absent':True,
+            'steps':{k:{'absent':True} for k in ['server','bucket','ipv4','app','project','ssh_key']}})
+        retired=tw.status(self.state)['progress']
+        self.assertEqual(retired['confirmed_from_local_state'],[])
+        self.assertEqual(retired['cost']['monthly_rub_by_resource'],{})
+
     def test_lost_creation_reply_does_not_create_a_second_server(self):
         plan=self.plan();self.api.fail='/api/v1/servers'
         with self.assertRaises(timeweb_api.TimewebError):tw.apply(self.state,plan['plan_sha256'])

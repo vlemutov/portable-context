@@ -59,7 +59,7 @@ Use [references/connection.md](references/connection.md) for HTTPS/OAuth or SSH/
 client compatibility. Cloud.ru HTTPS needs the full `release/1.0` checkout during preview; do not
 describe the still-0.9.0 package as a published 1.0 release. Keep the exact ref/commit in the handoff.
 For a skill-only copy, obtain the full matching checkout before using deployment files.
-For Timeweb setup, updates, diagnostics or deletion, read [references/timeweb.md](references/timeweb.md).
+For Timeweb setup, updates, diagnostics or deletion, read [references/timeweb.md](references/timeweb.md). At each milestone or interruption explain what has been verified, what is pending, the current estimated cost and how to resume the same installation. For Cursor, continue through owner enrollment, client OAuth and a verified first import.
 During its preview use `feature/timeweb-installer`, not an older Cloud.ru-only checkout.
 The user's provider choice determines the route; do not copy another installation's state or credentials.
 

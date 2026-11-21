@@ -94,7 +94,7 @@ sys.stdout.write(r.stdout)
 
 
 def call_remote(state, payload):
-    names = ('timeweb_update.py', 'timeweb_setup.py', 'timeweb_api.py', 'timeweb_app.py', 'timeweb_vm.py', 'setup.py', 'cloud_gateway.py', 'gateway.py')
+    names = ('timeweb_update.py', 'timeweb_setup.py', 'timeweb_api.py', 'timeweb_app.py', 'timeweb_vm.py', 'timeweb_progress.py', 'setup.py', 'cloud_gateway.py', 'gateway.py')
     payload = {**payload, 'files': {n: (ROOT/'deploy'/n).read_text(encoding='utf-8') for n in names}}
     result = checked(ssh_args(state, read(state/'deployment.json'))+['python3 -c '+shlex.quote(INSTALL_BOOTSTRAP)],
                      input=json.dumps({'script': REMOTE, 'payload': payload}), text=True, capture_output=True, encoding='utf-8', timeout=180)
