@@ -146,6 +146,9 @@ class Rotation:
                 raise
 
     def _tick(self,force,interrupt):
+        upgrade=self.state/'source-update.json'
+        if upgrade.exists() and not read(upgrade).get('complete'):
+            return {'status':'busy','next':'Resume the pending Timeweb source update before certificate renewal'}
         active=read(self.state/'active.json'); now=self.clock()
         journal=read(self.state/'rotation.json') if (self.state/'rotation.json').exists() else None
         if not journal or journal.get('complete'):
@@ -212,7 +215,7 @@ def schedule(state, python, script):
     import sys, subprocess
     if sys.platform!='linux': raise ValueError('Install the timer on the Linux VM, not the client computer')
     state=Path(state).resolve();config=read(state/'config.json')
-    if config.get('backend')!='cloudru': raise ValueError('Automatic timer requires the Cloud.ru backend')
+    if config.get('backend') not in ('cloudru','timeweb'): raise ValueError('Automatic timer requires a supported cloud backend')
     if not (Path(config['cloud_state'])/'credentials.json').is_file(): raise ValueError('Private cloud credentials required on controller host')
     user=str(os.getuid())
     linger=subprocess.run(['loginctl','show-user',user,'--property=Linger','--value'],check=True,capture_output=True,text=True)
@@ -252,6 +255,8 @@ def main():
     elif a.command=='schedule':result=schedule(a.state,sys.executable,__file__)
     else:
         from gateway_rotation_cloud import CloudBackend
+        if read(Path(a.state)/'config.json').get('backend')=='timeweb':
+            from timeweb_rotation import TimewebBackend as CloudBackend
         active=read(a.state/'active.json')
         pending=read(a.state/'rotation.json') if (a.state/'rotation.json').exists() else None
         if not a.force and utc()<datetime.fromisoformat(active['renew_before']) and (not pending or pending.get('complete')):

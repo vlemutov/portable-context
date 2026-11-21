@@ -4,6 +4,39 @@ Status: in development. The memory package remains on 0.9.0 with a personal
 1.0-preview HTTPS/OAuth deployment. Do not advertise
 OAuth or the new HTTPS installation as released until the acceptance gates pass.
 
+## 1.0-preview.6 — Timeweb lifecycle and independent onboarding
+
+- `timeweb-auto-plan` / `timeweb-auto-run`: exact approved candidate list, region/tier
+  preferences, baseline hardware floor, total monthly estimate including explicit extras,
+  payment-review attestation, bounded attempts and durable deadline. Sequential VM-only
+  creation stops at first allocation; normal apply continues the same server. Only known
+  VM POST rejections advance. Unknown outcomes, price drift and account/payment errors stop.
+  Interrupted local transitions/rejections/allocation resume without duplicate creation.
+  Cloud capacity and bank spending guarantees are not implied; no live paid search was run.
+
+- Ubuntu pilot follow-up (2026-11-21): recognize exact HTTP 400
+  `servers_is_run_out_error` as a reviewed VM-selection rejection, without inferring
+  a quota or capacity cause. Block blind replay, retain per-attempt timestamps and
+  UUID response IDs, expose next steps in status/diagnostics, and preserve old journals.
+  Alternatives exclude rejected preset/zone pairs, respect preset-specific zones when
+  supplied, and explicitly distinguish catalog membership from actual orderability.
+  No paid live retry was performed for this correction.
+
+- Timeweb hardware-tier fallback after definitive capacity rejection, explicit zones,
+  separately journaled public IPv4, secret-masking detection, dependency readiness,
+  and bounded ordinary DNS/HTTPS waiting.
+- `timeweb-update`: reviewed pinned gateway upgrade, coordinated with the VM renewal
+  controller; durable publication intent, same workspace/resources, resumable memory update.
+- `timeweb-diagnostics`: allowlisted support JSON without provider bodies, environment,
+  credentials or memory contents; works during interrupted local configuration transitions.
+- `timeweb-cleanup`: installation-scoped plan, irreversible S3-backup warning, deletion
+  receipts, retained IPv4 cleanup, shared metadata protection and retired-state guard.
+- Skill revision 1.0-preview.6, [Timeweb operations](timeweb-operations.md), and a
+  [clean Cursor starting prompt](timeweb-clean-test.md) that needs no developer chat context.
+- Infrastructure was exercised on the previous Timeweb pilot. New lifecycle commands,
+  human passkey/consent in Cursor and full first import require fresh live acceptance.
+  No claim of provider availability, automatic token replacement or spending enforcement.
+
 ## 1.0-preview.5 — interrupted Ubuntu/Cursor install
 
 - Exact Container Apps name-not-found HTTP 499 handling at the pre-create lookup;

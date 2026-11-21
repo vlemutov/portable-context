@@ -4,7 +4,8 @@ A shared memory operated through your agent: import selected conversations, pres
 relationships, build an evidence-linked Markdown wiki, and continue the work from another client.
 
 **This branch: 1.0 preview; package/skill version remains 0.9.0 until release.**
-HTTPS/OAuth installation and update are being prepared in `release/1.0`. Use that branch for
+HTTPS/OAuth installation and update are being prepared in `release/1.0` (Cloud.ru) and
+`feature/timeweb-installer` (Timeweb). Use the matching branch for
 the preview; do not assume the default branch already contains this onboarding or a 1.0 release.
 Start at **[START-HERE.md](START-HERE.md)** for the agent-guided setup.
 
@@ -50,7 +51,11 @@ In this preview, `install --https` adds a stateless Container Apps entrance with
 address and Pocket ID/OAuth; no purchased domain is needed. SQLite, originals, wiki and identity
 stay on the VM. SSH/stdio remains available for administration and bulk capture delivery.
 Existing Linux servers use the installer without Terraform over SSH; automatic HTTPS setup is
-currently Cloud.ru-specific. Each owner runs and pays for their own instance. See the
+available for Cloud.ru, with an experimental [Timeweb adapter](docs/timeweb-install.md).
+Timeweb uses its REST API without client Terraform/Docker, waits for ordinary DNS/HTTPS,
+and retains paid resources and creation intents on failure for safe resume. Its complete
+VM/S3/mTLS installation still needs live acceptance testing; the separate transport and
+DNS experiments are documented independently. Each owner runs and pays for their own instance. See the
 [connection guide](skills/portable-context/references/connection.md) for supported client paths.
 
 `bootstrap` verifies pinned Terraform/provider downloads. `install` verifies backup restoration

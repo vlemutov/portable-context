@@ -99,6 +99,18 @@ def install(payload, root=None):
     backup = payload.get('backup')
     if backup:
         write(root / 'backup-config.json', json.dumps(backup))
+    if payload.get('ensure_s3_versioning'):
+        if not backup:raise ValueError('Managed Timeweb install requires S3 backup configuration')
+        # Execute inside the newly prepared venv; never expose S3 credentials in argv/logs.
+        script="""import json,sys,boto3
+c=json.load(sys.stdin)
+s=boto3.client('s3',endpoint_url=c['endpoint'],region_name=c['region'],aws_access_key_id=c['access_key'],aws_secret_access_key=c['secret_key'])
+if s.get_bucket_versioning(Bucket=c['bucket']).get('Status')!='Enabled':
+ s.put_bucket_versioning(Bucket=c['bucket'],VersioningConfiguration={'Status':'Enabled'})
+assert s.get_bucket_versioning(Bucket=c['bucket']).get('Status')=='Enabled', 'S3 versioning not ready'
+"""
+        verified=subprocess.run([python,'-c',script],input=json.dumps(backup),text=True,capture_output=True)
+        if verified.returncode:raise ValueError('S3 versioning check failed. Bucket retained; inspect private configuration and retry.')
     password_path=root/'restic-password'
     if password_path.exists() and password_path.read_text().strip()!=payload['recovery_password'].strip():
         raise ValueError('Recovery password differs; restore the original private deployment state before upgrading')

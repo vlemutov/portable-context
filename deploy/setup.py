@@ -187,6 +187,9 @@ def validate_config(config):
     host = config.get('host', '')
     if host and (host.startswith('-') or not re.fullmatch(r'[a-zA-Z0-9.:-]+', host)):
         raise ValueError('Host must be a hostname or IP, without shell syntax')
+    if config['mode'] == 'timeweb':
+        from timeweb_setup import validate
+        validate(config)
     if config['mode'] == 'cloudru':
         for field in ('project_id', 'tenant_id', 'image_id'):
             uuid.UUID(config[field])
@@ -211,14 +214,16 @@ def configure(state, values):
     config = read(state / 'deployment.json')
     allowed = {'project_id', 'tenant_id', 'zone', 'image_id', 'flavor', 'ssh_cidr', 'bucket', 'disk_gb',
                'ssh_user', 'ssh_port', 'host', 'identity_file', 'schedule_backup', 'storage_class', 'dns_servers',
-               'ssh_command', 'backup_repository'}
+               'ssh_command', 'backup_repository', 'server_preset_id','storage_preset_id','app_preset_id','os_id',
+               'source_url','source_branch','source_commit','dns_timeout','availability_zone'}
     if set(values) - allowed:
         raise ValueError('Unknown or secret configuration fields: ' + ', '.join(set(values) - allowed))
     used = any((state / name).exists() for name in (
         'plan-review.json', 'terraform/deployment.tfplan', 'terraform/terraform.tfstate',
-        'installed.json', 'https-plan.json', 'https-journal.json'))
+        'installed.json', 'https-plan.json', 'https-journal.json','timeweb-plan.json','timeweb-journal.json'))
     protected = ('project_id', 'tenant_id', 'bucket', 'host', 'ssh_user', 'ssh_port',
                  'identity_file', 'backup_repository')
+    if config['mode']=='timeweb':protected=tuple(allowed)
     changed = [name for name in protected if name in values and values[name] != config.get(name)]
     if used and changed:
         raise ValueError('This state directory already belongs to a planned or installed memory; '
@@ -275,6 +280,9 @@ def summarize_plan(data):
 
 def plan(state):
     config = read(state / 'deployment.json')
+    if config['mode']=='timeweb':
+        from timeweb_setup import plan as timeweb_plan
+        return timeweb_plan(state)
     render(state, config)
     terraform(state, ['init', '-input=false', '-no-color'])
     terraform(state, ['validate', '-no-color'], credentials=False)
@@ -294,6 +302,10 @@ def plan(state):
 
 
 def apply(state, approved):
+    deployment=read(state/'deployment.json') if (state/'deployment.json').exists() else {}
+    if deployment.get('mode')=='timeweb':
+        from timeweb_setup import apply as timeweb_apply
+        return timeweb_apply(state,approved)
     review = read(state / 'plan-review.json')
     if (approved != review['plan_sha256'] or sha(state / 'terraform/deployment.tfplan') != approved
             or fingerprint(state) != review['configuration_sha256']):
@@ -464,6 +476,21 @@ def server_readiness(ssh):
     return value
 
 
+def prepare_timeweb_dependencies(ssh):
+    """Finish package setup once the Timeweb VM has a public network address."""
+    result=ssh_read(ssh,'python3 -c '+shlex.quote(READINESS_SCRIPT),label='Timeweb dependency preflight')
+    if result.returncode:raise ValueError('Timeweb dependency preflight failed; inspect the same VM')
+    value=json.loads(result.stdout)
+    if not value.get('python_ok'):raise ValueError('Timeweb requires Ubuntu 24.04 with Python 3.11+')
+    if all(value.get(k) for k in ('venv','ensurepip','cron')) and not value.get('package_setup_running'):return
+    # Use apt's lock waiting; never remove lock files or restart cloud-init.
+    command=('sudo -n env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=180 update && '
+        'sudo -n env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=180 install -y python3-venv python3-pip cron ufw && '
+        'sudo -n systemctl enable --now cron')
+    result=ssh_read(ssh,command,label='Timeweb dependencies after network assignment',timeout=600,attempts=1)
+    if result.returncode:raise ValueError('Timeweb package setup failed; inspect apt on the same VM and resume. Resources retained.')
+
+
 def accept_cloud_init_recovery(state):
     """Explicit owner action after inspecting/repairing historical cloud-init errors."""
     ssh=ssh_args(state,read(state/'deployment.json'))
@@ -513,15 +540,22 @@ print(json.dumps({'workspace_id':s['workspace_id'],'release':c.name}))
 INSTALL_BOOTSTRAP = 'import io,json,sys; p=json.load(sys.stdin); sys.stdin=io.StringIO(json.dumps(p["payload"])); exec(p["script"])'
 
 
-def install(state):
+def install(state,progress=None):
     config = read(state / 'deployment.json')
+    if config['mode']=='timeweb' and (state/'timeweb-cleanup.json').exists():
+        raise ValueError('This installation is being deleted or retired; no reinstallation allowed')
     ssh = ssh_args(state, config)
-    if config['mode'] == 'cloudru':
+    if config['mode'] in ('cloudru','timeweb'):
         # Retry only readiness checks; never create new cloud resources on connection failure.
+        if progress:progress('ssh')
         ready=ssh_read(ssh,'true',label='SSH readiness',attempts=5)
         if ready.returncode:raise ValueError('SSH connected but remote readiness command failed')
+        if progress:progress('cloud-init')
         wait_cloud_init(ssh,state)
+        if progress:progress('dependencies')
+        if config['mode']=='timeweb':prepare_timeweb_dependencies(ssh)
         server_readiness(ssh)
+    if progress:progress('memory-install')
     payload = bundle()
     payload['https_helpers'] = {name:(ROOT/'deploy'/name).read_text(encoding='utf-8')
         for name in ('https_runtime.py','gateway.py','pocketid.py','setup.py')}
@@ -532,6 +566,7 @@ def install(state):
         save(backup_file, outputs['backup']['value'])
     if backup_file.exists():
         payload['backup'] = read(backup_file)
+    payload['ensure_s3_versioning']=config['mode']=='timeweb'
     payload['schedule_backup'] = config.get('schedule_backup', True)
     import secrets
     recovery=state/'restic-password'
@@ -555,7 +590,7 @@ def install(state):
         from rotation_setup import refresh
         refresh(state)
     kit = recovery_kit(state)
-    if result.get('https') and not (state/'https-journal.json').exists():
+    if result.get('https') and not (state/'https-journal.json').exists() and not (state/'timeweb-journal.json').exists():
         from https_setup import connection_receipt
         connection_receipt(state)
     response={'installed': True, 'workspace_id': result['memory']['workspace_id'], 'backup': result['backup'],
@@ -627,7 +662,7 @@ def main(argv=None):
     parser.add_argument('--state', type=Path, required=True, help='Private persistent directory OUTSIDE the source repo')
     sub = parser.add_subparsers(dest='command', required=True)
     p = sub.add_parser('init')
-    p.add_argument('--mode', choices=('cloudru', 'server'), required=True)
+    p.add_argument('--mode', choices=('cloudru', 'timeweb', 'server'), required=True)
     sub.add_parser('credentials')
     sub.add_parser('bootstrap', help='Download verified Terraform and Cloud.ru provider into the private state directory')
     p = sub.add_parser('configure')
@@ -639,17 +674,17 @@ def main(argv=None):
     p.add_argument('--requirements',type=Path,help='Reviewed JSON mapping of API resource codes to additional amounts in API units')
     p.add_argument('--phase',choices=('infrastructure','https'),default='https',help='Bind reviewed demands to this exact phase/plan/resource state')
     p = sub.add_parser('catalog')
-    p.add_argument('--project-id', required=True)
+    p.add_argument('--project-id')
     p = sub.add_parser('discover', help='Read Object Storage tenant ID without creating a bucket')
     p.add_argument('--project-id', required=True)
     sub.add_parser('plan')
     p = sub.add_parser('apply')
     p.add_argument('--approve-plan', required=True, help='Exact SHA-256 of reviewed paid infrastructure plan')
     p=sub.add_parser('install')
-    p.add_argument('--https',action='store_true',help='Use the reviewed resumable Cloud.ru HTTPS/OAuth installer')
+    p.add_argument('--https',action='store_true',help='Use the reviewed resumable HTTPS/OAuth installer for the selected cloud')
     p.add_argument('--approve-plan',help='Reviewed HTTPS plan SHA-256; approval persists for resume')
     sub.add_parser('update',help='Update the same memory and its managed HTTPS/OAuth services')
-    p=sub.add_parser('https-plan',help='Review additional Cloud.ru HTTPS resources and costs')
+    p=sub.add_parser('https-plan',help='Review cloud HTTPS resources and costs (Timeweb uses its combined plan)')
     p.add_argument('--file',type=Path,help='Optional non-secret edge options')
     sub.add_parser('owner-login',help='Write a new private one-time owner enrollment code locally')
     sub.add_parser('https-check',help='Check public authentication boundary and server identity')
@@ -658,6 +693,41 @@ def main(argv=None):
     p=sub.add_parser('https-reconcile',help='Record an explicitly reviewed resource ID after a lost creation reply')
     p.add_argument('--stage',choices=('registry','container'),required=True)
     p.add_argument('--resource-id',required=True)
+    p=sub.add_parser('timeweb-reconcile',help='Record a reviewed resource ID after an ambiguous Timeweb creation; never create duplicates')
+    p.add_argument('--stage',choices=('project','ssh_key','server','bucket','git','app'),required=True)
+    p.add_argument('--resource-id',required=True)
+    p=sub.add_parser('timeweb-retry-deploy',help='Preview a retry of a failed/ambiguous app deployment, then approve its exact hash')
+    p.add_argument('--approve-plan')
+    p=sub.add_parser('timeweb-retry-create',help='Review a single retry after an unresolved app creation; late duplicates remain possible')
+    p.add_argument('--approve-plan')
+    p=sub.add_parser('timeweb-select-app', help='List backend prices or review a new app preset after a confirmed capacity refusal')
+    p.add_argument('--preset-id', type=int)
+    p.add_argument('--approve-plan')
+    p=sub.add_parser('timeweb-vm-options',help='List matching VM alternatives within explicit locations and monthly price ceiling; capacity is unknown')
+    p.add_argument('--location',action='append')
+    p.add_argument('--max-monthly-price',type=float)
+    p=sub.add_parser('timeweb-select-vm',help='Review a fallback after definitive VM creation rejection; retain project/key, never replace an existing VM')
+    p.add_argument('--preset-id',type=int,required=True)
+    p.add_argument('--availability-zone',required=True)
+    p.add_argument('--approve-plan')
+    p=sub.add_parser('timeweb-auto-plan',help='Preview a bounded ordered VM search with a reviewed total recurring-cost estimate; creates no cloud resources')
+    p.add_argument('--location',action='append',required=True,help='Russian regions in preference order')
+    p.add_argument('--zone',action='append',help='Optional allowlist of exact zones within those regions')
+    p.add_argument('--family',action='append',choices=('premium','ultra','dedicated_cpu','high_cpu','other'))
+    p.add_argument('--max-monthly-total',type=float,required=True)
+    p.add_argument('--monthly-extras',type=float,required=True,help='Reviewed monthly allowance for IPv4 and variable charges; not a spending guarantee')
+    p.add_argument('--max-attempts',type=int,default=6)
+    p.add_argument('--timeout',type=int,default=300)
+    p=sub.add_parser('timeweb-auto-run',help='Execute/resume the approved search, stop at first VM; no automatic cleanup')
+    p.add_argument('--approve-plan',required=True)
+    p.add_argument('--payment-reviewed',action='store_true',help='Owner reviewed balance and autopay risk; does not change payment settings')
+    sub.add_parser('timeweb-diagnostics',help='Write an allowlisted support report without credentials, logs or memory content')
+    p=sub.add_parser('timeweb-cleanup',help='Review irreversible deletion of this installation, including all S3 backup versions; preserve other resources and local evidence')
+    p.add_argument('--approve-plan')
+    p=sub.add_parser('timeweb-update',help='Review/resume a pinned source upgrade on the same VM, gateway and renewal controller')
+    p.add_argument('--commit',required=True)
+    p.add_argument('--approve-plan')
+    p.add_argument('--retry-failed',action='store_true',help='Explicitly review another deployment after inspecting terminal failures')
     p = sub.add_parser('recovery-kit', help='Verify OAuth backups and save an offline secret kit locally')
     p.add_argument('--runtime', help='Explicit OAuth runtime directory on the server, if detection is ambiguous')
     p.add_argument('--output', type=Path, help='New private local directory; defaults inside --state')
@@ -673,17 +743,19 @@ def main(argv=None):
     args = parser.parse_args(argv)
     os.umask(0o077)
     state = private_directory(args.state)
+    mode=read(state/'deployment.json')['mode'] if (state/'deployment.json').exists() else None
     if args.command == 'init':
         result = prepare(state, args.mode)
     elif args.command == 'bootstrap':
-        result = bootstrap(state)
+        result = {'provider':'timeweb','terraform_required':False,'next':'credentials, catalog, configure, plan'} if mode=='timeweb' else bootstrap(state)
     elif args.command == 'credentials':
         import getpass
         if not sys.stdin.isatty():
             raise ValueError('Run credentials in your own interactive terminal; never paste keys into chat')
-        values = {key: getpass.getpass(key + ': ') for key in ('AUTH_KEY_ID', 'AUTH_SECRET')}
+        keys=('TIMEWEB_TOKEN',) if mode=='timeweb' else ('AUTH_KEY_ID','AUTH_SECRET')
+        values = {key: getpass.getpass(key + ': ') for key in keys}
         if not all(values.values()):
-            raise ValueError('Both values are required')
+            raise ValueError('Credential values are required')
         save(state / 'credentials.json', values)
         result = {'saved': True, 'note': 'Stored privately. Managed HTTPS also uses this cloud key on the VM for certificate renewal; do not revoke it without updating the rotation controller.'}
     elif args.command == 'configure':
@@ -696,15 +768,24 @@ def main(argv=None):
                   'credentials_present': (state / 'credentials.json').exists() or bool(os.environ.get('AUTH_SECRET')),
                   'state': str(state)}
     elif args.command == 'install-status':
-        from https_setup import installation_status
+        if mode=='timeweb':from timeweb_setup import status as installation_status
+        else:from https_setup import installation_status
         result=installation_status(state)
     elif args.command == 'accept-cloud-init-recovery':
         result=accept_cloud_init_recovery(state)
     elif args.command == 'quota-check':
-        from quotas import check as quota_check,review as quota_review
-        result=quota_review(state,read(args.requirements),args.phase) if args.requirements else quota_check(state)
+        if mode=='timeweb':
+            result={'provider':'timeweb','quota_verified':False,'next':'Review catalog availability and balance. API rejection retains state; no automatic repeated creates.'}
+        else:
+            from quotas import check as quota_check,review as quota_review
+            result=quota_review(state,read(args.requirements),args.phase) if args.requirements else quota_check(state)
     elif args.command == 'catalog':
-        result = catalog(state, args.project_id)
+        if mode=='timeweb':
+            from timeweb_setup import catalog as timeweb_catalog
+            result=timeweb_catalog(state)
+        else:
+            if not args.project_id:raise ValueError('Cloud.ru catalog needs --project-id')
+            result = catalog(state, args.project_id)
     elif args.command == 'discover':
         result = discover(state, args.project_id)
     elif args.command == 'plan':
@@ -713,17 +794,23 @@ def main(argv=None):
         result = apply(state, args.approve_plan)
     elif args.command == 'install':
         if args.https:
-            from https_setup import install as https_install
+            if mode=='timeweb':from timeweb_setup import install as https_install
+            else:from https_setup import install as https_install
             result=https_install(state,args.approve_plan)
         else: result = install(state)
     elif args.command == 'update':
-        if (state/'https-journal.json').exists():
-            from https_setup import install as https_install
+        if (state/'https-journal.json').exists() or (state/'timeweb-journal.json').exists():
+            if mode=='timeweb':from timeweb_setup import install as https_install
+            else:from https_setup import install as https_install
             result=https_install(state)
         else: result=install(state)
     elif args.command == 'https-plan':
-        from https_setup import plan as https_plan
-        result=https_plan(state,read(args.file) if args.file else None)
+        if mode=='timeweb':
+            if args.file:raise ValueError('Use configure before the combined Timeweb plan')
+            result=plan(state)
+        else:
+            from https_setup import plan as https_plan
+            result=https_plan(state,read(args.file) if args.file else None)
     elif args.command == 'owner-login':
         from https_setup import owner_login
         result=owner_login(state)
@@ -737,6 +824,39 @@ def main(argv=None):
     elif args.command == 'https-reconcile':
         from https_setup import reconcile
         result=reconcile(state,args.stage,args.resource_id)
+    elif args.command == 'timeweb-reconcile':
+        from timeweb_setup import reconcile
+        result=reconcile(state,args.stage,args.resource_id)
+    elif args.command == 'timeweb-retry-deploy':
+        from timeweb_setup import retry_deploy
+        result=retry_deploy(state,args.approve_plan)
+    elif args.command == 'timeweb-select-app':
+        from timeweb_app import select
+        result=select(state,args.preset_id,args.approve_plan)
+    elif args.command == 'timeweb-retry-create':
+        from timeweb_retry import retry_create
+        result=retry_create(state,args.approve_plan)
+    elif args.command == 'timeweb-vm-options':
+        from timeweb_selection import options
+        result=options(state,args.location,args.max_monthly_price)
+    elif args.command == 'timeweb-select-vm':
+        from timeweb_selection import select
+        result=select(state,args.preset_id,args.availability_zone,args.approve_plan)
+    elif args.command == 'timeweb-auto-plan':
+        from timeweb_auto import prepare
+        result=prepare(state,args.location,args.max_monthly_total,args.monthly_extras,args.max_attempts,args.timeout,args.family,args.zone)
+    elif args.command == 'timeweb-auto-run':
+        from timeweb_auto import execute
+        result=execute(state,args.approve_plan,args.payment_reviewed)
+    elif args.command == 'timeweb-diagnostics':
+        from timeweb_lifecycle import diagnostics
+        result=diagnostics(state)
+    elif args.command == 'timeweb-cleanup':
+        from timeweb_lifecycle import cleanup
+        result=cleanup(state,args.approve_plan)
+    elif args.command == 'timeweb-update':
+        from timeweb_update import update
+        result=update(state,args.commit,args.approve_plan,args.retry_failed)
     elif args.command == 'recovery-kit':
         result = recovery_kit(state,args.runtime,args.output)
     elif args.command == 'rotation-setup':
@@ -747,7 +867,12 @@ def main(argv=None):
     else:
         import anyio
         result = anyio.run(check, state)
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    if (mode=='timeweb' or args.command=='init' and result.get('mode')=='timeweb') and args.command in (
+            'init','credentials','configure','plan','apply','timeweb-auto-plan','timeweb-auto-run','timeweb-select-app','timeweb-select-vm'):
+        from timeweb_setup import show_progress
+        show_progress(state)
+    # ASCII JSON remains valid Unicode when decoded, including cp1252/redirected Windows terminals.
+    print(json.dumps(result, ensure_ascii=True, indent=2))
 
 
 if __name__ == '__main__':
