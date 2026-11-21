@@ -113,6 +113,23 @@ class LifecycleTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
+    def test_capacity_refused_app_cleanup_reviews_remaining_infrastructure(self):
+        self.journal['resources']['app'] = {
+            'path': '/api/v2/apps', 'key': 'app', 'submitted': True, 'submitted_at': 10,
+            'body_sha256': 'test-hash', 'creation_attempts': [
+                {'submitted_at': 10, 'status': 409, 'error_code': 'no_free_node'}]}
+        self.journal['resources']['git'] = {'id': 'git1'}
+        self.api.items.pop('/api/v1/apps/1')
+        self.api.items['/api/v1/vcs-provider/git1'] = {'provider': {'provider_id': 'git1'}}
+        setup.save(self.state/'timeweb-journal.json', self.journal)
+        plan = lifecycle.cleanup(self.state)
+        self.assertEqual({row['kind'] for row in plan['resources']}, {'server','ipv4','bucket','project','git'})
+        self.assertTrue(all(method == 'GET' for method, _, _ in self.api.calls))
+        self.api.items['/api/v1/apps/9'] = {'app': {'id': 9, 'name': 'pc-test-edge'}}
+        with self.assertRaisesRegex(ValueError, 'duplicate'):
+            lifecycle.cleanup(self.state, plan['plan_sha256'])
+        self.assertTrue(all(method == 'GET' for method, _, _ in self.api.calls))
+
     def test_preview_readonly_approval_and_lost_reply_resume(self):
         plan = lifecycle.cleanup(self.state)
         self.assertTrue(all(c[0] == 'GET' for c in self.api.calls))

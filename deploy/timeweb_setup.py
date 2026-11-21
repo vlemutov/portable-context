@@ -16,6 +16,7 @@ import time
 
 from setup import ROOT, read, save, sha, private_directory, ensure_key
 from timeweb_api import API, TimewebError, integer, origin
+import timeweb_app
 from timeweb_vm import is_vm_rejection, zones_for_preset, catalog_evidence, rejection_guidance, require_selection_idle
 
 
@@ -149,6 +150,8 @@ class Journal:
             rejection=item.get('creation_rejection',{})
             if name=='server' and is_vm_rejection(rejection.get('status'),rejection.get('error_code')):
                 raise ValueError('VM creation rejected: '+rejection['error_code']+'. Do not repeat apply; use timeweb-vm-options and reviewed timeweb-select-vm in the same state.')
+            if name == 'app' and timeweb_app.rejected(item):
+                raise ValueError(timeweb_app.GUIDANCE)
             if item.get('submitted'):
                 if name == 'app':
                     from timeweb_retry import before_create
@@ -157,6 +160,8 @@ class Journal:
             if name == 'app' and item.get('retry_history'):
                 from timeweb_retry import inventory
                 inventory(api,self.value['config'],self.value)
+            if name == 'app' and 'app_selection' in self.value:
+                timeweb_app.check_selection(api, self.value['config'], self.value)
             if before_submit:before_submit()
             item['submitted']=True;item['submitted_at']=int(time.time());self.save()
             try:
@@ -164,7 +169,8 @@ class Journal:
             except TimewebError as error:
                 item.setdefault('creation_attempts',[]).append({'submitted_at':item['submitted_at'],
                     'status':error.status,'error_code':error.error_code,'response_id':error.response_id})
-                if error.status in (400,401,403,422,429) or (name=='server' and is_vm_rejection(error.status,error.error_code)):
+                if (error.status in (400,401,403,422,429) or (name=='server' and is_vm_rejection(error.status,error.error_code))
+                        or (name == 'app' and timeweb_app.rejected(item))):
                     item['submitted']=False
                     item['creation_rejection']={'status':error.status,'error_code':error.error_code,'response_id':error.response_id}
                 self.save()
@@ -188,11 +194,14 @@ def status(state):
     guidance=rejection_guidance(j)
     auto=read(state/'timeweb-auto-run.json') if (state/'timeweb-auto-run.json').exists() else None
     return {'provider':'timeweb','stage':j.get('stage','not_started'),
-        'resources':{k:{'id':v.get('id'),'creation_unresolved':bool(v.get('submitted') and v.get('id') is None)} for k,v in resources.items()},
+        'resources':{k:{'id':v.get('id'),'creation_unresolved':bool(v.get('submitted') and v.get('id') is None and not (k=='app' and timeweb_app.rejected(v)))} for k,v in resources.items()},
+        'app_capacity_rejected':timeweb_app.rejected(resources.get('app', {})),
+        'app_selection':j.get('app_selection',{}).get('preset'),
         'last_error':j.get('last_error'),'vm_rejection':guidance,
         'automatic_selection':{k:auto.get(k) for k in ('status','reason','plan_sha256','attempts','selected')} if auto else None,
         'dns':read(state/'dns-readiness.json') if (state/'dns-readiness.json').exists() else None,
         'next':('Resume timeweb-auto-run with the SAME state and approved hash.' if auto and auto.get('status')=='running'
+                else timeweb_app.GUIDANCE if timeweb_app.rejected(resources.get('app', {}))
                 else guidance['next'] if guidance else 'Resume the SAME --state. No resources are automatically deleted. For an unknown creation outcome, review its ID and use timeweb-reconcile.')}
 
 
@@ -379,10 +388,9 @@ def publish(api,app,env,commit,path):
 
 
 def install(state,approval=None):
-    config=approved(state,approval)
     from portable_context.restic_backup import file_lock
     with file_lock(state/'timeweb-install.lock'):
-        return install_locked(state,config)
+        return install_locked(state,approved(state,approval))
 
 
 def git_request(journal, config):
@@ -438,7 +446,7 @@ def install_locked(state,config):
         body={'name':name,'comment':'Portable Context HTTPS gateway','type':'backend','language':'docker','framework':'docker',
             'provider_id':j.value['resources']['git']['id'],'repository_id':repo['id'],
             'branch_name':config['source_branch'],'commit_sha':config['source_commit'],'build_cmd':'','run_cmd':'',
-            'is_auto_deploy':False,'preset_id':config['app_preset_id'],'build_entry_path':'/deploy/timeweb-edge','health_check':'/_pc/health','envs':{}}
+            'is_auto_deploy':False,'preset_id':timeweb_app.current_preset(config,j.value),'build_entry_path':'/deploy/timeweb-edge','health_check':'/_pc/health','envs':{}}
         # POST is v2, GET is v1 on the established App Platform API.
         class AppAPI:
             def request(self,path,**kwargs):

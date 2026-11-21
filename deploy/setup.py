@@ -696,6 +696,9 @@ def main(argv=None):
     p.add_argument('--approve-plan')
     p=sub.add_parser('timeweb-retry-create',help='Review a single retry after an unresolved app creation; late duplicates remain possible')
     p.add_argument('--approve-plan')
+    p=sub.add_parser('timeweb-select-app', help='List backend prices or review a new app preset after a confirmed capacity refusal')
+    p.add_argument('--preset-id', type=int)
+    p.add_argument('--approve-plan')
     p=sub.add_parser('timeweb-vm-options',help='List matching VM alternatives within explicit locations and monthly price ceiling; capacity is unknown')
     p.add_argument('--location',action='append')
     p.add_argument('--max-monthly-price',type=float)
@@ -823,6 +826,9 @@ def main(argv=None):
     elif args.command == 'timeweb-retry-deploy':
         from timeweb_setup import retry_deploy
         result=retry_deploy(state,args.approve_plan)
+    elif args.command == 'timeweb-select-app':
+        from timeweb_app import select
+        result=select(state,args.preset_id,args.approve_plan)
     elif args.command == 'timeweb-retry-create':
         from timeweb_retry import retry_create
         result=retry_create(state,args.approve_plan)

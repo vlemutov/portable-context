@@ -9,6 +9,7 @@ import subprocess
 
 from setup import ROOT, INSTALL_BOOTSTRAP, read, save, checked, ssh_args
 from timeweb_api import API, origin
+from timeweb_app import current_preset
 from timeweb_setup import digest, target
 
 TERMINAL = {'success', 'failed', 'failure', 'error', 'cancelled', 'canceled', 'stopped'}
@@ -93,7 +94,7 @@ sys.stdout.write(r.stdout)
 
 
 def call_remote(state, payload):
-    names = ('timeweb_update.py', 'timeweb_setup.py', 'timeweb_api.py', 'setup.py', 'cloud_gateway.py', 'gateway.py')
+    names = ('timeweb_update.py', 'timeweb_setup.py', 'timeweb_api.py', 'timeweb_app.py', 'timeweb_vm.py', 'setup.py', 'cloud_gateway.py', 'gateway.py')
     payload = {**payload, 'files': {n: (ROOT/'deploy'/n).read_text(encoding='utf-8') for n in names}}
     result = checked(ssh_args(state, read(state/'deployment.json'))+['python3 -c '+shlex.quote(INSTALL_BOOTSTRAP)],
                      input=json.dumps({'script': REMOTE, 'payload': payload}), text=True, capture_output=True, encoding='utf-8', timeout=180)
@@ -148,7 +149,7 @@ def update(state, commit, approval=None, retry_failed=False):
             body = {'name': config['name']+'-edge', 'comment': 'Portable Context HTTPS gateway', 'type': 'backend',
                     'language': 'docker', 'framework': 'docker', 'provider_id': journal['resources']['git']['id'],
                     'repository_id': repo, 'branch_name': config['source_branch'], 'commit_sha': config['source_commit'],
-                    'build_cmd': '', 'run_cmd': '', 'is_auto_deploy': False, 'preset_id': config['app_preset_id'],
+                    'build_cmd': '', 'run_cmd': '', 'is_auto_deploy': False, 'preset_id': current_preset(config, journal),
                     'build_entry_path': '/deploy/timeweb-edge', 'health_check': '/_pc/health', 'envs': {}}
             if journal['resources']['app']['body_sha256'] != digest(body):
                 raise ValueError('App creation identity differs')

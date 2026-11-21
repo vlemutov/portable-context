@@ -4,6 +4,7 @@ import time
 
 from setup import read, save
 from timeweb_api import API
+from timeweb_app import rejected, GUIDANCE
 from timeweb_lifecycle import complete_list, load
 from timeweb_setup import digest
 
@@ -13,7 +14,7 @@ def inventory(api, config, journal, known_id=None):
     provider = journal['resources']['git']['id']
     candidates = [v for v in rows if v.get('name') == config['name']+'-edge'
                   or str(v.get('provider_id')) == str(provider)]
-    if any(str(v.get('id')) != str(known_id) for v in candidates):
+    if candidates and (known_id is None or any(str(v.get('id')) != str(known_id) for v in candidates)):
         raise ValueError('Possible late-created or duplicate app found. Inspect and reconcile its ID; nothing deleted.')
     return sorted([{'id': v['id'], 'name': v.get('name'), 'provider_id': v.get('provider_id'),
                     'repository_id': v.get('repository_id')} for v in rows], key=lambda v: str(v['id']))
@@ -28,6 +29,8 @@ def retry_create(state, approval=None):
         if (state/'timeweb-update.json').exists() and not read(state/'timeweb-update.json').get('complete'):
             raise ValueError('Resume pending source update first')
         item = journal['resources'].get('app', {})
+        if rejected(item):
+            raise ValueError(GUIDANCE)
         if item.get('id') is not None or not item.get('submitted') or item.get('path') != '/api/v2/apps' or item.get('key') != 'app':
             raise ValueError('No unresolved app creation to retry')
         rows = inventory(API(state), config, journal)

@@ -7,6 +7,7 @@ import time
 
 from setup import read, save
 from timeweb_api import API, TimewebError
+import timeweb_app
 from timeweb_setup import digest, target
 from timeweb_vm import rejection_guidance
 
@@ -59,7 +60,7 @@ def verify_cleanup(kind, value, config, journal, pending):
 def complete_list(api, path, key):
     response = api.request(path)
     rows = response[key]
-    if not isinstance(rows, list) or int(response.get('meta', {}).get('total', len(rows))) != len(rows):
+    if not isinstance(rows, list) or any(int(response.get('meta', {}).get(k, len(rows))) != len(rows) for k in ('total', 'amount')):
         raise ValueError('Incomplete inventory; no mutation allowed')
     return rows
 
@@ -159,6 +160,13 @@ def diagnostics(state):
     report['next'] = report['vm_rejection']['next'] if report['vm_rejection'] else 'Resume the same private state. These are infrastructure observations, not proof of client OAuth login or successful import.'
     if report.get('automatic_selection',{}).get('status') == 'running':
         report['next'] = 'Resume timeweb-auto-run with the same state and approved hash; do not start an independent apply.'
+    app = journal.get('resources', {}).get('app', {})
+    if timeweb_app.rejected(app):
+        report['resources']['app']['creation_unresolved'] = False
+        report['app_rejection'] = app['creation_attempts'][-1]
+        report['next'] = timeweb_app.GUIDANCE
+    if 'app_selection' in journal:
+        report['selection']['app_preset_id'] = timeweb_app.current_preset(config, journal)
     path = state/'timeweb-support.json'
     save(path, report)
     return {'report': report, 'support_file': str(path), 'contains_resource_ids': True,
@@ -170,7 +178,10 @@ def cleanup_plan(state, api):
     resources = []
     for kind in ('app', 'server', 'bucket', 'ssh_key', 'git', 'project'):
         item = journal['resources'].get(kind, {})
-        if item.get('submitted') and item.get('id') is None:
+        if kind == 'app' and (timeweb_app.rejected(item) or ('app_selection' in journal and not item.get('submitted') and item.get('id') is None)):
+            from timeweb_retry import inventory
+            inventory(api, config, journal)
+        elif item.get('submitted') and item.get('id') is None:
             raise ValueError('Reconcile ambiguous creation before cleanup: '+kind)
         if item.get('id') is not None:
             live = fetch(api, kind, item['id'])
