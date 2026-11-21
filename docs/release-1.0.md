@@ -4,6 +4,22 @@ Status: in development. The memory package remains on 0.9.0 with a personal
 1.0-preview HTTPS/OAuth deployment. Do not advertise
 OAuth or the new HTTPS installation as released until the acceptance gates pass.
 
+## Release decision — 2026-11-22
+
+The public 1.0 tag is still pending. The tested Timeweb candidate is
+`bdf6d34` on `feature/timeweb-installer`. Cursor on Ubuntu imported an ordinary
+file into an existing workspace. Codex on Windows read its original bytes from
+that workspace, matched the source SHA-256 and verified the unchanged second
+import. See the [file receipt and both import results](timeweb-clean-test.md#результат-проверки-файла-22-ноября-2026).
+
+| Before tagging | Evidence to collect or publish |
+| --- | --- |
+| Cloud.ru owner test, planned for November 23 | Check existing-owner HTTPS access first. In a separate project, resume any partial installation or start from the reviewed plan. Record quotas, quoted costs, actual provisioning, owner login, original-file recall from a second client and backup status. Follow the [Cloud.ru acceptance steps](clean-install-test.md). If capacity blocks the run, record the stopping point and decide whether Cloud.ru stays in preview. |
+| Close the supported-client and operations matrix | Match each advertised combination to a receipt for login, refresh/revocation, import and recall. Check evidence for an interrupted upload, an upgrade to a different commit, certificate rotation and browser passkey enrollment after isolated recovery. Run uncovered cases on a test installation. For Timeweb, distinguish the live file check from the new-install cost and autopay review. |
+| Prepare the public candidate | Bring the tested changes onto the release branch. Align package, skill and server-recommended versions, update the entry guide, compatibility list, changelog and upgrade/rollback instructions. Run the required Windows, macOS (Intel and ARM) and Linux CI on the final candidate before merging and publishing the 1.0 tag and GitHub Release. |
+
+The dated sections below retain the evidence available at each earlier milestone.
+
 ## 1.0-preview.6 — Timeweb lifecycle and independent onboarding
 
 - Timeweb records owner-reviewed costs, expected test duration and autopay status in private state before new paid orders. The same approved automatic search covers continuation on its selected VM. Replacing the app tariff requires a new cost review.
@@ -36,9 +52,8 @@ OAuth or the new HTTPS installation as released until the acceptance gates pass.
   receipts, retained IPv4 cleanup, shared metadata protection and retired-state guard.
 - Skill revision 1.0-preview.6, [Timeweb operations](timeweb-operations.md), and a
   [clean Cursor starting prompt](timeweb-clean-test.md) that needs no developer chat context.
-- Infrastructure was exercised on the previous Timeweb pilot. New lifecycle commands,
-  human passkey/consent in Cursor and full first import require fresh live acceptance.
-  No claim of provider availability, automatic token replacement or spending enforcement.
+- Infrastructure was exercised on the earlier Timeweb pilot. The November 22
+  result above records subsequent Cursor file acceptance on an existing installation.
 
 ## 1.0-preview.5 — interrupted Ubuntu/Cursor install
 
