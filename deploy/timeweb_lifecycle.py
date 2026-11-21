@@ -151,7 +151,14 @@ def diagnostics(state):
     report['vm_rejection'] = rejection_guidance(journal)
     report['vm_creation_attempts'] = [{k:v.get(k) for k in ('submitted_at','status','error_code','response_id')}
         for v in journal.get('resources', {}).get('server', {}).get('creation_attempts', [])]
+    if (state/'timeweb-auto-run.json').exists():
+        automatic = read(state/'timeweb-auto-run.json')
+        report['automatic_selection'] = {k: automatic.get(k) for k in ('plan_sha256','status','reason','started_at','deadline','index')}
+        report['automatic_selection']['attempts'] = [{k: v.get(k) for k in
+            ('preset_id','zone','status','submitted_at','http_status','error_code','response_id')} for v in automatic.get('attempts',[])]
     report['next'] = report['vm_rejection']['next'] if report['vm_rejection'] else 'Resume the same private state. These are infrastructure observations, not proof of client OAuth login or successful import.'
+    if report.get('automatic_selection',{}).get('status') == 'running':
+        report['next'] = 'Resume timeweb-auto-run with the same state and approved hash; do not start an independent apply.'
     path = state/'timeweb-support.json'
     save(path, report)
     return {'report': report, 'support_file': str(path), 'contains_resource_ids': True,

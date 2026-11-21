@@ -703,6 +703,17 @@ def main(argv=None):
     p.add_argument('--preset-id',type=int,required=True)
     p.add_argument('--availability-zone',required=True)
     p.add_argument('--approve-plan')
+    p=sub.add_parser('timeweb-auto-plan',help='Preview a bounded ordered VM search with a reviewed total recurring-cost estimate; creates no cloud resources')
+    p.add_argument('--location',action='append',required=True,help='Russian regions in preference order')
+    p.add_argument('--zone',action='append',help='Optional allowlist of exact zones within those regions')
+    p.add_argument('--family',action='append',choices=('premium','ultra','dedicated_cpu','high_cpu','other'))
+    p.add_argument('--max-monthly-total',type=float,required=True)
+    p.add_argument('--monthly-extras',type=float,required=True,help='Reviewed monthly allowance for IPv4 and variable charges; not a spending guarantee')
+    p.add_argument('--max-attempts',type=int,default=6)
+    p.add_argument('--timeout',type=int,default=300)
+    p=sub.add_parser('timeweb-auto-run',help='Execute/resume the approved search, stop at first VM; no automatic cleanup')
+    p.add_argument('--approve-plan',required=True)
+    p.add_argument('--payment-reviewed',action='store_true',help='Owner reviewed balance and autopay risk; does not change payment settings')
     sub.add_parser('timeweb-diagnostics',help='Write an allowlisted support report without credentials, logs or memory content')
     p=sub.add_parser('timeweb-cleanup',help='Review irreversible deletion of this installation, including all S3 backup versions; preserve other resources and local evidence')
     p.add_argument('--approve-plan')
@@ -821,6 +832,12 @@ def main(argv=None):
     elif args.command == 'timeweb-select-vm':
         from timeweb_selection import select
         result=select(state,args.preset_id,args.availability_zone,args.approve_plan)
+    elif args.command == 'timeweb-auto-plan':
+        from timeweb_auto import prepare
+        result=prepare(state,args.location,args.max_monthly_total,args.monthly_extras,args.max_attempts,args.timeout,args.family,args.zone)
+    elif args.command == 'timeweb-auto-run':
+        from timeweb_auto import execute
+        result=execute(state,args.approve_plan,args.payment_reviewed)
     elif args.command == 'timeweb-diagnostics':
         from timeweb_lifecycle import diagnostics
         result=diagnostics(state)

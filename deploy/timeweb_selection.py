@@ -4,7 +4,7 @@ from pathlib import Path
 from setup import read,save
 from timeweb_api import API,integer
 from timeweb_setup import catalog,find_row,plan,digest,target
-from timeweb_vm import is_vm_rejection,zones_for_preset,catalog_evidence,rejection_guidance
+from timeweb_vm import is_vm_rejection,zones_for_preset,catalog_evidence,rejection_guidance,require_selection_idle
 
 
 def family(row):
@@ -16,8 +16,8 @@ def family(row):
     return 'other'
 
 
-def options(state,locations=None,max_price=None):
-    config=read(state/'deployment.json');data=catalog(state)
+def options(state,locations=None,max_price=None,*,data=None):
+    config=read(state/'deployment.json');data=catalog(state) if data is None else data
     selected=find_row(data['servers'],config['server_preset_id'])
     if selected is None:raise ValueError('Current VM preset missing; review current catalog manually')
     locations=locations or [selected['location']]
@@ -63,6 +63,7 @@ def select(state,preset_id,zone,approval=None):
     from portable_context.restic_backup import file_lock
     state=Path(state);preset_id=integer(preset_id)
     with file_lock(state/'timeweb-install.lock'):
+        require_selection_idle(state)
         transition=state/'timeweb-vm-selection.json'
         if transition.exists():
             pending=read(transition)

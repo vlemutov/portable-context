@@ -16,7 +16,7 @@ import time
 
 from setup import ROOT, read, save, sha, private_directory, ensure_key
 from timeweb_api import API, TimewebError, integer, origin
-from timeweb_vm import is_vm_rejection, zones_for_preset, catalog_evidence, rejection_guidance
+from timeweb_vm import is_vm_rejection, zones_for_preset, catalog_evidence, rejection_guidance, require_selection_idle
 
 
 def digest(value):
@@ -67,9 +67,10 @@ def find_row(value, ident):
     return None
 
 
-def plan(state,*,config=None,persist=True):
+def plan(state,*,config=None,persist=True,catalogs=None):
+    if persist:require_selection_idle(state)
     config=read(state/'deployment.json') if config is None else config;validate(config)
-    catalogs=catalog(state);prices={}
+    catalogs=catalog(state) if catalogs is None else catalogs;prices={}
     for kind,key in (('servers','server_preset_id'),('storage','storage_preset_id'),('apps','app_preset_id')):
         row=find_row(catalogs[kind],integer(config[key]))
         if row is None:raise ValueError('Selected '+kind+' preset not in current catalog')
@@ -100,6 +101,7 @@ def plan(state,*,config=None,persist=True):
 
 
 def approved(state, approval=None):
+    require_selection_idle(state)
     if (state/'timeweb-cleanup.json').exists():
         raise ValueError('Installation is being deleted or retired. Use a NEW state for a new memory.')
     transition=state/'timeweb-update.json'
@@ -134,7 +136,7 @@ class Journal:
                 'response_id':error.response_id if isinstance(error,TimewebError) else None}
             self.save();raise
         self.value.pop('last_error',None);self.save();return result
-    def resource(self,api,name,path,key,body,verify):
+    def resource(self,api,name,path,key,body,verify,before_submit=None):
         def unpack(response,required=False):
             # Timeweb's SSH-key docs name `ssh-key`; the live API returns `ssh_key`.
             for candidate in ((key,'ssh_key') if key=='ssh-key' else (key,)):
@@ -155,6 +157,7 @@ class Journal:
             if name == 'app' and item.get('retry_history'):
                 from timeweb_retry import inventory
                 inventory(api,self.value['config'],self.value)
+            if before_submit:before_submit()
             item['submitted']=True;item['submitted_at']=int(time.time());self.save()
             try:
                 value=unpack(api.request(path,method='POST',body=body),required=True)
@@ -183,11 +186,14 @@ def status(state):
     p=state/'timeweb-journal.json';j=read(p) if p.exists() else {}
     resources=j.get('resources',{})
     guidance=rejection_guidance(j)
+    auto=read(state/'timeweb-auto-run.json') if (state/'timeweb-auto-run.json').exists() else None
     return {'provider':'timeweb','stage':j.get('stage','not_started'),
         'resources':{k:{'id':v.get('id'),'creation_unresolved':bool(v.get('submitted') and v.get('id') is None)} for k,v in resources.items()},
         'last_error':j.get('last_error'),'vm_rejection':guidance,
+        'automatic_selection':{k:auto.get(k) for k in ('status','reason','plan_sha256','attempts','selected')} if auto else None,
         'dns':read(state/'dns-readiness.json') if (state/'dns-readiness.json').exists() else None,
-        'next':guidance['next'] if guidance else 'Resume the SAME --state. No resources are automatically deleted. For an unknown creation outcome, review its ID and use timeweb-reconcile.'}
+        'next':('Resume timeweb-auto-run with the SAME state and approved hash.' if auto and auto.get('status')=='running'
+                else guidance['next'] if guidance else 'Resume the SAME --state. No resources are automatically deleted. For an unknown creation outcome, review its ID and use timeweb-reconcile.')}
 
 
 def reconcile(state,stage,ident):
@@ -268,9 +274,9 @@ def wait_app(api,ident,name,timeout=1200):
 
 
 def apply(state,approval=None):
-    config=approved(state,approval)
     from portable_context.restic_backup import file_lock
     with file_lock(state/'timeweb-install.lock'):
+        config=approved(state,approval)
         return provision(state,config)
 
 
@@ -302,7 +308,7 @@ def ensure_server_ipv4(api,j,vm):
     except ValueError:raise ValueError('IPv4 requested; assignment pending. Resume the same state, no second address will be requested.') from None
 
 
-def provision(state,config):
+def provision(state,config,*,vm_only=False,before_vm_create=None):
     api=API(state);j=Journal(state,config);name=config['name']
     def infrastructure():
         project=config.get('project_id')
@@ -315,7 +321,10 @@ def provision(state,config):
         vm=j.resource(api,'server','/api/v1/servers','server',{'name':name,'project_id':project,
             'preset_id':config['server_preset_id'],'os_id':config['os_id'],'ssh_keys_ids':[key['id']],
             'availability_zone':config['availability_zone'],
-            'cloud_init':cloud_init(config,public_key)},lambda v:verify_server(v,config,public_key))
+            'cloud_init':cloud_init(config,public_key)},lambda v:verify_server(v,config,public_key),before_submit=before_vm_create)
+        if vm_only:
+            return {'server_id':vm['id'],'project_id':project,'preset_id':config['server_preset_id'],
+                    'availability_zone':config['availability_zone'],'next':'Run apply on the selected plan to continue IPv4 and S3 provisioning.'}
         host=ensure_server_ipv4(api,j,vm)
         bucket=j.resource(api,'bucket','/api/v1/storages/buckets','bucket',{'name':config['bucket'],'type':'private',
             'preset_id':config['storage_preset_id'],'project_id':project,'description':'Portable Context backups'},

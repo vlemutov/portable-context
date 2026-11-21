@@ -6,6 +6,14 @@ OAuth or the new HTTPS installation as released until the acceptance gates pass.
 
 ## 1.0-preview.6 — Timeweb lifecycle and independent onboarding
 
+- `timeweb-auto-plan` / `timeweb-auto-run`: exact approved candidate list, region/tier
+  preferences, baseline hardware floor, total monthly estimate including explicit extras,
+  payment-review attestation, bounded attempts and durable deadline. Sequential VM-only
+  creation stops at first allocation; normal apply continues the same server. Only known
+  VM POST rejections advance. Unknown outcomes, price drift and account/payment errors stop.
+  Interrupted local transitions/rejections/allocation resume without duplicate creation.
+  Cloud capacity and bank spending guarantees are not implied; no live paid search was run.
+
 - Ubuntu pilot follow-up (2026-11-21): recognize exact HTTP 400
   `servers_is_run_out_error` as a reviewed VM-selection rejection, without inferring
   a quota or capacity cause. Block blind replay, retain per-attempt timestamps and

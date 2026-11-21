@@ -8,6 +8,17 @@ def is_vm_rejection(status, code):
     return (status, code) in VM_REJECTIONS
 
 
+def automatic_selection_pending(state):
+    from setup import read
+    path = state/'timeweb-auto-run.json'
+    return path.exists() and read(path).get('status') == 'running'
+
+
+def require_selection_idle(state):
+    if automatic_selection_pending(state):
+        raise ValueError('Automatic VM selection is pending; resume timeweb-auto-run first. Preserve the same state.')
+
+
 def zones_for_preset(row, locations):
     zones = sorted({z for loc in locations.get('locations', [])
                     if loc.get('location') == row.get('location')
