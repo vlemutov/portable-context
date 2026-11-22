@@ -278,22 +278,45 @@ def summarize_plan(data):
     return resources
 
 
+def terraform_has_unknown(mask):
+    # Collection masks can contain empty objects even when every leaf is known.
+    if isinstance(mask, dict):
+        return any(terraform_has_unknown(value) for value in mask.values())
+    if isinstance(mask, list):
+        return any(terraform_has_unknown(value) for value in mask)
+    return mask is not False
+
+
 def verify_ssh_only(data, cidr):
-    if ipaddress.IPv4Network(cidr).prefixlen != 32:
+    network = ipaddress.IPv4Network(cidr)
+    if network.prefixlen != 32 or str(network) != cidr:
         raise ValueError('SSH recovery requires one IPv4 /32')
     expected = 'cloudru_evolution_compute_security_group_rule.ssh'
-    for item in data['resource_changes']:
-        change = item['change']
-        if change['actions'] == ['no-op']:
+    changes = [item for item in data['resource_changes'] if item['change']['actions'] != ['no-op']]
+    if len(changes) != 1 or changes[0]['address'] != expected or changes[0]['change']['actions'] != ['update']:
+        raise ValueError('SSH-only plan requires exactly one in-place update of ' + expected)
+    change = changes[0]['change']
+    before, after = change['before'], change['after']
+    if after.get('remote_ip_prefix') != cidr or before.get('remote_ip_prefix') == cidr:
+        raise ValueError('SSH-only plan must change remote_ip_prefix to the requested /32')
+    required = {'direction': 'TRAFFIC_DIRECTION_INGRESS', 'ether_type': 'ETHER_TYPE_IPV4',
+                'ip_protocol': 'IP_PROTOCOL_TCP', 'port_range': '22:22'}
+    if any(after.get(key) != value for key, value in required.items()) or not after.get('security_group_id'):
+        raise ValueError('SSH-only plan must keep the existing IPv4 TCP 22 ingress rule and group')
+
+    # Terraform omits wholly unknown attributes from "after" (or renders them null).
+    # Only these Cloud.ru refresh fields can be deferred; known values still compare normally.
+    refresh_fields = {'remote_security_group', 'security_group', 'status'}
+    deferred = set()
+    for key, mask in (change.get('after_unknown') or {}).items():
+        if not terraform_has_unknown(mask):
             continue
-        before, after = change.get('before') or {}, change.get('after') or {}
-        if (item['address'] != expected or change['actions'] != ['update']
-                or after.get('remote_ip_prefix') != cidr
-                or after.get('port_range') != '22:22' or after.get('ip_protocol') != 'IP_PROTOCOL_TCP'
-                or after.get('direction') != 'TRAFFIC_DIRECTION_INGRESS'
-                or any((change.get('after_unknown') or {}).values())
-                or any(before.get(k) != after.get(k) for k in before.keys() | after.keys() if k != 'remote_ip_prefix')):
-            raise ValueError('SSH-only plan refused changes beyond the existing TCP 22 source /32: ' + item['address'])
+        if key not in refresh_fields or mask is not True or after.get(key) is not None:
+            raise ValueError('SSH-only plan cannot verify field: ' + key)
+        deferred.add(key)
+    for key in (before.keys() | after.keys()) - deferred - {'remote_ip_prefix'}:
+        if before.get(key) != after.get(key):
+            raise ValueError('SSH-only plan would also change field: ' + key)
 
 
 def plan(state, ssh_only=False):

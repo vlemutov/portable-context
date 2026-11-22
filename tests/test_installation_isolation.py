@@ -20,7 +20,8 @@ class InstallationIsolationTests(unittest.TestCase):
     def test_ssh_only_plan_rejects_vm_changes_and_rule_expansion(self):
         ssh = {'address': 'cloudru_evolution_compute_security_group_rule.ssh'}
         before = {'remote_ip_prefix': '198.51.100.2/32', 'port_range': '22:22',
-                  'direction': 'TRAFFIC_DIRECTION_INGRESS', 'ip_protocol': 'IP_PROTOCOL_TCP'}
+                  'direction': 'TRAFFIC_DIRECTION_INGRESS', 'ip_protocol': 'IP_PROTOCOL_TCP',
+                  'ether_type': 'ETHER_TYPE_IPV4', 'security_group_id': 'sg-test'}
         cidr = '198.51.100.3/32'
         update = dict(ssh, change={'actions': ['update'], 'before': before,
                                    'after': dict(before, remote_ip_prefix=cidr)})
@@ -32,6 +33,61 @@ class InstallationIsolationTests(unittest.TestCase):
                 setup.verify_ssh_only({'resource_changes': changes}, cidr)
         with self.assertRaises(ValueError):
             setup.verify_ssh_only({'resource_changes': []}, '0.0.0.0/0')
+
+    def ssh_recovery_plan(self):
+        cidr = '198.51.100.3/32'
+        before = {'remote_ip_prefix': '198.51.100.2/32', 'port_range': '22:22',
+                  'direction': 'TRAFFIC_DIRECTION_INGRESS', 'ip_protocol': 'IP_PROTOCOL_TCP',
+                  'ether_type': 'ETHER_TYPE_IPV4', 'security_group_id': 'sg-test',
+                  'remote_security_group': None, 'security_group': {'id': 'sg-test', 'name': 'memory', 'status': 'CREATED'},
+                  'status': 'SECURITY_GROUP_RULE_STATUS_CREATED'}
+        unknown = dict.fromkeys(('remote_security_group', 'security_group', 'status'), True)
+        after = {key: value for key, value in before.items() if key not in unknown}
+        after['remote_ip_prefix'] = cidr
+        update = {'address': 'cloudru_evolution_compute_security_group_rule.ssh',
+                  'change': {'actions': ['update'], 'before': before, 'after': after, 'after_unknown': unknown}}
+        return cidr, {'resource_changes': [update, {'address': 'vm', 'change': {'actions': ['no-op']}}]}
+
+    def test_ssh_only_accepts_cloudru_provider_refresh(self):
+        cidr, plan = self.ssh_recovery_plan()
+        setup.verify_ssh_only(plan, cidr)
+        change = plan['resource_changes'][0]['change']
+        change['after'].update(dict.fromkeys(change['after_unknown']))
+        change['before']['timeouts'] = change['after']['timeouts'] = [{'update': '10m'}]
+        change['after_unknown']['timeouts'] = [{}]
+        setup.verify_ssh_only(plan, cidr)
+
+    def test_ssh_only_rejects_unknown_access_or_unlisted_fields(self):
+        for key in ('port_range', 'remote_ip_prefix', 'direction', 'ip_protocol', 'ether_type',
+                    'security_group_id', 'description'):
+            with self.subTest(key=key):
+                cidr, plan = self.ssh_recovery_plan()
+                plan['resource_changes'][0]['change']['after_unknown'][key] = True
+                with self.assertRaises(ValueError):
+                    setup.verify_ssh_only(plan, cidr)
+
+    def test_ssh_only_rejects_missing_binding_and_known_provider_field_change(self):
+        cidr, plan = self.ssh_recovery_plan()
+        change = plan['resource_changes'][0]['change']
+        del change['after_unknown']['status']
+        change['after']['status'] = 'DIFFERENT'
+        with self.assertRaises(ValueError):
+            setup.verify_ssh_only(plan, cidr)
+        change['after']['status'] = change['before']['status']
+        change['after']['security_group_id'] = 'other-group'
+        with self.assertRaises(ValueError):
+            setup.verify_ssh_only(plan, cidr)
+        for side in ('before', 'after'):
+            del change[side]['security_group_id']
+        with self.assertRaises(ValueError):
+            setup.verify_ssh_only(plan, cidr)
+
+    def test_ssh_only_requires_one_update(self):
+        cidr, plan = self.ssh_recovery_plan()
+        update, noop = plan['resource_changes']
+        for changes in ([noop], [update, update]):
+            with self.assertRaises(ValueError):
+                setup.verify_ssh_only({'resource_changes': changes}, cidr)
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
