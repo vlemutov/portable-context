@@ -855,8 +855,8 @@ def main(argv=None):
         from timeweb_payment import review
         result=review(state,args.scope,args.hours,args.monthly_extras,args.autopay,args.approve_plan)
     elif args.command == 'timeweb-auto-plan':
-        from timeweb_auto import prepare
-        result=prepare(state,args.location,args.max_monthly_total,args.monthly_extras,args.max_attempts,args.timeout,args.family,args.zone)
+        import timeweb_auto
+        result=timeweb_auto.prepare(state,args.location,args.max_monthly_total,args.monthly_extras,args.max_attempts,args.timeout,args.family,args.zone)
     elif args.command == 'timeweb-auto-run':
         from timeweb_auto import execute
         result=execute(state,args.approve_plan,args.payment_reviewed)

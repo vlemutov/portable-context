@@ -155,6 +155,28 @@ class DeploymentTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             setup.prepare(self.root, 'cloudru')
 
+    def test_init_cli_creates_and_reuses_state_for_each_mode(self):
+        for mode in ('cloudru', 'timeweb', 'server'):
+            with self.subTest(mode=mode):
+                state = self.root / mode
+                state.mkdir()
+                note = state / 'blocker-init.md'
+                note.write_text('Previous attempt', encoding='utf-8')
+                command = [sys.executable, str(setup.ROOT / 'deploy/setup.py'), '--state', str(state),
+                           'init', '--mode', mode]
+                for attempt in range(2):
+                    run = subprocess.run(command, capture_output=True, text=True)
+                    self.assertEqual(run.returncode, 0, run.stderr)
+                    config = json.loads(run.stdout)
+                    self.assertEqual(config['mode'], mode)
+                    self.assertEqual(setup.read(state / 'deployment.json'), config)
+                    if attempt == 0:
+                        first = config
+                    else:
+                        self.assertEqual(config, first)
+                self.assertEqual((state / 'terraform.rc').is_file(), mode == 'cloudru')
+                self.assertEqual(note.read_text(encoding='utf-8'), 'Previous attempt')
+
     def test_reject_destructive_cloud_plan(self):
         with self.assertRaises(ValueError):
             setup.summarize_plan({'resource_changes': [{'address': 'disk.memory', 'change': {'actions': ['delete', 'create']}}]})
