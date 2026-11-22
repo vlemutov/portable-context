@@ -15,6 +15,15 @@ variables {
 run "cloud_init_and_access" {
   command = plan
   assert {
+    condition = (
+      cloudru_evolution_compute_subnet.memory.default &&
+      cloudru_evolution_compute_subnet.memory.subnet_address == "10.77.0.0/24" &&
+      cloudru_evolution_compute_subnet.memory.zone.name == var.zone &&
+      cloudru_evolution_compute_disk.memory.zone.name == var.zone
+    )
+    error_message = "Create the primary subnet in the installation zone alongside its boot disk."
+  }
+  assert {
     condition     = yamldecode(base64decode(cloudru_evolution_compute_vm.memory.cloud_init_userdata)).ssh_pwauth == false
     error_message = "Cloud-init must be base64-encoded and disable SSH passwords."
   }

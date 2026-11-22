@@ -60,9 +60,11 @@ resource "cloudru_evolution_compute_subnet" "memory" {
   vpc_id         = cloudru_evolution_vpc_vpc.memory.id
   subnet_address = "10.77.0.0/24"
   routed_network = true
-  default        = false
+  default        = true
   # The API returns DNS addresses in sorted order; the provider models them as a list.
   dns_servers = { value = sort(var.dns_servers) }
+  # Set the zonal default on creation; preserve the current role on existing installations.
+  lifecycle { ignore_changes = [default] }
 }
 resource "cloudru_evolution_compute_security_group" "memory" {
   project_id = var.project_id
