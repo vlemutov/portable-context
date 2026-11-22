@@ -15,6 +15,10 @@ variables {
 run "cloud_init_and_access" {
   command = plan
   assert {
+    condition     = yamldecode(base64decode(cloudru_evolution_compute_vm.memory.cloud_init_userdata)).users[0].lock_passwd
+    error_message = "Preserve original cloud-init for existing installations without a console password."
+  }
+  assert {
     condition = (
       cloudru_evolution_compute_subnet.memory.default &&
       cloudru_evolution_compute_subnet.memory.subnet_address == "10.77.0.0/24" &&
@@ -38,5 +42,23 @@ run "cloud_init_and_access" {
   assert {
     condition     = cloudru_evolution_obs_bucket.backups.versioning == true
     error_message = "Backup bucket versioning must be enabled."
+  }
+}
+
+run "new_vm_console_access" {
+  command = plan
+  variables {
+    console_password_hash = "synthetic-console-hash-for-template-test"
+  }
+  assert {
+    condition = (
+      yamldecode(base64decode(cloudru_evolution_compute_vm.memory.cloud_init_userdata)).users[0].hashed_passwd == var.console_password_hash &&
+      !yamldecode(base64decode(cloudru_evolution_compute_vm.memory.cloud_init_userdata)).users[0].lock_passwd &&
+      !yamldecode(base64decode(cloudru_evolution_compute_vm.memory.cloud_init_userdata)).ssh_pwauth &&
+      yamldecode(base64decode(cloudru_evolution_compute_vm.memory.cloud_init_userdata)).disable_root &&
+      yamldecode(base64decode(cloudru_evolution_compute_vm.memory.cloud_init_userdata)).write_files[1].content == var.ssh_public_key &&
+      yamldecode(base64decode(cloudru_evolution_compute_vm.memory.cloud_init_userdata)).bootcmd[0][6] == yamldecode(base64decode(cloudru_evolution_compute_vm.memory.cloud_init_userdata)).write_files[0].path
+    )
+    error_message = "New guests require console-only password access and a boot check for their installation key."
   }
 }

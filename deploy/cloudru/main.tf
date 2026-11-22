@@ -22,6 +22,11 @@ variable "zone" { type = string }
 variable "image_id" { type = string }
 variable "flavor" { type = string }
 variable "ssh_public_key" { type = string }
+variable "console_password_hash" {
+  type      = string
+  sensitive = true
+  default   = null
+}
 variable "ssh_cidr" { type = string }
 variable "bucket" { type = string }
 variable "dns_servers" {
@@ -120,27 +125,40 @@ resource "cloudru_evolution_compute_disk" "memory" {
   image      = { id = var.image_id }
   lifecycle { prevent_destroy = true }
 }
-resource "cloudru_evolution_compute_vm" "memory" {
-  project_id         = var.project_id
-  name               = var.name
-  zone               = { name = var.zone }
-  flavor             = { name = var.flavor }
-  network_interfaces = [{ id = cloudru_evolution_compute_interface.memory.id }]
-  disks              = [{ id = cloudru_evolution_compute_disk.memory.id }]
-  cloud_init_userdata = base64encode(join("\n", ["#cloud-config", yamlencode({
-    users = [{
+locals {
+  console_check = {
+    write_files = [
+      { path = "/usr/local/lib/portable-context/boot-check.py", permissions = "0644", content = replace(file("${path.module}/boot-check.py"), "\r\n", "\n") },
+      { path = "/etc/portable-context/expected-key.pub", permissions = "0644", content = var.ssh_public_key }
+    ]
+    # Queue the probe each boot after user/key provisioning, independently of cloud-final and apt.
+    bootcmd = [["systemd-run", "--no-block", "--collect", "--unit=pc-boot-check",
+      "--property=After=cloud-init.service cloud-init-network.service", "/usr/bin/python3",
+    "/usr/local/lib/portable-context/boot-check.py"]]
+  }
+  memory_userdata = base64encode(join("\n", ["#cloud-config", yamlencode(merge({
+    users = [merge({
       name                = "pcadmin"
       groups              = "sudo"
       shell               = "/bin/bash"
       sudo                = ["ALL=(ALL) NOPASSWD:ALL"]
-      lock_passwd         = true
+      lock_passwd         = var.console_password_hash == null
       ssh_authorized_keys = [var.ssh_public_key]
-    }]
+    }, var.console_password_hash == null ? {} : { hashed_passwd = var.console_password_hash })]
     ssh_pwauth     = false
     disable_root   = true
     package_update = true
     packages       = ["python3", "python3-venv", "python3-pip", "cron"]
-  })]))
+  }, { for k, v in local.console_check : k => v if var.console_password_hash != null }))]))
+}
+resource "cloudru_evolution_compute_vm" "memory" {
+  project_id          = var.project_id
+  name                = var.name
+  zone                = { name = var.zone }
+  flavor              = { name = var.flavor }
+  network_interfaces  = [{ id = cloudru_evolution_compute_interface.memory.id }]
+  disks               = [{ id = cloudru_evolution_compute_disk.memory.id }]
+  cloud_init_userdata = local.memory_userdata
   depends_on = [cloudru_evolution_compute_external_ip.memory,
     cloudru_evolution_compute_security_group_rule.outbound_tcp,
   cloudru_evolution_compute_security_group_rule.outbound_udp]

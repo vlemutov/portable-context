@@ -15,7 +15,24 @@ jobs:
         with:
           python-version: '3.12'
       - name: Bootstrap pinned tools and validate provider schema
+        if: matrix.os != 'ubuntu-24.04'
         run: python deploy/validate_client.py
+      - name: Validate Terraform and boot the provisioned Ubuntu cloud image twice
+        if: matrix.os == 'ubuntu-24.04'
+        timeout-minutes: 20
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils cloud-image-utils
+          python -m pip install -e '.[deployment]' pexpect
+          cd "$RUNNER_TEMP"
+          base=https://cloud-images.ubuntu.com/noble/current
+          img=noble-server-cloudimg-amd64.img
+          curl -fsS --retry 3 -O "$base/$img"
+          curl -fsS --retry 3 -O "$base/SHA256SUMS"
+          grep -E " [*]?$img$" SHA256SUMS | sha256sum -c -
+          if test -e /dev/kvm; then sudo setfacl -m "u:$(id -un):rw" /dev/kvm; fi
+          cd "$GITHUB_WORKSPACE"
+          python deploy/validate_client.py --guest-image "$RUNNER_TEMP/$img"
       - name: Exercise actual host route lifecycle (Windows)
         if: runner.os == 'Windows'
         run: python deploy/smoke_network.py

@@ -116,12 +116,30 @@ class InstallationIsolationTests(unittest.TestCase):
             setup.render(second, setup.read(second / 'deployment.json'))
         self.assertEqual(before, {p.relative_to(first): p.read_bytes() for p in first.rglob('*') if p.is_file()})
         a, b = [setup.read(p / 'terraform/deployment.auto.tfvars.json') for p in (first, second)]
-        for field in ('project_id', 'tenant_id', 'name', 'bucket', 'ssh_public_key'):
+        for field in ('project_id', 'tenant_id', 'name', 'bucket', 'ssh_public_key', 'console_password_hash'):
             self.assertNotEqual(a[field], b[field])
+        credential = setup.read(first / 'console-login.json')
+        second_credential = setup.read(second / 'console-login.json')
+        self.assertNotEqual(credential['password'], second_credential['password'])
+        self.assertFalse(credential['password'] in json.dumps(a))
+        config = setup.read(first / 'deployment.json')
+        self.assertEqual(setup.console_password_hash(first, config), a['console_password_hash'])
+        (first / 'console-login.json').unlink()
+        with self.assertRaisesRegex(ValueError, 'Restore console-login.json'):
+            setup.console_password_hash(first, config)
         self.assertEqual(setup.prepare(first, 'cloudru')['name'], a['name'])
         self.assertEqual(setup.command_env(first, False)['TF_CLI_CONFIG_FILE'], str(first / 'terraform.rc'))
         self.assertNotEqual(Workspace(Store(first / 'memory')).describe()['workspace_id'],
                             Workspace(Store(second / 'memory')).describe()['workspace_id'])
+
+    def test_legacy_vm_gets_no_new_local_console_password(self):
+        state = self.new('existing', '11111111-1111-4111-8111-111111111111')
+        config = setup.read(state / 'deployment.json')
+        (state / 'terraform').mkdir()
+        setup.save(state / 'terraform/terraform.tfstate', {'resources': [{
+            'type': 'cloudru_evolution_compute_vm', 'name': 'memory', 'mode': 'managed', 'instances': [{}]}]})
+        self.assertIsNone(setup.console_password_hash(state, config))
+        self.assertFalse((state / 'console-login.json').exists())
 
     def test_configure_cannot_retarget_used_state_and_does_not_write_on_failure(self):
         state = self.new('first', '11111111-1111-4111-8111-111111111111')

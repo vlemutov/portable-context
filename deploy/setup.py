@@ -1,6 +1,6 @@
 """Owner-operated installer: prepare -> catalog -> plan -> apply -> install -> check.
 
-Run from a downloaded repository with Python 3.11+. No third-party dependencies for planning.
+Run from a downloaded repository with Python 3.11+ and the deployment extra.
 Cloud credentials and Terraform state live outside the repository in --state.
 """
 from __future__ import annotations
@@ -15,10 +15,12 @@ import os
 import platform
 from pathlib import Path
 import re
+import secrets
 import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 import urllib.request
@@ -246,15 +248,64 @@ def ensure_key(state):
     return key
 
 
+def console_password_hash(state, config):
+    """Persist the first-boot credential before planning. Never mint a password for a live VM."""
+    path = state / 'console-login.json'
+    binding = {'project_id': config['project_id'], 'installation': config['name'], 'login': 'pcadmin'}
+    if not path.exists():
+        tfvars = state / 'terraform/deployment.auto.tfvars.json'
+        if tfvars.exists() and read(tfvars).get('console_password_hash'):
+            raise ValueError('Restore console-login.json from this private state backup before replanning')
+        tfstate = state / 'terraform/terraform.tfstate'
+        if config.get('host') or (tfstate.exists() and any(
+                r.get('mode') == 'managed' and r['type'] == 'cloudru_evolution_compute_vm' and
+                r['name'] == 'memory' and r.get('instances') for r in read(tfstate)['resources'])):
+            return None
+    try:
+        import bcrypt
+    except ImportError:
+        raise ValueError('Install the deployment extra with pip install ".[deployment]" in the installer environment') from None
+    if not path.exists():
+        password = secrets.token_urlsafe(24)
+        encoded = bcrypt.hashpw(password.encode('ascii'), bcrypt.gensalt()).decode('ascii')
+        # Publish a complete owner-only file without overwriting a concurrent plan's credential.
+        fd, tmp = tempfile.mkstemp(dir=state, prefix='.console-login-')
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+                json.dump(dict(binding, password=password, password_hash=encoded), stream)
+                stream.flush()
+                os.fsync(stream.fileno())
+            try:
+                if os.name == 'nt':
+                    os.rename(tmp, path)  # Windows refuses to replace an existing destination.
+                else:
+                    os.link(tmp, path)
+            except FileExistsError:
+                pass
+        finally:
+            Path(tmp).unlink(missing_ok=True)
+    credential = read(path)
+    try:
+        valid = (all(credential.get(k) == v for k, v in binding.items())
+                 and bcrypt.checkpw(credential['password'].encode(), credential['password_hash'].encode()))
+    except (AttributeError, KeyError, TypeError, ValueError):
+        valid = False
+    if not valid:
+        raise ValueError('Invalid console-login.json for this deployment; restore the original private file')
+    return credential['password_hash']
+
+
 def render(state, config):
     validate_config(config)
     folder = state / 'terraform'
     folder.mkdir(exist_ok=True)
     shutil.copyfile(TEMPLATE / 'main.tf', folder / 'main.tf')
+    shutil.copyfile(TEMPLATE / 'boot-check.py', folder / 'boot-check.py')
     key = ensure_key(state)
     values = {k: config[k] for k in ('project_id', 'tenant_id', 'name', 'zone', 'image_id',
                                     'flavor', 'ssh_cidr', 'bucket', 'disk_gb')}
     values['ssh_public_key'] = key.with_suffix('.pub').read_text().strip()
+    values['console_password_hash'] = console_password_hash(state, config)
     values['storage_class'] = config.get('storage_class', 'STANDARD')
     values['dns_servers'] = config.get('dns_servers', ['77.88.8.8', '77.88.8.1'])
     save(folder / 'deployment.auto.tfvars.json', values)
@@ -262,8 +313,10 @@ def render(state, config):
 
 def fingerprint(state):
     files = sorted(p for p in (state / 'terraform').iterdir()
-                   if p.name.endswith(('.tf', '.tf.json', '.tfvars.json')) or p.name == '.terraform.lock.hcl')
+                   if p.name.endswith(('.tf', '.tf.json', '.tfvars.json')) or p.name in ('.terraform.lock.hcl', 'boot-check.py'))
     files += [state / 'deployment.json', state / 'terraform.rc']
+    if (state / 'console-login.json').exists():
+        files.append(state / 'console-login.json')
     return hashlib.sha256(''.join(p.name + ':' + sha(p) for p in files).encode()).hexdigest()
 
 
@@ -343,6 +396,8 @@ def plan(state, ssh_only=False):
               'pricing_url': 'https://cloud.ru/calculator',
               'quotas':quotas,
               'next': 'Review changes and current costs; apply only with --approve-plan <plan_sha256>.'}
+    if (state / 'console-login.json').is_file():
+        report['console_login_file'] = str(state / 'console-login.json')
     save(state / 'plan-review.json', report)
     return report
 
