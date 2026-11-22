@@ -54,11 +54,25 @@ def installation_status(state):
     stage=journal.get('stage','not_started')
     ambiguous=[name for name,value in journal.get('intent',{}).items() if name in ('registry','container')
                and value.get('submitted') and not value.get('resource_id')]
+    estimate = read(state/'owner-preflight.json') if (state/'owner-preflight.json').is_file() else {}
+    matches = estimate and all(estimate.get(k) == deployment.get(k) for k in ('project_id','zone','flavor','disk_gb'))
+    ready = (state/'https-installed.json').is_file()
+    next_step = 'Resume install --https using the approved HTTPS plan in this state.'
+    if ready and stage == 'complete':
+        next_step = 'For first enrollment open owner-page, then client-check in this state.'
+    elif ambiguous:
+        next_step = 'Inspect the existing resource and use https-reconcile before resuming.'
+    elif not deployment.get('host'):
+        next_step = 'Inspect this state and existing cloud resources; review the infrastructure plan before applying.'
     return {'deployment':deployment['name'],'project_id':deployment.get('project_id'),
         'workspace_id':installed.get('memory',{}).get('workspace_id'), 'stage':stage,
         'completed':list(journal.get('completed',{})), 'last_error':journal.get('last_error'),
         'ambiguous_creation':bool(ambiguous),'ambiguous_stages':ambiguous,
-        'next':'Preserve this state. Resolve connectivity/quota errors; resume install --https. If creation reply was lost, review resource ID and use https-reconcile. Never init a replacement.'}
+        'vm_recorded':bool(deployment.get('host')), 'memory_installed':bool(installed.get('memory')),
+        'https_receipt':ready, 'state':str(state),
+        'cost_estimate':({k:estimate.get(k) for k in ('base_hourly_rub','base_720h_rub','checked_at','variable_or_additional')}
+                         if matches else 'No matching owner quote; check current project billing.'),
+        'next':next_step}
 
 
 def plan(state, options=None):

@@ -20,6 +20,8 @@ import re
 import socket
 import ssl
 import subprocess
+import struct
+import tempfile
 import time
 
 CLOUD_HOSTS = ('console.cloud.ru', 'iam.api.cloud.ru', 'compute.api.cloud.ru',
@@ -33,13 +35,17 @@ def read(path):
 
 
 def save(path, data):
-    tmp = path.with_suffix('.new')
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
-    tmp.chmod(0o600)
-    if os.name != 'nt' and os.geteuid() == 0:
-        owner = path.parent.stat()
-        os.chown(tmp, owner.st_uid, owner.st_gid)
-    tmp.replace(path)
+    fd, tmp = tempfile.mkstemp(dir=path.parent)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as out:
+            json.dump(data, out, ensure_ascii=False, indent=2)
+            out.write('\n')
+            if os.name != 'nt' and os.geteuid() == 0:
+                owner = path.parent.stat()
+                os.fchown(out.fileno(), owner.st_uid, owner.st_gid)
+        os.replace(tmp, path)
+    finally:
+        Path(tmp).unlink(missing_ok=True)
 
 
 def digest(data):
@@ -395,33 +401,51 @@ def ensure_ssh_path(state, record, port):
 
 def measure_egress(state):
     """Opt-in: direct TLS socket pinned to the physical device and local address."""
-    if platform.system() != 'Linux':
-        raise ValueError('Physical SSH egress verification requires Linux')
+    system = platform.system()
     require_admin()
     config = read(state / 'deployment.json')
     endpoint, = targets(config, 'server', state)
-    network = snapshot('Linux')
-    uid = state.stat().st_uid
+    network = snapshot(system)
     if len(endpoint['addresses']) != 1:
         raise ValueError('SSH egress measurement requires one VM IPv4')
     vm = endpoint['addresses'][0]
-    actual = tcp_route(vm, endpoint['port'], uid)
-    matches = [c for c in network['candidates'] if physical_path(actual, c)]
+    if system == 'Linux':
+        actual = tcp_route(vm, endpoint['port'], state.stat().st_uid)
+        matches = [c for c in network['candidates'] if physical_path(actual, c)]
+    elif system == 'Windows':
+        script = (f"$r=Find-NetRoute -RemoteIPAddress '{ipv4(vm)}'; "
+                  "$r | Where-Object DestinationPrefix | Select-Object InterfaceIndex,NextHop | ConvertTo-Json -Compress")
+        route = json.loads(run(powershell(script)))
+        matches = [c for c in network['candidates'] if c == {
+            'interface': str(route['InterfaceIndex']), 'gateway': route['NextHop']}]
+    elif system == 'Darwin':
+        route = run(['/sbin/route', '-n', 'get', vm])
+        fields = dict(re.findall(r'^\s*(interface|gateway):\s*(\S+)', route, re.M))
+        matches = [c for c in network['candidates'] if c == fields]
+    else:
+        raise ValueError('Unsupported operating system')
     if len(matches) != 1:
         raise ValueError('SSH path is not verified through one physical gateway')
     physical = matches[0]
     host = 'api.ipify.org'
     peer = socket.getaddrinfo(host, 443, socket.AF_INET, socket.SOCK_STREAM)[0][4][0]
-    path = tcp_route(peer, 443, os.geteuid(), physical['interface'])
-    if not actual.get('prefsrc'):
-        raise ValueError('Kernel did not identify the local IPv4 used for SSH')
-    local = ipv4(actual['prefsrc'])
-    if not physical_path(path, physical) or path.get('prefsrc') != local:
-        raise ValueError('Cannot verify the IP reflector uses the same physical gateway and source as SSH')
+    if system == 'Linux':
+        path = tcp_route(peer, 443, os.geteuid(), physical['interface'])
+        if not actual.get('prefsrc'):
+            raise ValueError('Kernel did not identify the local IPv4 used for SSH')
+        local = ipv4(actual['prefsrc'])
+        if not physical_path(path, physical) or path.get('prefsrc') != local:
+            raise ValueError('Cannot verify the IP reflector uses the same physical gateway and source as SSH')
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.settimeout(6)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, physical['interface'].encode() + b'\0')
-        sock.bind((local, 0))
+        if system == 'Linux':
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, physical['interface'].encode() + b'\0')
+            sock.bind((local, 0))
+        elif system == 'Windows':
+            # Winsock IP_UNICAST_IF uses a network-byte-order interface index.
+            sock.setsockopt(socket.IPPROTO_IP, 31, struct.pack('!I', int(physical['interface'])))
+        else:
+            sock.setsockopt(socket.IPPROTO_IP, 25, socket.if_nametoindex(physical['interface']))  # Darwin IP_BOUND_IF
         sock.connect((peer, 443))
         with ssl.create_default_context().wrap_socket(sock, server_hostname=host) as tls:
             tls.sendall(b'GET / HTTP/1.1\r\nHost: api.ipify.org\r\nConnection: close\r\n\r\n')
@@ -562,7 +586,8 @@ def main(argv=None):
     p.add_argument('--approve-plan', required=True)
     p = sub.add_parser('remove')
     p.add_argument('--scope', choices=('cloud', 'server', 'all'), default='all')
-    sub.add_parser('ssh-egress', help='Linux: measure public IPv4 using api.ipify.org over the verified physical SSH path')
+    p = sub.add_parser('ssh-egress', help='Measure public IPv4 using api.ipify.org over the physical SSH interface')
+    p.add_argument('--save-for-plan', action='store_true', help='Record this measurement for ssh-recover --plan-source')
     args = parser.parse_args(argv)
     state = args.state.expanduser().resolve()
     # Do not chmod/chown an existing user's deployment when invoked through sudo.
@@ -574,6 +599,9 @@ def main(argv=None):
         result = make_plan(state, args.scope, args.interface, args.gateway, args.ssh_policy)
     elif args.command == 'ssh-egress':
         result = measure_egress(state)
+        if args.save_for_plan:
+            save(state/'ssh-egress.json', {**result, 'measured_at': time.time(),
+                                          'config': digest(read(state/'deployment.json'))})
     elif args.command == 'apply':
         result = apply(state, args.approve_plan)
     else:

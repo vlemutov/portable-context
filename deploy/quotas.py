@@ -96,8 +96,36 @@ def check(state, requirements=None):
     except (CloudAPIError,ValueError,OSError,KeyError) as error:
         result['reason']=error.reason if isinstance(error,CloudAPIError) else 'quota_read_unavailable_or_schema_changed'
         if isinstance(error,CloudAPIError):result['http_status']=error.status
+    if result.get('http_status') == 403:
+        result['reason'] = 'quota_read_forbidden'
+        result['next'] = ('Квоты неизвестны. В кабинете Cloud.ru откройте Администрирование → Квоты, '
+                          'сверьте колонку остатка для проекта и его организации. Запишите проверку '
+                          'и ставки из калькулятора через plan --preflight-file FILE.')
     save(state/'quota-report.json',result)
     return result
+
+
+def owner_estimate(config, evidence):
+    """The rates are contract-specific hourly totals (including VAT) for this exact selection."""
+    for field in ('project_id', 'zone', 'flavor', 'disk_gb'):
+        if config[field] != evidence.get(field):
+            raise ValueError('Manual preflight does not match deployment: ' + field)
+    for field in ('quota_source', 'remaining', 'price_source', 'checked_at'):
+        if not isinstance(evidence.get(field), str) or not evidence[field].strip():
+            raise ValueError('Manual preflight requires ' + field)
+    rates = evidence.get('hourly_rub_including_vat', {})
+    if not isinstance(rates, dict) or set(rates) != {'vm', 'disk', 'ipv4'}:
+        raise ValueError('Supply hourly RUB totals for vm, disk and ipv4 including VAT')
+    values = [finite(rate) for rate in rates.values()]
+    if any(value is None for value in values):
+        raise ValueError('Rates must be finite nonnegative numbers')
+    hourly = sum(values)
+    return {key: evidence[key] for key in ('project_id', 'zone', 'flavor', 'disk_gb', 'checked_at',
+            'quota_source', 'remaining', 'price_source', 'hourly_rub_including_vat')} | {
+        'base_hourly_rub': str(hourly), 'base_720h_rub': format(hourly * 720, '.2f'),
+        's3_discrepancy': evidence.get('s3_discrepancy'),
+        'variable_or_additional': ['S3 storage, requests and traffic', 'registry and HTTPS container usage'],
+        'quota_evidence': 'owner observation; independent of API status'}
 
 
 def review_key(state,phase):

@@ -48,6 +48,12 @@ An explicit request to create an additional memory follows the new-memory route 
 private installation state and separate cloud project; preserve existing connections and resources.
 See onboarding for the distinction between a second installation and reconnecting the first.
 
+At an installation stop on either provider, tell the owner what already works, what is waiting,
+which recorded resources may still incur charges, and the exact next command with the same
+private state path. Distinguish a base estimate from actual charges. For a Cloud.ru SSH
+timeout route to [network recovery](references/network.md); for owner enrollment or client
+acceptance use [connection](references/connection.md).
+
 When unknown, ask in the user's language: “Вы уже пользовались Portable Context и у вас есть
 настроенная память, или нужно создать новую? Подключить существующую / Создать новую /
 Не уверен — помоги разобраться”. Ask one necessary question at a time; operate tools yourself

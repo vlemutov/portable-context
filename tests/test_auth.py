@@ -1,8 +1,11 @@
 import importlib.util
+import json
 import socket
 import tempfile
 import threading
 import unittest
+from pathlib import Path
+import sys
 
 from portable_context.auth import BearerAuth
 
@@ -19,7 +22,7 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
         from portable_context.mcp_server import build_server
 
         token = 'synthetic-http-mcp-token-123456789'
-        with tempfile.TemporaryDirectory() as temp, anyio.fail_after(30):
+        with tempfile.TemporaryDirectory() as temp, anyio.fail_after(90):
             sock = socket.socket()
             sock.bind(('127.0.0.1', 0))
             port = sock.getsockname()[1]
@@ -42,6 +45,19 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
                             result = await session.call_tool('memory_status', {})
                             self.assertFalse(result.is_error, str(result))
                             self.assertIn('workspace_id', str(result.content))
+                            sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'deploy'))
+                            try:
+                                from client_check import session_check
+                                workspace = json.loads(result.content[0].text)['workspace_id']
+                                with self.assertRaisesRegex(ValueError, 'Unexpected workspace'):
+                                    await session_check(session, 'another-workspace', True)
+                                first = await session_check(session, workspace, False)
+                                self.assertEqual(first['stats_before']['messages'], 0)
+                                report = await session_check(session, workspace, True)
+                                self.assertEqual(report['stats_after']['messages'], 2)
+                                self.assertEqual(report['roundtrip']['imports'][1]['counts']['unchanged'], 2)
+                            finally:
+                                sys.path.pop(0)
             finally:
                 server.should_exit = True
                 await anyio.to_thread.run_sync(lambda: thread.join(timeout=5))

@@ -372,8 +372,14 @@ def verify_ssh_only(data, cidr):
             raise ValueError('SSH-only plan would also change field: ' + key)
 
 
-def plan(state, ssh_only=False):
+def plan(state, ssh_only=False, preflight_file=None):
     config = read(state / 'deployment.json')
+    estimate = None
+    if preflight_file:
+        if config['mode'] != 'cloudru' or ssh_only:
+            raise ValueError('Manual quota and price review applies to Cloud.ru infrastructure plans')
+        from quotas import owner_estimate
+        estimate = owner_estimate(config, read(preflight_file))
     if ssh_only and (config['mode'] != 'cloudru' or not config.get('host')
                      or not (state / 'terraform/terraform.tfstate').is_file()):
         raise ValueError('SSH recovery requires the existing Cloud.ru VM and its Terraform state')
@@ -398,6 +404,14 @@ def plan(state, ssh_only=False):
               'next': 'Review changes and current costs; apply only with --approve-plan <plan_sha256>.'}
     if (state / 'console-login.json').is_file():
         report['console_login_file'] = str(state / 'console-login.json')
+    if estimate:
+        report['owner_preflight'] = estimate
+        save(state / 'owner-preflight.json', {**estimate, 'plan_sha256': report['plan_sha256']})
+    if ssh_only:
+        rule = next(r['change'] for r in data['resource_changes']
+                    if r['address'] == 'cloudru_evolution_compute_security_group_rule.ssh')
+        report['ssh_source_change'] = {'before': rule['before']['remote_ip_prefix'],
+                                       'after': rule['after']['remote_ip_prefix']}
     save(state / 'plan-review.json', report)
     return report
 
@@ -780,7 +794,14 @@ def main(argv=None):
     p.add_argument('--project-id', required=True)
     p = sub.add_parser('plan')
     p.add_argument('--ssh-only', action='store_true', help='Allow only an in-place SSH source /32 update on an existing Cloud.ru VM')
+    p.add_argument('--preflight-file', type=Path, help='Attach owner quota observations and current hourly rates to this Cloud.ru plan')
     sub.add_parser('check-ssh', help='Authenticate to the recorded VM and execute true')
+    p = sub.add_parser('ssh-recover', help='Diagnose or plan scoped recovery of the existing Cloud.ru VM')
+    group = p.add_mutually_exclusive_group()
+    group.add_argument('--plan-route', action='store_true')
+    group.add_argument('--plan-source', action='store_true')
+    p.add_argument('--interface')
+    p.add_argument('--gateway')
     p = sub.add_parser('apply')
     p.add_argument('--approve-plan', required=True, help='Exact SHA-256 of reviewed paid infrastructure plan')
     p=sub.add_parser('install')
@@ -790,7 +811,12 @@ def main(argv=None):
     p=sub.add_parser('https-plan',help='Review cloud HTTPS resources and costs (Timeweb uses its combined plan)')
     p.add_argument('--file',type=Path,help='Optional non-secret edge options')
     sub.add_parser('owner-login',help='Write a new private one-time owner enrollment code locally')
+    sub.add_parser('owner-page', help='Open the private first-login page on this computer; Ctrl+C to close')
     sub.add_parser('https-check',help='Check public authentication boundary and server identity')
+    p = sub.add_parser('client-check', help='Verify owner OAuth, workspace identity and read access from this computer')
+    group = p.add_mutually_exclusive_group()
+    group.add_argument('--preview-write', action='store_true', help='Show the retained synthetic test data without connecting')
+    group.add_argument('--write-test', action='store_true', help='Import the advertised fixture twice and verify its messages and bytes')
     p=sub.add_parser('oauth-client',help='Register the supported callback URLs on the existing OAuth client')
     p.add_argument('--client',choices=('claude-code','cursor','claude-cowork','chatgpt-work'),required=True)
     p.add_argument('--callback-url',help='For chatgpt-work: the exact redirect URI shown on your MCP connection')
@@ -899,13 +925,16 @@ def main(argv=None):
     elif args.command == 'discover':
         result = discover(state, args.project_id)
     elif args.command == 'plan':
-        result = plan(state, ssh_only=args.ssh_only)
+        result = plan(state, ssh_only=args.ssh_only, preflight_file=args.preflight_file)
     elif args.command == 'check-ssh':
         config = read(state / 'deployment.json')
         response = ssh_read(ssh_args(state, config), 'true', label='SSH login', attempts=1)
         if response.returncode:
             raise ValueError('Authenticated SSH command failed')
         result = {'ssh': 'authenticated', 'host': config['host']}
+    elif args.command == 'ssh-recover':
+        from ssh_recovery import recover
+        result = recover(state, args)
     elif args.command == 'apply':
         result = apply(state, args.approve_plan)
     elif args.command == 'install':
@@ -930,10 +959,24 @@ def main(argv=None):
     elif args.command == 'owner-login':
         from https_setup import owner_login
         result=owner_login(state)
+        save(state/'owner-enrollment.json', result)
+    elif args.command == 'owner-page':
+        from owner_page import open_page
+        result = open_page(state)
     elif args.command == 'https-check':
         from https_setup import check_public,remote,connection_receipt
         receipt=connection_receipt(state)
         result={'server':remote(state,'check',receipt['origin']),'public':check_public(receipt['origin'])}
+    elif args.command == 'client-check':
+        import asyncio
+        from client_check import PREVIEW, run
+        if args.preview_write:
+            result = {'writes': PREVIEW, 'next': 'client-check --write-test'}
+        else:
+            try:
+                result = asyncio.run(run(state, args.write_test))
+            except ImportError as exc:
+                raise ValueError('Install the local MCP client dependency: python -m pip install -e ".[mcp]"') from exc
     elif args.command == 'oauth-client':
         from https_setup import desktop_client
         result=desktop_client(state,args.client,args.callback_url)

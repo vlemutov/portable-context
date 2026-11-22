@@ -21,6 +21,98 @@ class ResilienceTests(unittest.TestCase):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
         self.state=Path(self.tmp.name)
 
+    def test_contract_specific_estimate_and_unverified_quota(self):
+        config = dict(mode='cloudru', project_id='test', flavor='small', zone='zone1', disk_gb=40)
+        setup.save(self.state/'deployment.json', config)
+        with patch.object(cloud.CloudAPI, 'organization', side_effect=cloud.CloudAPIError(403, 'GET', 'unclassified')), patch.object(cloud.CloudAPI, '__init__', return_value=None):
+            report = quotas.check(self.state)
+        self.assertEqual((report['status'], report['reason']), ('unknown', 'quota_read_forbidden'))
+        review = dict(config, checked_at='2026-11-22', quota_source='owner console', remaining='VM 1',
+                      price_source='contract', hourly_rub_including_vat={'vm':'0.49511666', 'disk':'0.6344', 'ipv4':'0.2074'},
+                      s3_discrepancy='quota 1 / inventory 0')
+        evidence = quotas.owner_estimate(config, review)
+        self.assertEqual(evidence['base_720h_rub'], '962.58')
+        self.assertEqual(evidence['s3_discrepancy'], review['s3_discrepancy'])
+        with self.assertRaises(ValueError):
+            quotas.owner_estimate(dict(config, disk_gb=80), review)
+
+    def test_owner_page_uses_recorded_origin_and_hides_expired_code(self):
+        import owner_page
+        import os
+        login = self.state/'owner-login-test.json'
+        origin = 'https://test.example'
+        setup.save(login, {'login_url':origin + '/login/alternative/code?redirect=/settings/account',
+                           'expires_in_minutes':20, 'code':'local-test-only'})
+        pointer = {'private_file':str(login)}
+        page = owner_page.render(self.state, origin, pointer, 'nonce')
+        self.assertIn(b'local-test-only', page)
+        with self.assertRaises(ValueError):
+            owner_page.render(self.state, 'https://other.example', pointer, 'nonce')
+        os.utime(login, (1, 1))
+        self.assertNotIn(b'local-test-only', owner_page.render(self.state, origin, pointer, 'nonce'))
+
+    def test_stale_measurement_cannot_start_an_ssh_source_plan(self):
+        import ssh_recovery
+        from argparse import Namespace
+        config = {'mode':'cloudru', 'host':'203.0.113.4'}
+        setup.save(self.state/'deployment.json', config)
+        (self.state/'terraform').mkdir()
+        setup.save(self.state/'terraform/terraform.tfstate', {})
+        setup.save(self.state/'ssh-egress.json', {'vm':config['host'], 'config':network.digest(config), 'measured_at':1})
+        with patch.object(ssh_recovery, 'configure') as change:
+            with self.assertRaisesRegex(ValueError, 'repeat ssh-egress'):
+                ssh_recovery.recover(self.state, Namespace(plan_route=False,plan_source=True))
+            change.assert_not_called()
+
+    def test_client_oauth_binds_read_scope_state_resource_and_pkce(self):
+        import client_check
+        import base64
+        import hashlib
+        import http.client
+        import socket
+        import threading
+        import urllib.parse
+        try:
+            import httpx2
+        except ImportError:
+            self.skipTest('Requires the MCP client extra')
+        origin = 'https://memory.example'
+        with socket.socket() as port_probe:
+            port_probe.bind(('127.0.0.1', 0))
+            port = port_probe.getsockname()[1]
+        callback = f'http://127.0.0.1:{port}/callback'
+        responses = []
+        auth_params = {}
+        def open_browser(url):
+            auth_params.update(urllib.parse.parse_qs(urllib.parse.urlsplit(url).query))
+            def visit():
+                for state in ['wrong', auth_params['state'][0]]:
+                    connection = http.client.HTTPConnection('127.0.0.1', port, timeout=5)
+                    connection.request('GET', '/callback?' + urllib.parse.urlencode({'code':'local', 'state':state}))
+                    response = connection.getresponse()
+                    responses.append(response.status)
+                    response.read()
+                    connection.close()
+            workers.append(threading.Thread(target=visit))
+            workers[-1].start()
+            return True
+        workers = []
+        with (patch.object(client_check, 'CALLBACK', callback), patch.object(client_check.webbrowser, 'open', open_browser),
+              patch.object(httpx2, 'Client') as client_type):
+            identity = client_type.return_value.__enter__.return_value
+            identity.get.return_value = Mock(status_code=200, json=lambda:dict(issuer=origin,
+                    authorization_endpoint=origin+'/authorize', token_endpoint=origin+'/token'))
+            identity.post.return_value = Mock(status_code=200, json=lambda:{'access_token':'synthetic'})
+            self.assertEqual(client_check.authorize(origin, origin+'/mcp', False), 'synthetic')
+            workers[0].join(5)
+            self.assertEqual(responses, [400, 200])
+            posted = identity.post.call_args.kwargs['data']
+            self.assertEqual(posted['redirect_uri'], callback)
+            self.assertEqual(posted['resource'], origin+'/mcp')
+            self.assertEqual(auth_params['scope'], ['openid memory:read'])
+            challenge = base64.urlsafe_b64encode(hashlib.sha256(posted['code_verifier'].encode()).digest()).rstrip(b'=').decode()
+            self.assertEqual(auth_params['code_challenge'], [challenge])
+
     def test_container_absence_is_endpoint_specific_and_does_not_hide_other_499(self):
         reason=cloud.error_reason(b'{"message":"Serverless with name is not found","secret":"do-not-print"}')
         error=cloud.CloudAPIError(499,'GET',reason)
