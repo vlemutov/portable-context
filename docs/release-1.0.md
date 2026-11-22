@@ -16,7 +16,7 @@ import. See the [file receipt and both import results](timeweb-clean-test.md#Ñ€Ð
 
 | Before tagging | Evidence to collect or publish |
 | --- | --- |
-| Cloud.ru owner test | Separate-project provisioning and native Codex HTTPS read/write passed from Windows. On Ubuntu, the owner reports that Cursor completed the fresh installation, established SSH and received read/write consent. Record the installer SHA, quota and cost review, SSH path and whether the OAuth callback needed a manual edit. Complete the [owner acceptance steps](clean-install-test.md) in that same workspace: import, unchanged repeat, cited wiki page, second-client byte read-back and backup receipts. |
+| Cloud.ru owner test | Separate-project provisioning and native Codex HTTPS read/write passed from Windows. On Ubuntu, the owner reports that Cursor completed the fresh installation, established SSH and received read/write consent. The [Cursor file and repeat-import result](#cursor-on-ubuntu-cloudru-file-import-2026-11-22) is recorded below. Collect the installer SHA, quota and cost review, SSH path, callback setup, cited wiki page, second-client byte read-back and backup receipts for that installation. |
 | Close the supported-client and operations matrix | Use the [update and recovery audit](#update-and-recovery-audit-for-100-rc1) below. Record coverage per provider and client. Timeweb first-order cost/autopay review remains separate from the completed file and upgrade checks. |
 | Prepare the public candidate | Bring the tested changes onto the release branch. Align package, skill and server-recommended versions, update the entry guide, compatibility list, changelog and upgrade/rollback instructions. Run the required Windows, macOS (Intel and ARM) and Linux CI on the final candidate before merging and publishing the 1.0 tag and GitHub Release. |
 
@@ -24,6 +24,17 @@ import. See the [file receipt and both import results](timeweb-clean-test.md#Ñ€Ð
 sign-in and project reads, and the owner reported a two-message HTTPS import
 with an unchanged repeat. Native token refresh, revocation and reconnect in
 Claude Code remain unverified. The owner deferred that run beyond RC preparation.
+
+### Cursor on Ubuntu: Cloud.ru file import, 2026-11-22
+
+The owner relayed Cursor's result from the new Cloud.ru installation. The
+first send added two messages. Sending the same package again yielded zero
+new messages, zero revisions and two unchanged messages. Cursor reported the
+same workspace and the project `Portable Context HTTPS check`, one conversation
+and one original. The retained `portable-context-check.txt` is 43 bytes with
+SHA-256 `a0157860cc5b516547cee4ce4f68a2da851c795d14c5987504af106021959ef8`.
+Use that original for the independent second-client download and the candidate
+upgrade comparison. Cursor estimated ongoing charges at about 1.34 RUB/hour.
 
 ### Windows clean installation on Cloud.ru, 2026-11-22
 
@@ -130,9 +141,10 @@ and a 120-second access-token lifetime. Only the test grant was revoked.
 
 **RC handoff.** Before cutting the candidate:
 
-1. Record the independent Ubuntu/Cursor Cloud.ru installation against the
-   [owner acceptance steps](clean-install-test.md), including the first file
-   import, read-back from another client, repeat import and backup receipts.
+1. Finish the [Cloud.ru acceptance steps](clean-install-test.md) on the
+   installed Ubuntu/Cursor workspace. Use the retained file for read-back
+   from a second client, record a cited wiki page and collect the installation
+   and backup receipts.
 2. Finish the provider/client compatibility table. Carry forward the verified
    native Codex result and record refresh, revocation and reconnect for other
    clients where claimed. Mark
