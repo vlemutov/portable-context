@@ -1,40 +1,27 @@
 # Portable Context
 
-Portable Context is a personal memory you can use with more than one AI assistant.
-Save a conversation and its files, then ask another assistant to pick up where you left off.
-You can trace a project note back to the message it came from. If you lose access to an AI
-account, the material you already saved stays with you.
+**Portable Context is a personal memory for your AI assistants.** Suppose you discussed a project in Claude and want to pick it up a month later in ChatGPT. Save the conversation and its files, then ask another assistant to find the decision, show the original message or open the file. If you lose access to an AI account, you still have the material you saved.
 
-For two or three assistants on one computer, [use one local folder](skills/portable-context/references/storage.md#локальный-запуск-без-покупки-хостинга).
-For access from a hosted web agent or another computer, the managed cloud setup provides an HTTPS address.
+**[Русское описание и инструкция](docs/README.ru.md)** · [Start here](START-HERE.md) · [What's new in 1.0 and how to upgrade](CHANGELOG.md)
 
-**Release candidate in preparation: 1.0.0-rc.1** (Python package `1.0.0rc1`).
-For acceptance on Cloud.ru or Timeweb, use the same CI-tested commit for the installer,
-server and skill. See the [changelog and upgrade instructions](CHANGELOG.md).
-Start at **[START-HERE.md](START-HERE.md)** for the agent-guided setup.
+## How it works
 
-**Latest released functionality: 0.9.0.** Mixed-message authorship, selective wiki review and resume, bounded dialogue evidence, and efficient repeat delivery. See [release notes](docs/release-0.9.md).
-See [0.8 upgrade notes](docs/release-0.8.md) and the [approved backlog](docs/backlog-next.md).
-Self-contained restic recovery, storage controls and selected project folders remain supported.
-A real Codex conversation has been imported into the owner-operated Cloud.ru pilot. Broader provider
-adapters still depend on available exports and fixtures. This is not a promise to recover deleted,
-hidden, inaccessible, or unexported context. See [coverage and gaps](docs/connectors.md).
+You choose which conversations and files to keep. Imports can also preserve intermediate work, such as tool results, when the source includes it. Assistants connect to your memory through MCP. They can build a project wiki with decisions, open questions and links back to the messages and files behind each note.
 
-[Start with the user journey](docs/user-journey.md) · [Русское введение](docs/README.ru.md) · [Connector coverage](docs/connectors.md)
-· [Data contract](docs/data-contract.md) · [Agent skill](skills/portable-context/SKILL.md)
+For assistants on one computer, use a [shared local folder](skills/portable-context/references/storage.md#локальный-запуск-без-покупки-хостинга). For access from different devices or a hosted web assistant, deploy the memory in your own cloud account and connect over HTTPS with a passkey.
 
 ## Start with your assistant
 
-Send your assistant:
+> Help me set up Portable Context from https://github.com/vlemutov/portable-context. Help me choose where to keep my memory, save my first conversation and check that you can read it back.
 
-> Help me start using https://github.com/vlemutov/portable-context. Read START-HERE.md and the
-> skill, help me connect my existing memory or create my own, then verify a first chosen import
-> and read it back. For the release candidate, use the exact commit supplied for this test.
+An assistant with terminal and file access can run the installer. A web chat can guide you through the steps. The [setup guide](START-HERE.md) covers both a first installation and connecting to a memory you already have. Use the installer and skill from the same release tag, `v1.0.0`.
 
-The assistant should read the [skill](skills/portable-context/SKILL.md), help you connect an
-existing memory or create a new one, and guide you one step at a time. It can also help if you
-are unsure whether you already have a memory. Automated installation needs terminal and file
-access; otherwise the assistant can guide the manual steps. Each user connects their own storage.
+## What works with 1.0
+
+- **Codex and Cursor Desktop.** Read and write memory, retrieve original files and use the wiki. **ChatGPT Work in the browser.** Project and wiki reads verified with the web plugin.
+- **Claude.** Import selected conversations from a claude.ai export. Claude Code is in beta. Setup instructions are available for Claude Cowork and Cursor Cloud Agents. [Tested features by client](docs/connectors.md) · [Connection guide](skills/portable-context/references/connection.md)
+- **Computers.** Windows (x64 and ARM64), macOS (Intel and Apple Silicon), and Linux (x64, with core tests on ARM64). Cloud.ru provisioning from Linux requires x64.
+- **Hosting.** Cloud.ru and Timeweb Cloud charge for resources in your account. The installer asks you to review costs before ordering. On Timeweb, check the account's autopay settings as well. Local storage has no hosting fee. [Timeweb billing guide](docs/timeweb-billing.md)
 
 For local Claude Code sessions or selective claude.ai archives, use the
 [client guide](skills/portable-context/references/client.md). The client prepares selected data on
@@ -69,8 +56,7 @@ has verified provisioning, Windows-to-Linux MCP access, S3 upload/download/resto
 This is one tested account/configuration, not coverage of every region, image or client.
 Automatic setup targets Ubuntu 24.04 / Linux with Python 3.11+, OpenSSH and cron;
 managed HTTPS/Pocket ID also requires systemd and currently targets Linux AMD64.
-New Cloud.ru deployment through the complete revised onboarding is still a release acceptance
-step; the pilot and isolated installer tests are not evidence that every new user path passed.
+The [release report](docs/release-1.0.md) covers separate-project installations from Windows and Ubuntu and an in-place upgrade with file and wiki checks from both clients.
 
 Client setup, local imports, memory and MCP support Windows, macOS and Linux. The CI matrix
 covers macOS on Intel and Apple Silicon, Windows x64, and Linux x64; core tests also run on

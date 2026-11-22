@@ -2,13 +2,13 @@
 name: portable-context
 description: Deploy and maintain a personal Portable Context memory on Cloud.ru, Timeweb or an existing server, import accessible conversation history, preserve source relationships, and build or update its knowledge wiki through MCP. Use for setup, migration, recall, updates, diagnostics, cleanup or resuming another agent's work.
 metadata:
-  version: "1.0.0rc1"
-  revision: "1.0.0-rc.1"
+  version: "1.0.0"
+  revision: "1.0.0"
 ---
 
 # Portable Context
 
-Release candidate **1.0.0-rc.1** uses Python package version **1.0.0rc1**.
+Use the installer, server and skill from the same **v1.0.0** release.
 Record the source commit and compare the connected server and its advertised capabilities via `memory_status`.
 
 The user talks to you; you operate the memory tools. Do not make the user learn record IDs,

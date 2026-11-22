@@ -1,13 +1,11 @@
 # Portable Context 1.0 — implementation and release gates
 
-Candidate source: **1.0.0-rc.1** (Python distribution and server version `1.0.0rc1`).
-The [changelog and upgrade guide](../CHANGELOG.md) describe this candidate. Public release
-and validation of an upgrade to the candidate commit are pending.
+Stable release **1.0.0** uses the same version for the Python package, server and skill.
+The [changelog](../CHANGELOG.md) includes upgrade and recovery instructions.
 
-## Release decision — 2026-11-22
+## Release decision — 2026-11-23
 
-The public 1.0 tag is still pending. The Windows Cloud.ru installation used
-`5f13ab0`; the installer and skill follow-up is `f9cf313` on
+The Cloud.ru Windows installation used `5f13ab0`. The installer and skill follow-up is `f9cf313` on
 `feature/timeweb-installer` (28 of 28 CI jobs passed). On Timeweb, at
 `bdf6d34`, Cursor on Ubuntu imported an ordinary
 file into an existing workspace. Codex on Windows read its original bytes from
@@ -16,14 +14,32 @@ import. See the [file receipt and both import results](timeweb-clean-test.md#р�
 
 | Before tagging | Evidence to collect or publish |
 | --- | --- |
-| Cloud.ru owner test | The separate-project installation, Ubuntu/Cursor file import and repeat, and independent Codex read-back of the file and wiki passed. See the [acceptance evidence and outstanding baseline details](#cursor-on-ubuntu-cloudru-file-import-2026-11-22). |
+| Cloud.ru owner test | Installation in a separate project, import and repeat, and the [in-place upgrade with two-client read-back](#cloudru-upgrade-to-rc1) passed. |
 | Close the supported-client and operations matrix | Use the [update and recovery audit](#update-and-recovery-audit-for-100-rc1) below. Record coverage per provider and client. Timeweb first-order cost/autopay review remains separate from the completed file and upgrade checks. |
-| Prepare the public candidate | Versions, entry guide, client coverage and upgrade/recovery instructions are prepared in the candidate source. Bring the tested commit onto the release branch, run the required Windows, macOS (Intel and ARM) and Linux CI on the final SHA and verify an in-place upgrade before tagging the stable release. |
+| Publish the stable release | RC.1 reached `release/1.0` at `00f9688`. All 56 CI jobs across the push and pull request passed. The stable release uses tag `v1.0.0`. GitHub Actions records the CI results for its commit. |
 
 **Claude Code is beta for this release.** Prior owner pilots covered HTTPS
 sign-in and project reads, and the owner reported a two-message HTTPS import
 with an unchanged repeat. Native token refresh, revocation and reconnect in
 Claude Code remain unverified. The owner deferred that run beyond RC preparation.
+
+### Cloud.ru upgrade to RC.1
+
+On November 22, Cursor on Ubuntu upgraded the existing 0.9.0 installation from
+`f9cf3132020054dfbfc1529b0a9a89f36fdf53ce` to `00f96882e1453ca93cc0558dba823588e04d2ca6`.
+The original checkout fingerprint matched the installation receipt. Cursor retained
+the same HTTPS endpoint, workspace and OAuth session. Its receipt records a completed
+update without reimport or new paid resources.
+
+On November 23, native Codex on Windows independently queried the same workspace
+over HTTPS with read-only permissions. Both clients saw server `1.0.0rc1` and
+recommended skill `1.0.0-rc.1`. Each downloaded all 43 bytes of the file and
+computed the baseline SHA-256 below. The passport still had one occurrence and
+one byte version. Both read wiki revision 1 with the baseline hash and two sources.
+
+Cursor's receipt records a memory snapshot at 23:48 Moscow time and a successful
+38-file restore check at 23:49. A separate OAuth snapshot at 23:49 passed its
+eight-file check at 23:50. The certificate renewal timer was enabled and idle.
 
 ### Cursor on Ubuntu: Cloud.ru file import, 2026-11-22
 
@@ -38,15 +54,14 @@ all 43 bytes and independently computed the same SHA-256. The passport had
 one occurrence and one byte version. Codex also read `https-check-roundtrip`
 version 1 with two message sources and body hash
 `b14cb7df28fa6170fbab0e4b4233bb8719d0d1d9e917a259bc2afa4f7a0f127d`.
-Keep these values for the upgrade comparison.
+These values served as the baseline for the upgrade comparison.
 
 Cursor reported that the quota API returned 403, leaving available quota
 unknown. The owner accepted a VM/disk/IP estimate of 1.34 RUB/hour or 962.58 RUB
 for 720 hours. SSH succeeded after a VM-specific Wi-Fi route with the VPN on.
 Cursor used the callback registered during installation without a manual edit.
-The HTTPS stages completed. The journal recorded an installer fingerprint and
-an image identifier; the baseline Git SHA still needs confirmation from the
-Ubuntu checkout before upgrading.
+The HTTPS stages completed. The clean Ubuntu checkout and matching installer
+fingerprint subsequently confirmed the baseline Git SHA recorded above.
 
 According to Cursor's November 22 receipts (Moscow time), the 22:51 memory
 snapshot passed a 27-file restore check after an earlier snapshot listing
@@ -153,13 +168,13 @@ and a 120-second access-token lifetime. Only the test grant was revoked.
 
 | Scenario | Evidence already collected | Remaining acceptance |
 | --- | --- | --- |
-| Upgrade an installed memory | **Live Timeweb.** The November 17 update journal records `a394ad7` → `716f3ca`, completed edge publication and committed configuration. The native client subsequently verified the same workspace, two message texts, the original file hash and wiki version. **Live Cloud.ru.** The November 12 post-update read-back verified stored content; its receipt does not identify both source commits. | Retain the new Ubuntu test workspace and its sample file if the owner approves the running cost. Once the RC commit exists, update that installation from its recorded SHA to the RC SHA. Check the same workspace, existing passkey/grant, file SHA-256 and wiki revision before and after. |
+| Upgrade an installed memory | **Live Timeweb.** The November 17 update journal records `a394ad7` → `716f3ca`, completed edge publication and committed configuration. The native client subsequently verified the same workspace, two message texts, the original file hash and wiki version. **Live Cloud.ru.** The November 12 post-update read-back verified stored content; its receipt does not identify both source commits. | **Passed.** The [Ubuntu upgrade to RC.1](#cloudru-upgrade-to-rc1) identifies both commits and records independent reads from Cursor and Codex. |
 | Interrupted install, update or client file upload | **Linux/systemd CI.** The [installer fixture](../deploy/smoke_https_install.py) interrupted bootstrap and updates around migration, exercised failed readiness and resumed with retained data and identity. **Local Windows client.** The [interrupted file upload](#interrupted-client-file-upload-on-windows-arm64-2026-11-22) resumed at the stored offset and produced one linked original with the source SHA-256. | Keep the installer regression on the RC commit. The local file-upload acceptance run is complete. |
 | Memory and OAuth disaster recovery | **Live Cloud.ru pilot.** An isolated restore verified the OAuth snapshot and offline kit. **Linux/systemd fixture.** The [service recovery test](../deploy/smoke_recovery_installation.py) preserved originals and wiki, rejected old credentials and exercised fresh HTTPS reads/writes. **Windows owner test.** [Passkey enrollment, sign-in and file read-back](#local-owner-recovery-on-windows-arm64-2026-11-22) passed against the restored workspace. | Owner enrollment and authenticated file integrity are verified with the local test client. To claim post-recovery support for a named client, record its own reconnect and read of the retained original. |
 | OAuth refresh and revocation | The [Pocket ID fixture](../deploy/smoke_oauth_recovery.py) covers the protocol. The [native Codex owner test](#native-codex-oauth-refresh-revocation-and-reconnect-on-windows-arm64-2026-11-22) verified refresh, denial after revocation and a fresh sign-in on the same workspace. | For each additional client where these capabilities are claimed, run the same checks with a disposable grant or mark them unverified. |
 | mTLS renewal after interruption | **Live Cloud.ru.** The controller resumed the same generation after an exit following a successful cloud PATCH. Authenticated access recovered and the scheduled service returned `not_due`. [Rotation evidence and transient public errors](certificate-renewal.md). | Retain the CI regression. Timeweb has controller installation/update evidence; a forced interrupted Timeweb rotation still needs a receipt if advertised as live-tested there. Continuous public availability is outside the 1.0 gate. |
 
-**RC handoff.** Before cutting the candidate:
+**RC handoff checklist (historical).** See the release decision above for the outcome.
 
 1. Preserve the verified Cloud.ru file and wiki revision for the upgrade. Confirm
    the installed baseline commit from the original checkout and installation evidence.

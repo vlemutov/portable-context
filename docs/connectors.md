@@ -1,6 +1,6 @@
 # Connector coverage and setup
 
-## MCP client coverage for 1.0.0-rc.1
+## MCP client coverage for 1.0.0
 
 | Client | Observed with Portable Context |
 | --- | --- |
