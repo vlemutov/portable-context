@@ -91,6 +91,15 @@ class DesktopCallbackTests(unittest.TestCase):
         self.assertEqual(self.client, before)
         self.assertEqual((self.writes, self.backups), (1, 1))
 
+    def test_cowork_adds_only_its_hosted_callback(self):
+        expected = copy.deepcopy(self.client)
+        expected['callbackURLs'].append('https://claude.ai/api/mcp/auth_callback')
+        with patch.object(self.api, 'request', side_effect=self.provider):
+            self.api.enable_desktop(self.receipt, self.backup, 'claude-cowork')
+            self.assertFalse(self.api.enable_desktop(self.receipt, self.backup, 'claude-cowork')['changed'])
+        self.assertEqual(self.client, expected)
+        self.assertEqual((self.writes, self.backups), (1, 1))
+
     def test_failed_checkpoint_or_concurrent_edit_prevents_put(self):
         def failed(): raise RuntimeError('Backup unavailable')
         with patch.object(self.api, 'request', side_effect=self.provider):

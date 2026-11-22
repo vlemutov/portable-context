@@ -15,7 +15,9 @@ CODEX_CALLBACK = 'http://127.0.0.1:14881/callback'
 CLAUDE_CODE_CALLBACK = 'http://localhost:14881/callback'
 CURSOR_CALLBACK = 'http://localhost:8787/callback'
 CURSOR_CLOUD_CALLBACK = 'https://www.cursor.com/agents/mcp/oauth/callback'
-DESKTOP_CALLBACKS = {'claude-code': (CLAUDE_CODE_CALLBACK,), 'cursor': (CURSOR_CALLBACK, CURSOR_CLOUD_CALLBACK)}
+COWORK_CALLBACK = 'https://claude.ai/api/mcp/auth_callback'
+DESKTOP_CALLBACKS = {'claude-code': (CLAUDE_CODE_CALLBACK,), 'cursor': (CURSOR_CALLBACK, CURSOR_CLOUD_CALLBACK),
+                     'claude-cowork': (COWORK_CALLBACK,)}
 PERMISSIONS = {'memory:read': 'Read memory', 'memory:write': 'Import and enrich memory',
                'memory:admin': 'Administer memory and server sources'}
 
@@ -155,7 +157,7 @@ class Bootstrap:
             if client_id not in receipt.get('clients', []):
                 self.request('/api/oidc/clients', {'id': client_id,
                     'name': 'Portable Context '+label,
-                    'callbackURLs': [CODEX_CALLBACK, *DESKTOP_CALLBACKS['claude-code'], *DESKTOP_CALLBACKS['cursor']]
+                    'callbackURLs': [CODEX_CALLBACK, *(url for group in DESKTOP_CALLBACKS.values() for url in group)]
                                     if label == 'desktop' else [CODEX_CALLBACK],
                     'isPublic': True, 'pkceEnabled': True, 'skipConsent': False,
                     'accessTokenDurationMinutes': 10, 'refreshTokenDurationMinutes': 43200})

@@ -253,8 +253,20 @@ Desktop Chat/Cowork и Claude Code — разные клиенты, эту на�
 
 Сохрани, запусти новый вход и подтверди запрошенные права. Из облачного агента вызови
 `memory_status`, сверь workspace ID и открой знакомую страницу; в редакторе проверь свой вход отдельно.
-Для каждого другого облачного клиента (например, Claude Cowork или GPT Work) регистрируй отдельный
-точный callback, когда адрес известен из ошибки или документации этого клиента.
+
+## Claude Cowork
+
+Владелец добавляет удалённый сервер через **Customize → Connectors → Add → Custom connector**.
+В организационном пространстве для добавления может требоваться владелец или администратор.
+Введи название и публичный HTTPS URL своей памяти вместе с `/mcp`. Выбери вход через OAuth
+и **Use your own OAuth client**. Укажи `portable-context-desktop`, оставь секрет пустым.
+Включи подключение в Cowork. [Инструкция Anthropic](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp)
+
+Новая установка сразу регистрирует `https://claude.ai/api/mcp/auth_callback`.
+Для действующей памяти выполни `python deploy/setup.py --state PRIVATE_STATE oauth-client --client claude-cowork`.
+Войди через passkey, вызови `memory_status` из Cowork и сверь workspace и права.
+Для чтения нужна `memory:read`, для импорта — `memory:write`. Прочитай знакомую страницу.
+Если прав на запись нет, зафиксируй это до первого импорта.
 
 ## SSH/stdio или локальная память
 

@@ -205,7 +205,7 @@ def server_action(p):
         try:owner_login(manifest['runtime'],output);return {'private_login':read(output)}
         finally:output.unlink(missing_ok=True)
     if p['action']=='check':return {'workspace_id':expected,**metadata(manifest)}
-    if p['action'] in ('claude-code','cursor'):
+    if p['action'] in ('claude-code','cursor','claude-cowork'):
         from oauth_recovery import runtime_info, IdentityBackups
         from pocketid import Bootstrap
         _,env,receipt,config=runtime_info(manifest['runtime'])
@@ -269,7 +269,7 @@ def owner_login(state):
 def desktop_client(state, client):
     """Register the selected client's exact callbacks on an existing owner installation."""
     state=Path(state);receipt=connection_receipt(state)
-    if client not in ('claude-code','cursor'):
+    if client not in ('claude-code','cursor','claude-cowork'):
         raise ValueError('Unsupported OAuth client')
     installed=read(state/'installed.json')
     if receipt.get('workspace_id') != installed['memory']['workspace_id']:
