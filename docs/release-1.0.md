@@ -99,6 +99,20 @@ source byte for byte. Both SHA-256 values were
 This verifies capture-v2 resume over local MCP stdio. Cloud HTTPS and S3
 have separate acceptance results.
 
+### Native Codex OAuth refresh, revocation and reconnect on Windows ARM64, 2026-11-22
+
+Codex CLI `0.171.0-alpha.13` used its native app-server MCP client against
+the restored local workspace over HTTPS. The test had its own Codex profile
+and Pocket ID client registration, with `openid offline_access memory:read`
+and a 120-second access-token lifetime. Only the test grant was revoked.
+
+| Step | Observed result |
+| --- | --- |
+| First sign-in | The owner signed in with the test passkey in Edge and approved read access. Pocket ID exchanged the authorization code (HTTP 200). Codex called `memory_status` and read the expected workspace ID. |
+| Refresh after expiry | After the access token expired, a fresh Codex process using the same profile exchanged its stored refresh token (HTTP 200) and read the same workspace without asking the owner to sign in. |
+| Revoke access | Pocket ID acknowledged revocation (HTTP 204). While the refreshed access token was still within its lifetime, MCP rejected it (HTTP 401). The token endpoint rejected the refresh token (HTTP 400, `invalid_grant`), and Codex could no longer read the workspace. |
+| Reconnect | The owner signed in again with the same passkey and approved a new grant. Pocket ID exchanged the new code (HTTP 200), and native Codex read the original workspace ID again. |
+
 ### Update and recovery audit for 1.0.0-rc.1
 
 | Scenario | Evidence already collected | Remaining acceptance |
@@ -106,7 +120,7 @@ have separate acceptance results.
 | Upgrade an installed memory | **Live Timeweb.** The November 17 update journal records `a394ad7` → `716f3ca`, completed edge publication and committed configuration. The native client subsequently verified the same workspace, two message texts, the original file hash and wiki version. **Live Cloud.ru.** The November 12 post-update read-back verified stored content; its receipt does not identify both source commits. | Retain the new Ubuntu test workspace and its sample file if the owner approves the running cost. Once the RC commit exists, update that installation from its recorded SHA to the RC SHA. Check the same workspace, existing passkey/grant, file SHA-256 and wiki revision before and after. |
 | Interrupted install, update or client file upload | **Linux/systemd CI.** The [installer fixture](../deploy/smoke_https_install.py) interrupted bootstrap and updates around migration, exercised failed readiness and resumed with retained data and identity. **Local Windows client.** The [interrupted file upload](#interrupted-client-file-upload-on-windows-arm64-2026-11-22) resumed at the stored offset and produced one linked original with the source SHA-256. | Keep the installer regression on the RC commit. The local file-upload acceptance run is complete. |
 | Memory and OAuth disaster recovery | **Live Cloud.ru pilot.** An isolated restore verified the OAuth snapshot and offline kit. **Linux/systemd fixture.** The [service recovery test](../deploy/smoke_recovery_installation.py) preserved originals and wiki, rejected old credentials and exercised fresh HTTPS reads/writes. **Windows owner test.** [Passkey enrollment, sign-in and file read-back](#local-owner-recovery-on-windows-arm64-2026-11-22) passed against the restored workspace. | Owner enrollment and authenticated file integrity are verified with the local test client. To claim post-recovery support for a named client, record its own reconnect and read of the retained original. |
-| OAuth refresh and revocation | The [real Pocket ID fixture](../deploy/smoke_oauth_recovery.py) refreshed a token, revoked its grant and verified rejection of the old credentials. Live client sign-in and content reads have separate receipts. | For clients advertised as tested, record refresh and revoke/reconnect against a disposable grant, or label those capabilities unverified for that client. Keep the owner's working grants intact. |
+| OAuth refresh and revocation | The [Pocket ID fixture](../deploy/smoke_oauth_recovery.py) covers the protocol. The [native Codex owner test](#native-codex-oauth-refresh-revocation-and-reconnect-on-windows-arm64-2026-11-22) verified refresh, denial after revocation and a fresh sign-in on the same workspace. | For each additional client where these capabilities are claimed, run the same checks with a disposable grant or mark them unverified. |
 | mTLS renewal after interruption | **Live Cloud.ru.** The controller resumed the same generation after an exit following a successful cloud PATCH. Authenticated access recovered and the scheduled service returned `not_due`. [Rotation evidence and transient public errors](certificate-renewal.md). | Retain the CI regression. Timeweb has controller installation/update evidence; a forced interrupted Timeweb rotation still needs a receipt if advertised as live-tested there. Continuous public availability is outside the 1.0 gate. |
 
 **RC handoff.** Before cutting the candidate:
@@ -114,8 +128,9 @@ have separate acceptance results.
 1. Record the independent Ubuntu/Cursor Cloud.ru installation against the
    [owner acceptance steps](clean-install-test.md), including the first file
    import, read-back from another client, repeat import and backup receipts.
-2. Finish the provider/client compatibility table. Record refresh, revocation
-   and reconnect using disposable grants for each client where claimed. Mark
+2. Finish the provider/client compatibility table. Carry forward the verified
+   native Codex result and record refresh, revocation and reconnect for other
+   clients where claimed. Mark
    any pending named-client recovery, Timeweb rotation or first-order
    cost/autopay check explicitly.
 3. Prepare the release branch, versions, entry guide, changelog and
