@@ -17,6 +17,22 @@ from portable_context.workspace import Workspace
 
 
 class InstallationIsolationTests(unittest.TestCase):
+    def test_ssh_only_plan_rejects_vm_changes_and_rule_expansion(self):
+        ssh = {'address': 'cloudru_evolution_compute_security_group_rule.ssh'}
+        before = {'remote_ip_prefix': '198.51.100.2/32', 'port_range': '22:22',
+                  'direction': 'TRAFFIC_DIRECTION_INGRESS', 'ip_protocol': 'IP_PROTOCOL_TCP'}
+        cidr = '198.51.100.3/32'
+        update = dict(ssh, change={'actions': ['update'], 'before': before,
+                                   'after': dict(before, remote_ip_prefix=cidr)})
+        setup.verify_ssh_only({'resource_changes': [update]}, cidr)
+        for changes in ([update, {'address': 'vm', 'change': {'actions': ['create']}}],
+                        [dict(ssh, change=dict(update['change'], actions=['delete', 'create']))],
+                        [dict(ssh, change=dict(update['change'], after=dict(before, port_range='1:22', remote_ip_prefix=cidr)))],):
+            with self.assertRaises(ValueError):
+                setup.verify_ssh_only({'resource_changes': changes}, cidr)
+        with self.assertRaises(ValueError):
+            setup.verify_ssh_only({'resource_changes': []}, '0.0.0.0/0')
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)

@@ -125,6 +125,48 @@ class NetworkTests(unittest.TestCase):
             network.reconcile(self.state, [], removing=True)
         self.assertEqual(self.routes[0]['gateway'], '10.0.0.1')
 
+    def test_server_resume_and_remove_preserve_legacy_cloud_routes(self):
+        cloud = network.route_record('203.0.113.11', **self.selected)
+        self.routes.append(cloud)
+        network.save(self.state / 'network-routes.json', {'format': 1, 'os': 'Linux', 'owned': [cloud]})
+        plan = self.plan()
+        self.assertEqual(plan['remove_owned'], [])
+        network.apply(self.state, plan['plan_sha256'])
+        network.reconcile(self.state, [], removing=True, groups={'server': []})
+        self.assertEqual(self.routes, [cloud])
+
+    def test_shared_route_survives_single_scope_cleanup(self):
+        ip = self.record['destination']
+        network.reconcile(self.state, [self.record], groups={'cloud': [ip], 'server': [ip]})
+        network.reconcile(self.state, [], removing=True, groups={'cloud': []})
+        self.assertEqual(self.routes, [self.record])
+        network.reconcile(self.state, [], removing=True, groups={'server': []})
+        self.assertEqual(self.routes, [])
+
+    def test_server_main_route_sufficient_skips_policy_write(self):
+        path = {'dev': 'eth0', 'gateway': self.selected['gateway']}
+        plan = network.make_plan(self.state, 'server', ssh_policy=True)
+        with patch.object(network, 'tcp_route', return_value=path), patch.object(network, 'linux_rules', return_value=[]):
+            network.apply(self.state, plan['plan_sha256'])
+        self.assertEqual(len(self.commands), 1)
+
+    def test_policy_cleanup_rejects_changed_selectors(self):
+        rule = {'priority': 18, 'destination': self.record['destination']}
+        row = {'priority': 18, 'dst': rule['destination'], 'src': 'all', 'table': 'main'}
+        self.assertTrue(network.rule_present(rule, [row]))
+        with self.assertRaises(ValueError):
+            network.rule_present(rule, [dict(row, fwmark='0x10')])
+
+    def test_egress_refuses_different_gateway_before_connect(self):
+        vm = {'dev': 'eth0', 'gateway': self.selected['gateway'], 'prefsrc': '192.168.1.77'}
+        with (patch.object(network, 'tcp_route', side_effect=[vm, dict(vm, gateway='192.168.1.2')]),
+              patch.object(network.os, 'geteuid', return_value=0, create=True),
+              patch.object(network, 'targets', return_value=[{'addresses': [self.record['destination']], 'port': 22}]),
+              patch.object(network.socket, 'getaddrinfo', return_value=[(None,None,None,None,('203.0.113.7',443))]),
+              patch.object(network.socket, 'socket') as sock, self.assertRaisesRegex(ValueError, 'same physical gateway')):
+            network.measure_egress(self.state)
+        sock.assert_not_called()
+
     def test_unsafe_destinations_and_interface_syntax_rejected(self):
         for ip in ('0.0.0.0', '127.0.0.1', '224.0.0.1', '169.254.169.254', '255.255.255.255', '::1'):
             with self.subTest(ip=ip), self.assertRaises(ValueError):

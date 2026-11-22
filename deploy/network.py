@@ -10,6 +10,7 @@ import base64
 from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
+import http.client
 import ipaddress
 import json
 import os
@@ -224,16 +225,48 @@ def inspect(state, scope):
             try:policy[key]=json.loads(run(args))
             except (OSError,ValueError,RuntimeError,subprocess.SubprocessError):policy[key]='unavailable'
         policy['effective_routes']=[]
-        for ip in sorted({ip for e in endpoints for ip in e['addresses']}):
-            try:policy['effective_routes'].append({'address':ip,'route':json.loads(run(['ip','-j','-4','route','get',ip]))})
-            except (OSError,ValueError,RuntimeError,subprocess.SubprocessError):policy['effective_routes'].append({'address':ip,'route':'unavailable'})
+        for ip, port in sorted({(ip, e['port']) for e in endpoints for ip in e['addresses']}):
+            try:
+                route = tcp_route(ip, port, state.stat().st_uid)
+            except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
+                route = 'unavailable'
+            policy['effective_routes'].append({'address': ip, 'port': port, 'route': route})
     ledger=read(state/'network-routes.json') if (state/'network-routes.json').exists() else {}
     return {'os': system, **network, 'endpoints': checks,'linux_policy':policy,
             'missing_owned_routes':[r for r in ledger.get('owned',[]) if r not in network['routes']],
             'note': 'IPv4 current path only; TCP/TLS/HTTP do not prove country or authorization. Cloud HTTPS and VM SSH may need DIFFERENT paths. Linux route-get does not model every VPN fwmark/kill switch. No VPN/default route changes.'}
 
 
-def make_plan(state, scope, interface=None, gateway=None):
+def scope_members(scope, endpoints):
+    # targets() appends the VM last for 'all'; a shared endpoint can belong to both scopes.
+    groups = {}
+    if scope in ('all', 'server'):
+        groups['server'] = list(endpoints[-1]['addresses'])
+    if scope in ('all', 'cloud'):
+        cloud = endpoints[:-1] if scope == 'all' else endpoints
+        groups['cloud'] = sorted({ip for endpoint in cloud for ip in endpoint['addresses']})
+    return groups
+
+
+def scoped_changes(ledger, groups, desired, *, all_scopes=False):
+    previous = ledger.get('scopes', {})
+    updated = dict(previous, **groups)
+    retained = {ip for ips in updated.values() for ip in ips}
+    touched = {ip for scope in groups for ip in previous.get(scope, [])}
+    wanted = {r['destination']: r for r in desired}
+    remove = []
+    for old in ledger.get('owned', []):
+        ip = old['destination']
+        if ip in wanted and old != wanted[ip]:
+            if any(ip in ips for scope, ips in previous.items() if scope not in groups):
+                raise ValueError('Shared host route needs one gateway; review a plan for all scopes')
+            remove.append(old)
+        elif ip not in retained and (all_scopes or ip in touched):
+            remove.append(old)
+    return updated, remove
+
+
+def make_plan(state, scope, interface=None, gateway=None, ssh_policy=False):
     system = platform.system()
     config = read(state / 'deployment.json')
     network = snapshot(system)
@@ -249,9 +282,15 @@ def make_plan(state, scope, interface=None, gateway=None):
     endpoints = targets(config, scope,state)
     desired = [route_record(ip, **selected) for ip in sorted({ip for e in endpoints for ip in e['addresses']})]
     ledger = read(state / 'network-routes.json') if (state / 'network-routes.json').exists() else None
-    plan = {'format': 1, 'os': system, 'created': time.time(), 'configuration': digest(config),
-            'ownership': digest(ledger), 'remove_owned': [r for r in (ledger or {}).get('owned', []) if r not in desired],
+    if ssh_policy and (system != 'Linux' or scope != 'server'):
+        raise ValueError('--ssh-policy requires Linux and --scope server')
+    groups = scope_members(scope, endpoints)
+    _, remove = scoped_changes(ledger or {}, groups, desired, all_scopes=scope == 'all')
+    plan = {'format': 2, 'os': system, 'created': time.time(), 'configuration': digest(config),
+            'ownership': digest(ledger), 'remove_owned': remove, 'ssh_policy': ssh_policy,
             'scope': scope, 'endpoints': endpoints, 'desired': desired}
+    if ssh_policy:
+        plan['conditional_rule'] = 'Only if TCP route still misses this gateway: to VM/32 lookup main, before VPN rules'
     save(state / 'network-plan.json', plan)
     return {'plan_sha256': digest(plan), **plan,
             'next': 'Review these host routes, then apply --approve-plan HASH with administrator/root rights. No default route or VPN settings are changed.'}
@@ -282,7 +321,122 @@ def require_admin():
         raise PermissionError('Route changes require an administrator terminal on Windows or sudo on macOS/Linux. Inspect and plan do not need elevation.')
 
 
-def reconcile(state, desired, *, removing=False):
+def tcp_route(destination, port, uid, interface=None):
+    args = ['ip', '-j', '-4', 'route', 'get', ipv4(destination), 'ipproto', 'tcp',
+            'dport', str(int(port)), 'uid', str(uid)]
+    if interface:
+        args.extend(['oif', interface])
+    rows = json.loads(run(args))
+    if len(rows) != 1:
+        raise ValueError('Cannot identify a single effective IPv4 path')
+    return rows[0]
+
+
+def physical_path(actual, record):
+    return actual.get('dev') == record['interface'] and actual.get('gateway') == record['gateway']
+
+
+def linux_rules():
+    return json.loads(run(['ip', '-j', '-4', 'rule', 'show']))
+
+
+def rule_present(rule, rows):
+    same = [r for r in rows if r['priority'] == rule['priority']]
+    if not same:
+        return False
+    r = same[0]
+    if (len(same) != 1 or r.get('dst', '').removesuffix('/32') != rule['destination']
+            or r.get('src') != 'all' or r.get('table') not in ('main', 254)
+            or set(r) - {'priority', 'src', 'dst', 'table', 'protocol', 'flags'}
+            or r.get('flags') or r.get('protocol', 'boot') not in ('boot', 3)):
+        raise ValueError('Policy priority already used or externally changed; inspect ip -4 rule')
+    return True
+
+
+def rule_command(action, rule):
+    return ['ip', '-4', 'rule', action, 'priority', str(int(rule['priority'])),
+            'to', ipv4(rule['destination']) + '/32', 'lookup', 'main', 'protocol', 'boot']
+
+
+def ensure_ssh_path(state, record, port):
+    path = state / 'network-routes.json'
+    ledger = read(path)
+    ip = record['destination']
+    uid = state.stat().st_uid
+    rules = ledger.setdefault('ssh_rules', {})
+    rows = linux_rules()
+    present = ip in rules and rule_present(rules[ip], rows)
+    if physical_path(tcp_route(ip, port, uid), record):
+        return
+    if present:
+        raise ValueError('Owned rule is present but SSH still misses the physical gateway; inspect VPN policy')
+    # Keep the kernel local rule first. Never edit a VPN rule or a VPN-owned table.
+    if any(r['priority'] == 0 and r.get('table') not in ('local', 255) for r in rows):
+        raise ValueError('Higher-priority policy at priority zero; inspect VPN rules')
+    first = min((r['priority'] for r in rows if r['priority'] > 0), default=32766)
+    if first <= 1:
+        raise ValueError('No free priority before routing policy; inspect VPN rules')
+    rule = {'destination': ip, 'priority': first - 1}
+    ledger['pending'] = {'add_rule': rule}
+    save(path, ledger)
+    try:
+        run(rule_command('add', rule))
+    except (OSError, RuntimeError, subprocess.SubprocessError):
+        if not rule_present(rule, linux_rules()):
+            del ledger['pending']
+            save(path, ledger)
+        raise
+    rules[ip] = rule
+    del ledger['pending']
+    save(path, ledger)
+    if not physical_path(tcp_route(ip, port, uid), record):
+        raise ValueError('SSH still misses the selected gateway. Inspect policy or remove --scope server')
+
+
+def measure_egress(state):
+    """Opt-in: direct TLS socket pinned to the physical device and local address."""
+    if platform.system() != 'Linux':
+        raise ValueError('Physical SSH egress verification requires Linux')
+    require_admin()
+    config = read(state / 'deployment.json')
+    endpoint, = targets(config, 'server', state)
+    network = snapshot('Linux')
+    uid = state.stat().st_uid
+    if len(endpoint['addresses']) != 1:
+        raise ValueError('SSH egress measurement requires one VM IPv4')
+    vm = endpoint['addresses'][0]
+    actual = tcp_route(vm, endpoint['port'], uid)
+    matches = [c for c in network['candidates'] if physical_path(actual, c)]
+    if len(matches) != 1:
+        raise ValueError('SSH path is not verified through one physical gateway')
+    physical = matches[0]
+    host = 'api.ipify.org'
+    peer = socket.getaddrinfo(host, 443, socket.AF_INET, socket.SOCK_STREAM)[0][4][0]
+    path = tcp_route(peer, 443, os.geteuid(), physical['interface'])
+    if not actual.get('prefsrc'):
+        raise ValueError('Kernel did not identify the local IPv4 used for SSH')
+    local = ipv4(actual['prefsrc'])
+    if not physical_path(path, physical) or path.get('prefsrc') != local:
+        raise ValueError('Cannot verify the IP reflector uses the same physical gateway and source as SSH')
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(6)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, physical['interface'].encode() + b'\0')
+        sock.bind((local, 0))
+        sock.connect((peer, 443))
+        with ssl.create_default_context().wrap_socket(sock, server_hostname=host) as tls:
+            tls.sendall(b'GET / HTTP/1.1\r\nHost: api.ipify.org\r\nConnection: close\r\n\r\n')
+            with http.client.HTTPResponse(tls) as response:
+                response.begin()
+                if response.status != 200:
+                    raise ValueError('Public IPv4 service returned HTTP ' + str(response.status))
+                address = ipaddress.IPv4Address(response.read(64).decode('ascii').strip())
+    if not address.is_global or address.is_multicast:
+        raise ValueError('The measured IPv4 is not public unicast')
+    return {**physical, 'vm': vm, 'current_ssh_cidr': config.get('ssh_cidr'),
+            'suggested_ssh_cidr': str(address) + '/32', 'source': host}
+
+
+def reconcile(state, desired, *, removing=False, groups=None, all_scopes=False):
     """Persist each successful mutation. Never adopt or delete a pre-existing route."""
     system = platform.system()
     ledger_path = state / 'network-routes.json'
@@ -300,7 +454,27 @@ def reconcile(state, desired, *, removing=False):
         collisions = [r for r in current if r['destination'] == wanted['destination']]
         if any(r != wanted and r not in ledger['owned'] for r in collisions):
             raise ValueError('An unrelated host route conflicts with ' + wanted['destination'])
-    for old in list(ledger['owned']):
+    if groups is None:
+        remove = [r for r in ledger['owned'] if r not in desired]
+    else:
+        updated, remove = scoped_changes(ledger, groups, desired, all_scopes=all_scopes)
+        # Retain both old and new memberships until all mutations have succeeded.
+        interim = ledger.setdefault('scopes', {})
+        for scope, ips in groups.items():
+            interim[scope] = sorted(set(interim.get(scope, [])) | set(ips))
+        save(ledger_path, ledger)
+    for ip, rule in list(ledger.get('ssh_rules', {}).items()):
+        if groups is not None and 'server' not in groups:
+            continue
+        if groups is not None and ip in groups.get('server', []):
+            continue
+        if groups is None and not removing:
+            continue
+        if rule_present(rule, linux_rules()):
+            run(rule_command('del', rule))
+        del ledger['ssh_rules'][ip]
+        save(ledger_path, ledger)
+    for old in remove:
         if old in desired:
             continue
         observed = snapshot(system)['routes']
@@ -333,7 +507,9 @@ def reconcile(state, desired, *, removing=False):
             ledger['owned'].append(wanted)
         ledger.pop('pending', None)
         save(ledger_path, ledger)
-    if removing:
+    if groups is not None:
+        ledger['scopes'] = updated
+    if removing or groups is not None:
         save(ledger_path, ledger)
     return {'owned': ledger['owned'], 'preexisting_reused': reused,
             'next': 'Run inspect and setup.py check. Routes are session-scoped; after reboot/network change generate and apply a fresh plan.'}
@@ -342,6 +518,8 @@ def reconcile(state, desired, *, removing=False):
 def apply(state, approval):
     with locked(state):
         plan = read(state / 'network-plan.json')
+        if plan.get('format') != 2:
+            raise ValueError('Regenerate the scoped network plan with this installer version')
         if digest(plan) != approval or plan['configuration'] != digest(read(state / 'deployment.json')):
             raise ValueError('Plan or deployment changed; regenerate and review the plan')
         ledger = read(state / 'network-routes.json') if (state / 'network-routes.json').exists() else None
@@ -358,7 +536,15 @@ def apply(state, approval):
         if {r['destination'] for r in plan['desired']} != {ip for e in expected for ip in e['addresses']}:
             raise ValueError('Plan destinations do not match the deployment endpoints')
         require_admin()
-        return reconcile(state, plan['desired'])
+        groups = scope_members(plan['scope'], expected)
+        result = reconcile(state, plan['desired'], groups=groups, all_scopes=plan['scope'] == 'all')
+        if plan['ssh_policy']:
+            if platform.system() != 'Linux' or plan['scope'] != 'server':
+                raise ValueError('Invalid scope for Linux SSH policy')
+            for route in plan['desired']:
+                ensure_ssh_path(state, route, expected[0]['port'])
+            result['ssh_route'] = 'verified for installation owner; check authentication separately'
+        return result
 
 
 def main(argv=None):
@@ -371,9 +557,12 @@ def main(argv=None):
         if name != 'inspect':
             p.add_argument('--interface')
             p.add_argument('--gateway')
+            p.add_argument('--ssh-policy', action='store_true', help='Linux server only: authorize a destination rule if main /32 alone is ineffective')
     p = sub.add_parser('apply')
     p.add_argument('--approve-plan', required=True)
-    sub.add_parser('remove')
+    p = sub.add_parser('remove')
+    p.add_argument('--scope', choices=('cloud', 'server', 'all'), default='all')
+    sub.add_parser('ssh-egress', help='Linux: measure public IPv4 using api.ipify.org over the verified physical SSH path')
     args = parser.parse_args(argv)
     state = args.state.expanduser().resolve()
     # Do not chmod/chown an existing user's deployment when invoked through sudo.
@@ -382,13 +571,16 @@ def main(argv=None):
     if args.command == 'inspect':
         result = inspect(state, args.scope)
     elif args.command in ('plan', 'repair'):
-        result = make_plan(state, args.scope, args.interface, args.gateway)
+        result = make_plan(state, args.scope, args.interface, args.gateway, args.ssh_policy)
+    elif args.command == 'ssh-egress':
+        result = measure_egress(state)
     elif args.command == 'apply':
         result = apply(state, args.approve_plan)
     else:
         require_admin()
         with locked(state):
-            result = reconcile(state, [], removing=True)
+            groups = {'server': [], 'cloud': []} if args.scope == 'all' else {args.scope: []}
+            result = reconcile(state, [], removing=True, groups=groups, all_scopes=args.scope == 'all')
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

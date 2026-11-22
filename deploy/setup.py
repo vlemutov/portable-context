@@ -278,8 +278,29 @@ def summarize_plan(data):
     return resources
 
 
-def plan(state):
+def verify_ssh_only(data, cidr):
+    if ipaddress.IPv4Network(cidr).prefixlen != 32:
+        raise ValueError('SSH recovery requires one IPv4 /32')
+    expected = 'cloudru_evolution_compute_security_group_rule.ssh'
+    for item in data['resource_changes']:
+        change = item['change']
+        if change['actions'] == ['no-op']:
+            continue
+        before, after = change.get('before') or {}, change.get('after') or {}
+        if (item['address'] != expected or change['actions'] != ['update']
+                or after.get('remote_ip_prefix') != cidr
+                or after.get('port_range') != '22:22' or after.get('ip_protocol') != 'IP_PROTOCOL_TCP'
+                or after.get('direction') != 'TRAFFIC_DIRECTION_INGRESS'
+                or any((change.get('after_unknown') or {}).values())
+                or any(before.get(k) != after.get(k) for k in before.keys() | after.keys() if k != 'remote_ip_prefix')):
+            raise ValueError('SSH-only plan refused changes beyond the existing TCP 22 source /32: ' + item['address'])
+
+
+def plan(state, ssh_only=False):
     config = read(state / 'deployment.json')
+    if ssh_only and (config['mode'] != 'cloudru' or not config.get('host')
+                     or not (state / 'terraform/terraform.tfstate').is_file()):
+        raise ValueError('SSH recovery requires the existing Cloud.ru VM and its Terraform state')
     if config['mode']=='timeweb':
         from timeweb_setup import plan as timeweb_plan
         return timeweb_plan(state)
@@ -288,6 +309,8 @@ def plan(state):
     terraform(state, ['validate', '-no-color'], credentials=False)
     terraform(state, ['plan', '-input=false', '-no-color', '-out=deployment.tfplan'], capture=True)
     data = json.loads(terraform(state, ['show', '-json', 'deployment.tfplan'], capture=True, credentials=False).stdout)
+    if ssh_only:
+        verify_ssh_only(data, config['ssh_cidr'])
     resources = summarize_plan(data)
     from quotas import check as quota_check
     quotas=quota_check(state)
@@ -677,7 +700,9 @@ def main(argv=None):
     p.add_argument('--project-id')
     p = sub.add_parser('discover', help='Read Object Storage tenant ID without creating a bucket')
     p.add_argument('--project-id', required=True)
-    sub.add_parser('plan')
+    p = sub.add_parser('plan')
+    p.add_argument('--ssh-only', action='store_true', help='Allow only an in-place SSH source /32 update on an existing Cloud.ru VM')
+    sub.add_parser('check-ssh', help='Authenticate to the recorded VM and execute true')
     p = sub.add_parser('apply')
     p.add_argument('--approve-plan', required=True, help='Exact SHA-256 of reviewed paid infrastructure plan')
     p=sub.add_parser('install')
@@ -796,7 +821,13 @@ def main(argv=None):
     elif args.command == 'discover':
         result = discover(state, args.project_id)
     elif args.command == 'plan':
-        result = plan(state)
+        result = plan(state, ssh_only=args.ssh_only)
+    elif args.command == 'check-ssh':
+        config = read(state / 'deployment.json')
+        response = ssh_read(ssh_args(state, config), 'true', label='SSH login', attempts=1)
+        if response.returncode:
+            raise ValueError('Authenticated SSH command failed')
+        result = {'ssh': 'authenticated', 'host': config['host']}
     elif args.command == 'apply':
         result = apply(state, args.approve_plan)
     elif args.command == 'install':
