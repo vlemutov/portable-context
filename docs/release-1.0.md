@@ -59,21 +59,55 @@ subsequent `native-acceptance.json` read-back; the November 12 Cloud.ru HTTPS
 update acceptance and read-back receipts. The public results above omit account
 identifiers, private connection details and credentials.
 
+### Local owner recovery on Windows ARM64, 2026-11-22
+
+The source memory held a synthetic attachment, `recovery-sample.txt` (78
+bytes). Its SHA-256 was recorded before backup. Separate encrypted restic
+repositories held the memory and OAuth snapshots. A second local installation
+used the offline recovery kit to restore the memory and verify the archived
+identity in quarantine. The recovery process initialized a fresh owner with
+zero passkeys. The restored database retained the source workspace ID.
+
+In Edge, the owner enrolled a new passkey and signed in to the local test
+client with it. The client used OAuth authorization code with PKCE and
+`memory:read` over HTTPS. It checked the workspace with `memory_status` and
+downloaded the entire attachment with `read_file_bytes`. All 78 bytes matched
+the source file. The source, restored original and authenticated download
+had SHA-256 `7dd505aa609409dca5c1e68d53f006a033fd904602e777643bef57058b4c738d`.
+
+This run used native Pocket ID 2.19.2 on Windows ARM64 and a loopback HTTPS
+endpoint with a certificate pinned in a dedicated Edge profile. The private
+`verified-https.json` receipt ties the result to both snapshot IDs. The
+Linux service cutover and cloud-provider checks have separate evidence below.
+
 ### Update and recovery audit for 1.0.0-rc.1
 
 | Scenario | Evidence already collected | Remaining acceptance |
 | --- | --- | --- |
 | Upgrade an installed memory | **Live Timeweb.** The November 17 update journal records `a394ad7` → `716f3ca`, completed edge publication and committed configuration. The native client subsequently verified the same workspace, two message texts, the original file hash and wiki version. **Live Cloud.ru.** The November 12 post-update read-back verified stored content; its receipt does not identify both source commits. | Retain the new Ubuntu test workspace and its sample file if the owner approves the running cost. Once the RC commit exists, update that installation from its recorded SHA to the RC SHA. Check the same workspace, existing passkey/grant, file SHA-256 and wiki revision before and after. |
 | Interrupted install or update | **Linux/systemd CI.** The [installer fixture](../deploy/smoke_https_install.py) interrupted bootstrap and updates around migration, exercised failed readiness and resumed with retained data and identity. | Keep this regression on the RC commit. An interruption of a client file upload is a separate case: interrupt a selected upload on the test installation, resume it and verify one linked original and the source SHA-256. |
-| Memory and OAuth disaster recovery | **Live Cloud.ru pilot.** The separate encrypted OAuth snapshot was restored in isolation; the offline kit was verified. **Disposable full installation.** Following loss of active data, the [recovery fixture](../deploy/smoke_recovery_installation.py) restored memory and identity through service cutover. Originals and wiki survived, old credentials were rejected and fresh consent enabled HTTPS reads/writes. | On an isolated restored installation, have the owner enroll a **fresh passkey in a real browser**, sign into a supported client, and read the expected workspace and a retained original. First enrollment during a clean install does not exercise this recovery step. |
+| Memory and OAuth disaster recovery | **Live Cloud.ru pilot.** An isolated restore verified the OAuth snapshot and offline kit. **Linux/systemd fixture.** The [service recovery test](../deploy/smoke_recovery_installation.py) preserved originals and wiki, rejected old credentials and exercised fresh HTTPS reads/writes. **Windows owner test.** [Passkey enrollment, sign-in and file read-back](#local-owner-recovery-on-windows-arm64-2026-11-22) passed against the restored workspace. | Owner enrollment and authenticated file integrity are verified with the local test client. To claim post-recovery support for a named client, record its own reconnect and read of the retained original. |
 | OAuth refresh and revocation | The [real Pocket ID fixture](../deploy/smoke_oauth_recovery.py) refreshed a token, revoked its grant and verified rejection of the old credentials. Live client sign-in and content reads have separate receipts. | For clients advertised as tested, record refresh and revoke/reconnect against a disposable grant, or label those capabilities unverified for that client. Keep the owner's working grants intact. |
 | mTLS renewal after interruption | **Live Cloud.ru.** The controller resumed the same generation after an exit following a successful cloud PATCH. Authenticated access recovered and the scheduled service returned `not_due`. [Rotation evidence and transient public errors](certificate-renewal.md). | Retain the CI regression. Timeweb has controller installation/update evidence; a forced interrupted Timeweb rotation still needs a receipt if advertised as live-tested there. Continuous public availability is outside the 1.0 gate. |
 
-**RC handoff.** Before cutting the candidate, record the Ubuntu outcome, agree
-the tested provider/client scope, and record the outstanding upload, browser
-recovery and client-grant checks above or explicitly narrow the compatibility
-claims. The upgrade **to the actual RC SHA** and CI on that SHA are candidate
-validation before the public `v1.0.0` tag. They cannot be signed off in advance.
+**RC handoff.** Before cutting the candidate:
+
+1. Record the independent Ubuntu/Cursor Cloud.ru installation against the
+   [owner acceptance steps](clean-install-test.md), including the first file
+   import, read-back from another client, repeat import and backup receipts.
+2. Interrupt and resume a client file upload. Check the linked original count
+   and the SHA-256 of the downloaded bytes.
+3. Finish the provider/client compatibility table. Record refresh, revocation
+   and reconnect using disposable grants for each client where claimed. Mark
+   any pending named-client recovery, Timeweb rotation or first-order
+   cost/autopay check explicitly.
+4. Prepare the release branch, versions, entry guide, changelog and
+   upgrade/rollback instructions.
+
+Once the candidate commit exists, run the supported Windows, macOS (Intel and
+ARM) and Linux CI matrix on that SHA. Upgrade an existing test installation
+from a recorded SHA to the candidate and compare workspace, passkey/grant,
+file hash and wiki revision. These checks precede the public `v1.0.0` tag.
 
 ### ChatGPT Work web plugin — existing Cloud.ru memory, 2026-11-22
 
