@@ -107,6 +107,18 @@ chmod 700 "$HOME/.local/share/portable-context"
 
 В режиме stdio приложение запускает Python-процесс MCP на этой машине. После завершения процесса
 память остаётся на диске. Другое приложение на том же компьютере может использовать ту же папку.
+Для двух или трёх локальных клиентов выполните установку и `init` один раз. В настройках
+каждого укажите один и тот же абсолютный путь к исполняемому файлу и один и тот же
+абсолютный `--home`. Сравните `memory_status.workspace_id` во всех клиентах. С разрешения
+владельца сохраните тестовое сообщение из первого и найдите его из второго через
+`search_messages`. Прочитанный ассистентом материал может передаваться его модели для обработки.
+
+Выбор зависит от места запуска MCP. Настольный ChatGPT Work с локальным исполнением
+поддерживает stdio. У размещённого в облаке ChatGPT есть удалённые подключения и отдельный
+Secure MCP Tunnel. Cowork допускает локальный MCP через плагин. У обычного Cursor Cloud Agent
+stdio-команда работает внутри облачной ВМ. Для облачного доступа в Portable Context проверен
+путь с HTTPS; локальный плагин Cowork и туннель OpenAI с Portable Context в RC не проверялись.
+[ChatGPT Work](https://learn.chatgpt.com/docs/extend/mcp) · [Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels) · [Cowork](https://support.claude.com/en/articles/11725091-when-to-use-desktop-and-web-connectors) · [Cursor Cloud Agents](https://prod.cursor.com/docs/cloud-agent/api/endpoints)
 Веб-приложение не получает доступ к локальному процессу автоматически: нужен поддерживаемый
 им удалённый MCP или предусмотренный этим приложением локальный мост.
 

@@ -1,7 +1,12 @@
 # Portable Context
 
-A shared memory operated through your agent: import selected conversations, preserve native
-relationships, build an evidence-linked Markdown wiki, and continue the work from another client.
+Portable Context is a personal memory you can use with more than one AI assistant.
+Save a conversation and its files, then ask another assistant to pick up where you left off.
+You can trace a project note back to the message it came from. If you lose access to an AI
+account, the material you already saved stays with you.
+
+For two or three assistants on one computer, [use one local folder](skills/portable-context/references/storage.md#локальный-запуск-без-покупки-хостинга).
+For access from a hosted web agent or another computer, the managed cloud setup provides an HTTPS address.
 
 **Release candidate in preparation: 1.0.0-rc.1** (Python package `1.0.0rc1`).
 For acceptance on Cloud.ru or Timeweb, use the same CI-tested commit for the installer,
