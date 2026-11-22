@@ -1,5 +1,20 @@
 # Connector coverage and setup
 
+## MCP client coverage for 1.0.0-rc.1
+
+| Client | Observed with Portable Context |
+| --- | --- |
+| Native Codex on Windows ARM64 | HTTPS sign-in, read/write and original-file read-back. Refresh after expiry, denial after revocation and reconnect passed with a disposable grant. |
+| Cursor Desktop on Ubuntu | Cloud.ru installation and registered callback, file import, unchanged repeat and wiki read-back. Timeweb file import and repeat also passed. Token refresh and revocation in Cursor await a separate run. |
+| Claude Code (beta) | Owner-reported HTTPS login, project reads and a two-message import with an unchanged repeat. Native token lifecycle and original-file read-back remain open. |
+| ChatGPT web plugin | Project and wiki reads in the existing Cloud.ru workspace. |
+| Cursor Cloud Agents | Separate hosted callback and MCP configuration. The Ubuntu Desktop acceptance applies to the editor. |
+| Claude Cowork | Client acceptance pending. |
+
+See the [dated acceptance results](release-1.0.md) and [client-specific connection instructions](../skills/portable-context/references/connection.md).
+
+## Import formats
+
 Version 0.2 adds agent-driven preview/selection, resumable imports, structural/semantic graphs,
 and wiki maintenance. Sources are either server-local files or host-provided records. These are
 implemented format adapters, not certifications against every account export.

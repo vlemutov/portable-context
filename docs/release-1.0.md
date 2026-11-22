@@ -1,8 +1,8 @@
 # Portable Context 1.0 — implementation and release gates
 
-Status: in development. The memory package remains on 0.9.0 with a personal
-1.0-preview HTTPS/OAuth deployment. Do not advertise
-OAuth or the new HTTPS installation as released until the acceptance gates pass.
+Candidate source: **1.0.0-rc.1** (Python distribution and server version `1.0.0rc1`).
+The [changelog and upgrade guide](../CHANGELOG.md) describe this candidate. Public release
+and validation of an upgrade to the candidate commit are pending.
 
 ## Release decision — 2026-11-22
 
@@ -16,9 +16,9 @@ import. See the [file receipt and both import results](timeweb-clean-test.md#р�
 
 | Before tagging | Evidence to collect or publish |
 | --- | --- |
-| Cloud.ru owner test | Separate-project provisioning and native Codex HTTPS read/write passed from Windows. On Ubuntu, the owner reports that Cursor completed the fresh installation, established SSH and received read/write consent. The [Cursor file and repeat-import result](#cursor-on-ubuntu-cloudru-file-import-2026-11-22) is recorded below. Collect the installer SHA, quota and cost review, SSH path, callback setup, cited wiki page, second-client byte read-back and backup receipts for that installation. |
+| Cloud.ru owner test | The separate-project installation, Ubuntu/Cursor file import and repeat, and independent Codex read-back of the file and wiki passed. See the [acceptance evidence and outstanding baseline details](#cursor-on-ubuntu-cloudru-file-import-2026-11-22). |
 | Close the supported-client and operations matrix | Use the [update and recovery audit](#update-and-recovery-audit-for-100-rc1) below. Record coverage per provider and client. Timeweb first-order cost/autopay review remains separate from the completed file and upgrade checks. |
-| Prepare the public candidate | Bring the tested changes onto the release branch. Align package, skill and server-recommended versions, update the entry guide, compatibility list, changelog and upgrade/rollback instructions. Run the required Windows, macOS (Intel and ARM) and Linux CI on the final candidate before merging and publishing the 1.0 tag and GitHub Release. |
+| Prepare the public candidate | Versions, entry guide, client coverage and upgrade/recovery instructions are prepared in the candidate source. Bring the tested commit onto the release branch, run the required Windows, macOS (Intel and ARM) and Linux CI on the final SHA and verify an in-place upgrade before tagging the stable release. |
 
 **Claude Code is beta for this release.** Prior owner pilots covered HTTPS
 sign-in and project reads, and the owner reported a two-message HTTPS import
@@ -33,8 +33,28 @@ new messages, zero revisions and two unchanged messages. Cursor reported the
 same workspace and the project `Portable Context HTTPS check`, one conversation
 and one original. The retained `portable-context-check.txt` is 43 bytes with
 SHA-256 `a0157860cc5b516547cee4ce4f68a2da851c795d14c5987504af106021959ef8`.
-Use that original for the independent second-client download and the candidate
-upgrade comparison. Cursor estimated ongoing charges at about 1.34 RUB/hour.
+Using a separate read-only OAuth profile, native Codex on Windows downloaded
+all 43 bytes and independently computed the same SHA-256. The passport had
+one occurrence and one byte version. Codex also read `https-check-roundtrip`
+version 1 with two message sources and body hash
+`b14cb7df28fa6170fbab0e4b4233bb8719d0d1d9e917a259bc2afa4f7a0f127d`.
+Keep these values for the upgrade comparison.
+
+Cursor reported that the quota API returned 403, leaving available quota
+unknown. The owner accepted a VM/disk/IP estimate of 1.34 RUB/hour or 962.58 RUB
+for 720 hours. SSH succeeded after a VM-specific Wi-Fi route with the VPN on.
+Cursor used the callback registered during installation without a manual edit.
+The HTTPS stages completed. The journal recorded an installer fingerprint and
+an image identifier; the baseline Git SHA still needs confirmation from the
+Ubuntu checkout before upgrading.
+
+According to Cursor's November 22 receipts (Moscow time), the 22:51 memory
+snapshot passed a 27-file restore check after an earlier snapshot listing
+returned exit code 10. The 23:05 pre-import snapshot was created; the reported
+restore check belongs to the earlier snapshot. The separate 23:00 OAuth check
+verified seven files in isolation. The owner's local recovery-kit directory
+had mode 0700. The renewal timer was enabled, idle, and scheduled before
+certificate expiry.
 
 ### Windows clean installation on Cloud.ru, 2026-11-22
 
@@ -141,17 +161,12 @@ and a 120-second access-token lifetime. Only the test grant was revoked.
 
 **RC handoff.** Before cutting the candidate:
 
-1. Finish the [Cloud.ru acceptance steps](clean-install-test.md) on the
-   installed Ubuntu/Cursor workspace. Use the retained file for read-back
-   from a second client, record a cited wiki page and collect the installation
-   and backup receipts.
-2. Finish the provider/client compatibility table. Carry forward the verified
-   native Codex result and record refresh, revocation and reconnect for other
-   clients where claimed. Mark
-   any pending named-client recovery, Timeweb rotation or first-order
-   cost/autopay check explicitly.
-3. Prepare the release branch, versions, entry guide, changelog and
-   upgrade/rollback instructions.
+1. Preserve the verified Cloud.ru file and wiki revision for the upgrade. Confirm
+   the installed baseline commit from the original checkout and installation evidence.
+2. Keep release claims within the published [client matrix](connectors.md).
+   Timeweb first-order cost/autopay review and a forced interrupted Timeweb
+   rotation still require their own evidence if claimed as owner-tested.
+3. Integrate the candidate source on the release branch and select its exact SHA for CI and upgrade validation.
 
 Once the candidate commit exists, run the supported Windows, macOS (Intel and
 ARM) and Linux CI matrix on that SHA. Upgrade an existing test installation

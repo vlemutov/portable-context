@@ -2,15 +2,14 @@
 name: portable-context
 description: Deploy and maintain a personal Portable Context memory on Cloud.ru, Timeweb or an existing server, import accessible conversation history, preserve source relationships, and build or update its knowledge wiki through MCP. Use for setup, migration, recall, updates, diagnostics, cleanup or resuming another agent's work.
 metadata:
-  version: "0.9.0"
-  revision: "1.0-preview.6"
+  version: "1.0.0rc1"
+  revision: "1.0.0-rc.1"
 ---
 
 # Portable Context
 
-Skill revision: **1.0-preview.6**. Package/protocol baseline: **0.9.0**.
-Report both when identifying this installed copy; record its source commit on installation.
-The preview revision distinguishes updated instructions without claiming a released 1.0 server.
+Release candidate **1.0.0-rc.1** uses Python package version **1.0.0rc1**.
+Record the source commit and compare the connected server and its advertised capabilities via `memory_status`.
 
 The user talks to you; you operate the memory tools. Do not make the user learn record IDs,
 file formats or database commands. Translate their scope into a concrete selection and report
@@ -64,12 +63,11 @@ and client authorization → verify identity/backups → chosen first import and
 Use [references/connection.md](references/connection.md) for HTTPS/OAuth or SSH/stdio and actual
 client compatibility. When a phone has no key for an existing memory, guide the owner through
 [adding a second passkey](references/connection.md#второй-passkey-для-входа-с-другого-компьютера).
-For a Cloud.ru acceptance run use the full checkout of the supplied candidate commit.
-The default Cloud.ru preview branch is `release/1.0`; do not
-describe the still-0.9.0 package as a published 1.0 release. Keep the exact ref/commit in the handoff.
+For candidate acceptance on either provider, use a full checkout of the supplied CI-tested commit.
+For an upgrade, follow `CHANGELOG.md` in that checkout and reuse the private installation state.
 For a skill-only copy, obtain the full matching checkout before using deployment files.
 For Timeweb setup, updates, diagnostics or deletion, read [references/timeweb.md](references/timeweb.md). At each milestone or interruption explain what has been verified, what is pending, the current estimated cost and how to resume the same installation. For Cursor, continue through owner enrollment, client OAuth and a verified first import.
-During its preview use `feature/timeweb-installer`, not an older Cloud.ru-only checkout.
+For the deployed Timeweb gateway, review the pinned source commit as part of the update.
 The user's provider choice determines the route; do not copy another installation's state or credentials.
 
 Setup does not authorize exporting all history. Finish with real `memory_status` from the user's

@@ -7,8 +7,8 @@ macOS и Linux с Python 3.11+ и OpenSSH. Cursor должен иметь дос
 Отправьте в новый чат Cursor:
 
 > Помоги установить мою новую независимую память Portable Context в Timeweb Cloud.
-> Репозиторий: https://github.com/vlemutov/portable-context/tree/feature/timeweb-installer.
-> Получи полный checkout этой ветки, зафиксируй commit и проверь, что CI для него завершился успешно.
+> Репозиторий: https://github.com/vlemutov/portable-context. Для этого теста используй SHA_КАНДИДАТА, который передал владелец.
+> Получи полный checkout этого commit, зафиксируй SHA и проверь, что CI для него завершился успешно.
 > Прочитай START-HERE.md, skills/portable-context/SKILL.md и маршрут Timeweb, на который он ссылается.
 > У тебя нет контекста разработки: следуй опубликованным инструкциям и штатным командам.
 > Используй новый отдельный проект и новую приватную папку установки. Существующие памяти не меняй.

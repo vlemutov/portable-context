@@ -25,7 +25,8 @@ def update_guide(path,version,python,profile,connection_verified=False):
           'Choose a real first import, verify saved messages and file receipts, then read them back. '
           'Wiki enrichment is separate: references/review.md explains explicit evidence reviews. '
           'Report import counts, originals, S3 proof dates, backup_status and actual review coverage.\n\n'
-          'Server updates use deploy/setup.py --state PRIVATE_STATE update from the chosen checkout; '
+          f'Follow the [upgrade guide](<{(repo / "CHANGELOG.md").as_posix()}>) for your provider. '
+          'Server updates use deploy/setup.py with the original --state; '
           'this client installer does not update the server. Reuse the private deployment state. '
           'Keep endpoint, workspace ID, state/recovery-kit paths and unfinished job IDs in your notes; '
           'never passwords, tokens, login codes or recovery-kit contents.\n'+end+'\n')

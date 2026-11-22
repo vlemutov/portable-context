@@ -3,10 +3,9 @@
 A shared memory operated through your agent: import selected conversations, preserve native
 relationships, build an evidence-linked Markdown wiki, and continue the work from another client.
 
-**This branch: 1.0 preview; package/skill version remains 0.9.0 until release.**
-HTTPS/OAuth installation and update are being prepared in `release/1.0` (Cloud.ru) and
-`feature/timeweb-installer` (Timeweb). Use the matching branch for
-the preview; do not assume the default branch already contains this onboarding or a 1.0 release.
+**Release candidate in preparation: 1.0.0-rc.1** (Python package `1.0.0rc1`).
+For acceptance on Cloud.ru or Timeweb, use the same CI-tested commit for the installer,
+server and skill. See the [changelog and upgrade instructions](CHANGELOG.md).
 Start at **[START-HERE.md](START-HERE.md)** for the agent-guided setup.
 
 **Latest released functionality: 0.9.0.** Mixed-message authorship, selective wiki review and resume, bounded dialogue evidence, and efficient repeat delivery. See [release notes](docs/release-0.9.md).
@@ -25,7 +24,7 @@ Send your assistant:
 
 > Help me start using https://github.com/vlemutov/portable-context. Read START-HERE.md and the
 > skill, help me connect my existing memory or create my own, then verify a first chosen import
-> and read it back. For the HTTPS preview use branch release/1.0.
+> and read it back. For the release candidate, use the exact commit supplied for this test.
 
 The assistant should read the [skill](skills/portable-context/SKILL.md), help you connect an
 existing memory or create a new one, and guide you one step at a time. It can also help if you
@@ -47,15 +46,15 @@ account”** or **“Set it up on my existing server.”** Follow the
 The installer in `deploy/setup.py` provisions a VM, persistent disk, restricted SSH access,
 private S3 bucket and bucket-scoped backup credentials. It separates a reviewed paid Terraform
 plan from apply, keeps state on the owner's computer, and resumes failed server installation.
-In this preview, `install --https` adds a stateless Container Apps entrance with a provider HTTPS
+On Cloud.ru, `install --https` adds a stateless Container Apps entrance with a provider HTTPS
 address and Pocket ID/OAuth; no purchased domain is needed. SQLite, originals, wiki and identity
 stay on the VM. SSH/stdio remains available for administration and bulk capture delivery.
 Existing Linux servers use the installer without Terraform over SSH; automatic HTTPS setup is
 available for Cloud.ru, with an experimental [Timeweb adapter](docs/timeweb-install.md).
 Timeweb uses its REST API without client Terraform/Docker, waits for ordinary DNS/HTTPS,
-and retains paid resources and creation intents on failure for safe resume. Its complete
-VM/S3/mTLS installation still needs live acceptance testing; the separate transport and
-DNS experiments are documented independently. Each owner runs and pays for their own instance. See the
+and retains paid resources and creation intents on failure for safe resume. Live acceptance
+covered VM/S3 provisioning, HTTPS, OAuth, an import with an original file and a pinned upgrade.
+Each owner runs and pays for their own instance. See the
 [connection guide](skills/portable-context/references/connection.md) for supported client paths.
 
 `bootstrap` verifies pinned Terraform/provider downloads. `install` verifies backup restoration
@@ -254,7 +253,7 @@ Install/copy [the skill](skills/portable-context/SKILL.md) into your agent's sup
 directory, or use its instructions directly. It describes citation and memory-writing practice;
 it is **not** a substitute for a collector or a native plugin for every host.
 
-For the managed Cloud.ru preview, follow [HTTPS/OAuth connection](skills/portable-context/references/connection.md).
+For managed HTTPS on Cloud.ru and Timeweb, follow the [connection guide](skills/portable-context/references/connection.md).
 The installer configures Pocket ID separately from the memory process, with owner-bound read/write access.
 For an **advanced manual static-token setup**, set `PC_MCP_TOKEN` to a random secret (at least 24 characters)
 and use `mcp --transport streamable-http --port 8766`. Clients send `Authorization: Bearer <token>`.

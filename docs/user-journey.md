@@ -2,12 +2,12 @@
 
 Portable Context gives agents a shared workflow: the agent reasons and operates tools; the
 server preserves data, jobs, typed links and wiki revisions. Start at [START-HERE](../START-HERE.md)
-for the repository-link experience. The HTTPS/OAuth route is currently a `release/1.0` preview.
+for the repository-link experience. For HTTPS/OAuth acceptance on either provider, use the candidate commit supplied for the test.
 
 ## 1. Connect or create your memory
 
 The agent first checks whether you already have a memory. It helps connect that same workspace,
-create one in your own Cloud.ru account, use your own server, or start in a local private folder.
+create one in your own Cloud.ru or Timeweb account, use your own server, or start in a local private folder.
 An empty or temporarily unreachable memory is not a reason to create a replacement.
 
 With terminal/file access the agent follows the [onboarding route](../skills/portable-context/references/onboarding.md).

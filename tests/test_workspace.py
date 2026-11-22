@@ -27,9 +27,14 @@ def page(task, page_id='atlas', **kwargs):
 
 class WorkspaceTests(unittest.TestCase):
     def test_recommended_skill_tracks_server_release(self):
-        from portable_context import __version__
+        from portable_context import RELEASE_REVISION, __version__
         status = self.ws.describe()
+        self.assertEqual(status['version'], __version__)
         self.assertEqual(status['skill']['recommended_version'], __version__)
+        self.assertEqual(status['skill']['recommended_revision'], RELEASE_REVISION)
+        frontmatter = (Path(__file__).resolve().parents[1] / 'skills/portable-context/SKILL.md').read_text(encoding='utf-8').split('---', 2)[1]
+        self.assertIn(f'  version: "{__version__}"', frontmatter.splitlines())
+        self.assertIn(f'  revision: "{RELEASE_REVISION}"', frontmatter.splitlines())
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

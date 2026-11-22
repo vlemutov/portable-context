@@ -1,7 +1,7 @@
 # Установка и обновление у владельца
 
 Сначала [onboarding.md](onboarding.md): существующую память подключают, а не создают заново.
-Команды ниже выполняет агент из полного checkout **1.0-preview** (`release/1.0` до публикации).
+Команды выполняет агент из полного checkout проверяемого commit **1.0.0-rc.1**. Для действующей установки см. [обновление и восстановление](../../../CHANGELOG.md#обновление-существующей-памяти).
 Аккаунт провайдера, ресурсы, данные и расходы принадлежат пользователю.
 
 Для **Timeweb** сначала прочитай [маршрут Timeweb](timeweb.md), затем используй
@@ -205,7 +205,7 @@ Windows установщик предпочитает Git OpenSSH; другой 
 заполняет PRIVATE_STATE/backup-config.json: endpoint (HTTPS), region, bucket, access_key, secret_key.
 Установщик проверяет копию/восстановление; учти страну и права хранилища. Terraform/Cloud.ru
 для SSH-пути не нужны. Универсальный HTTPS bootstrap для любого reverse proxy пока не реализован:
-`install --https` использует Cloud.ru. Ручной HTTPS-путь — `docs/oauth-preview.md` и
+`install --https` автоматизирован для Cloud.ru и Timeweb. Ручной HTTPS-путь — `docs/oauth-preview.md` и
 `docs/oauth-recovery.md` в том же checkout.
 
 ## Обновление и ошибки
