@@ -80,12 +80,31 @@ endpoint with a certificate pinned in a dedicated Edge profile. The private
 `verified-https.json` receipt ties the result to both snapshot IDs. The
 Linux service cutover and cloud-provider checks have separate evidence below.
 
+### Interrupted client file upload on Windows ARM64, 2026-11-22
+
+The stock `portable_context.client send` uploaded a 2,800,000-byte text file
+attached to one message in a fresh local workspace. A test relay closed the
+stdio MCP connection after the server wrote the first 786,432 file bytes and
+before the client received the reply. The first send failed. An independent
+session saw that partial offset in `capture_upload_status`, zero file passports
+and no published original.
+
+Rerunning the same command with the same profile and package reused the upload
+ID and import run ID. The first resumed file chunk started at byte 786,432.
+After completion, a new MCP session found one passport, one occurrence linked
+to the source message revision and one byte version. The originals directory
+contained one file. Reading all 11 pages with `read_file_bytes` reproduced the
+source byte for byte. Both SHA-256 values were
+`f56cc0f588d0a2fd86958506dae2c4da5d7ea0c7f540bc4e89d32fdf14073213`.
+This verifies capture-v2 resume over local MCP stdio. Cloud HTTPS and S3
+have separate acceptance results.
+
 ### Update and recovery audit for 1.0.0-rc.1
 
 | Scenario | Evidence already collected | Remaining acceptance |
 | --- | --- | --- |
 | Upgrade an installed memory | **Live Timeweb.** The November 17 update journal records `a394ad7` → `716f3ca`, completed edge publication and committed configuration. The native client subsequently verified the same workspace, two message texts, the original file hash and wiki version. **Live Cloud.ru.** The November 12 post-update read-back verified stored content; its receipt does not identify both source commits. | Retain the new Ubuntu test workspace and its sample file if the owner approves the running cost. Once the RC commit exists, update that installation from its recorded SHA to the RC SHA. Check the same workspace, existing passkey/grant, file SHA-256 and wiki revision before and after. |
-| Interrupted install or update | **Linux/systemd CI.** The [installer fixture](../deploy/smoke_https_install.py) interrupted bootstrap and updates around migration, exercised failed readiness and resumed with retained data and identity. | Keep this regression on the RC commit. An interruption of a client file upload is a separate case: interrupt a selected upload on the test installation, resume it and verify one linked original and the source SHA-256. |
+| Interrupted install, update or client file upload | **Linux/systemd CI.** The [installer fixture](../deploy/smoke_https_install.py) interrupted bootstrap and updates around migration, exercised failed readiness and resumed with retained data and identity. **Local Windows client.** The [interrupted file upload](#interrupted-client-file-upload-on-windows-arm64-2026-11-22) resumed at the stored offset and produced one linked original with the source SHA-256. | Keep the installer regression on the RC commit. The local file-upload acceptance run is complete. |
 | Memory and OAuth disaster recovery | **Live Cloud.ru pilot.** An isolated restore verified the OAuth snapshot and offline kit. **Linux/systemd fixture.** The [service recovery test](../deploy/smoke_recovery_installation.py) preserved originals and wiki, rejected old credentials and exercised fresh HTTPS reads/writes. **Windows owner test.** [Passkey enrollment, sign-in and file read-back](#local-owner-recovery-on-windows-arm64-2026-11-22) passed against the restored workspace. | Owner enrollment and authenticated file integrity are verified with the local test client. To claim post-recovery support for a named client, record its own reconnect and read of the retained original. |
 | OAuth refresh and revocation | The [real Pocket ID fixture](../deploy/smoke_oauth_recovery.py) refreshed a token, revoked its grant and verified rejection of the old credentials. Live client sign-in and content reads have separate receipts. | For clients advertised as tested, record refresh and revoke/reconnect against a disposable grant, or label those capabilities unverified for that client. Keep the owner's working grants intact. |
 | mTLS renewal after interruption | **Live Cloud.ru.** The controller resumed the same generation after an exit following a successful cloud PATCH. Authenticated access recovered and the scheduled service returned `not_due`. [Rotation evidence and transient public errors](certificate-renewal.md). | Retain the CI regression. Timeweb has controller installation/update evidence; a forced interrupted Timeweb rotation still needs a receipt if advertised as live-tested there. Continuous public availability is outside the 1.0 gate. |
@@ -95,13 +114,11 @@ Linux service cutover and cloud-provider checks have separate evidence below.
 1. Record the independent Ubuntu/Cursor Cloud.ru installation against the
    [owner acceptance steps](clean-install-test.md), including the first file
    import, read-back from another client, repeat import and backup receipts.
-2. Interrupt and resume a client file upload. Check the linked original count
-   and the SHA-256 of the downloaded bytes.
-3. Finish the provider/client compatibility table. Record refresh, revocation
+2. Finish the provider/client compatibility table. Record refresh, revocation
    and reconnect using disposable grants for each client where claimed. Mark
    any pending named-client recovery, Timeweb rotation or first-order
    cost/autopay check explicitly.
-4. Prepare the release branch, versions, entry guide, changelog and
+3. Prepare the release branch, versions, entry guide, changelog and
    upgrade/rollback instructions.
 
 Once the candidate commit exists, run the supported Windows, macOS (Intel and
