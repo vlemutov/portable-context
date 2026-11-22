@@ -18,6 +18,17 @@ import. See the [file receipt and both import results](timeweb-clean-test.md#р�
 | Close the supported-client and operations matrix | Match each advertised combination to a receipt for login, refresh/revocation, import and recall. Check evidence for an interrupted upload, an upgrade to a different commit, certificate rotation and browser passkey enrollment after isolated recovery. Run uncovered cases on a test installation. For Timeweb, distinguish the live file check from the new-install cost and autopay review. |
 | Prepare the public candidate | Bring the tested changes onto the release branch. Align package, skill and server-recommended versions, update the entry guide, compatibility list, changelog and upgrade/rollback instructions. Run the required Windows, macOS (Intel and ARM) and Linux CI on the final candidate before merging and publishing the 1.0 tag and GitHub Release. |
 
+### ChatGPT Work web plugin — existing Cloud.ru memory, 2026-11-22
+
+The installer at `6020bf9` registered the exact redirect shown by ChatGPT on
+the owner's existing Pocket ID client. The second migration reported no changes.
+From the hosted ChatGPT plugin, the owner reported that `memory_status` returned
+the expected workspace, `list_projects` found the expected project, and
+`search_wiki` followed by `read_wiki` returned an existing page. Codex independently
+matched the workspace ID, page title and quoted line through the same memory.
+This verifies OAuth sign-in and cross-client reading. Write/import from ChatGPT,
+Claude Cowork sign-in and a fresh Cloud.ru installation remain separate checks.
+
 The dated sections below retain the evidence available at each earlier milestone.
 
 ### Cursor Cloud Agents OAuth
