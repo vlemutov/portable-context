@@ -56,7 +56,10 @@ when available. No secrets in chat. Reading the skill neither installs MCP nor g
 The complete route is: identify memory → check host capabilities → install/connect → owner login
 and client authorization → verify identity/backups → chosen first import and recall → private handoff.
 Use [references/connection.md](references/connection.md) for HTTPS/OAuth or SSH/stdio and actual
-client compatibility. Cloud.ru HTTPS needs the full `release/1.0` checkout during preview; do not
+client compatibility. When a phone has no key for an existing memory, guide the owner through
+[adding a second passkey](references/connection.md#второй-passkey-для-входа-с-другого-компьютера).
+For a Cloud.ru acceptance run use the full checkout of the supplied candidate commit.
+The default Cloud.ru preview branch is `release/1.0`; do not
 describe the still-0.9.0 package as a published 1.0 release. Keep the exact ref/commit in the handoff.
 For a skill-only copy, obtain the full matching checkout before using deployment files.
 For Timeweb setup, updates, diagnostics or deletion, read [references/timeweb.md](references/timeweb.md). At each milestone or interruption explain what has been verified, what is pending, the current estimated cost and how to resume the same installation. For Cursor, continue through owner enrollment, client OAuth and a verified first import.
