@@ -5,6 +5,7 @@ Never print API responses: client credentials and login links can be included.
 """
 import json
 from pathlib import Path
+import re
 import urllib.error
 import urllib.request
 
@@ -20,6 +21,18 @@ DESKTOP_CALLBACKS = {'claude-code': (CLAUDE_CODE_CALLBACK,), 'cursor': (CURSOR_C
                      'claude-cowork': (COWORK_CALLBACK,)}
 PERMISSIONS = {'memory:read': 'Read memory', 'memory:write': 'Import and enrich memory',
                'memory:admin': 'Administer memory and server sources'}
+
+
+def client_callbacks(client, callback_url=None):
+    if client == 'chatgpt-work':
+        stable = 'https://chatgpt.com/connector_platform_oauth_redirect'
+        if callback_url == stable or (isinstance(callback_url, str) and re.fullmatch(
+                r'https://chatgpt\.com/connector/oauth/(?!\.{1,2}$)[A-Za-z0-9._~-]+', callback_url)):
+            return (callback_url,)
+        raise ValueError('Copy the exact ChatGPT redirect URI from your MCP connection into --callback-url')
+    if client not in DESKTOP_CALLBACKS or callback_url is not None:
+        raise ValueError('Only chatgpt-work accepts a supplied callback URL')
+    return DESKTOP_CALLBACKS[client]
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -67,7 +80,7 @@ class Bootstrap:
     def enable_claude_code(self, receipt, before_change):
         return self.enable_desktop(receipt, before_change, 'claude-code')
 
-    def enable_desktop(self, receipt, before_change, client):
+    def enable_desktop(self, receipt, before_change, client, callback_url=None):
         """Explicit additive migration for the owned desktop client; no grant reset.
 
         Pocket ID's PUT replaces client settings, so carry forward the complete
@@ -86,7 +99,7 @@ class Bootstrap:
         callbacks = current.get('callbackURLs')
         if not isinstance(callbacks, list) or CODEX_CALLBACK not in callbacks:
             raise ValueError('Desktop callback configuration changed; inspect owner settings')
-        required_callbacks = DESKTOP_CALLBACKS[client]
+        required_callbacks = client_callbacks(client, callback_url)
         missing = [url for url in required_callbacks if url not in callbacks]
         if missing:
             before_change()

@@ -689,7 +689,8 @@ def main(argv=None):
     sub.add_parser('owner-login',help='Write a new private one-time owner enrollment code locally')
     sub.add_parser('https-check',help='Check public authentication boundary and server identity')
     p=sub.add_parser('oauth-client',help='Register the supported callback URLs on the existing OAuth client')
-    p.add_argument('--client',choices=('claude-code','cursor','claude-cowork'),required=True)
+    p.add_argument('--client',choices=('claude-code','cursor','claude-cowork','chatgpt-work'),required=True)
+    p.add_argument('--callback-url',help='For chatgpt-work: the exact redirect URI shown on your MCP connection')
     p=sub.add_parser('https-reconcile',help='Record an explicitly reviewed resource ID after a lost creation reply')
     p.add_argument('--stage',choices=('registry','container'),required=True)
     p.add_argument('--resource-id',required=True)
@@ -826,7 +827,7 @@ def main(argv=None):
         result={'server':remote(state,'check',receipt['origin']),'public':check_public(receipt['origin'])}
     elif args.command == 'oauth-client':
         from https_setup import desktop_client
-        result=desktop_client(state,args.client)
+        result=desktop_client(state,args.client,args.callback_url)
     elif args.command == 'https-reconcile':
         from https_setup import reconcile
         result=reconcile(state,args.stage,args.resource_id)

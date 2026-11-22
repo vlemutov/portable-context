@@ -205,7 +205,7 @@ def server_action(p):
         try:owner_login(manifest['runtime'],output);return {'private_login':read(output)}
         finally:output.unlink(missing_ok=True)
     if p['action']=='check':return {'workspace_id':expected,**metadata(manifest)}
-    if p['action'] in ('claude-code','cursor','claude-cowork'):
+    if p['action'] in ('claude-code','cursor','claude-cowork','chatgpt-work'):
         from oauth_recovery import runtime_info, IdentityBackups
         from pocketid import Bootstrap
         _,env,receipt,config=runtime_info(manifest['runtime'])
@@ -213,17 +213,19 @@ def server_action(p):
         backup=IdentityBackups(root/'identity-backup-config.json')
         if backup.runtime!=Path(manifest['runtime']).resolve() or backup.config.get('issuer')!=config.issuer:
             raise ValueError('Identity backup belongs to another runtime or issuer')
-        result=Bootstrap(int(env['PORT']),env['STATIC_API_KEY']).enable_desktop(receipt,backup.backup,p['action'])
+        result=Bootstrap(int(env['PORT']),env['STATIC_API_KEY']).enable_desktop(receipt,backup.backup,p['action'],p.get('callback_url'))
         return {'workspace_id':expected,**result}
     raise ValueError('Unsupported HTTPS server action')
 
 
-def remote(state, action, origin, generation=None):
+def remote(state, action, origin, generation=None, *, callback_url=None):
     installed=read(state/'installed.json');deployment=read(state/'deployment.json')
     names=('https_setup.py','https_runtime.py','gateway.py','gateway_rotation.py','gateway_diagnostics.py','pocketid.py','oauth_recovery.py',
         'setup.py','cloud_gateway.py','edge_tools.py','edge/tool-lock.json','edge/entrypoint.sh')
     p={'root':installed['root'],'workspace_id':installed['memory']['workspace_id'],'origin':origin,'action':action,
         'files':{name:(ROOT/'deploy'/name).read_text(encoding='utf-8') for name in names}}
+    if callback_url is not None:
+        p['callback_url']=callback_url
     if generation:
         from gateway_rotation import FILES
         p['generation']={name:base64.b64encode((generation/name).read_bytes()).decode() for name in FILES}
@@ -266,15 +268,15 @@ def owner_login(state):
     return {'private_file':str(path),'expires_in_minutes':20,'next':'Owner reads this private file locally, enters code and enrolls passkey. Never paste the code into chat.'}
 
 
-def desktop_client(state, client):
+def desktop_client(state, client, callback_url=None):
     """Register the selected client's exact callbacks on an existing owner installation."""
+    from pocketid import client_callbacks
+    client_callbacks(client, callback_url)
     state=Path(state);receipt=connection_receipt(state)
-    if client not in ('claude-code','cursor','claude-cowork'):
-        raise ValueError('Unsupported OAuth client')
     installed=read(state/'installed.json')
     if receipt.get('workspace_id') != installed['memory']['workspace_id']:
         raise ValueError('HTTPS connection receipt belongs to a different workspace')
-    result=remote(state,client,receipt['origin'])
+    result=remote(state,client,receipt['origin'],callback_url=callback_url)
     result.update(mcp_url=receipt['mcp_url'],scopes=['openid','offline_access','memory:read','memory:write'])
     if client == 'cursor':
         save(state/'client-cursor.json',cursor_config(result))

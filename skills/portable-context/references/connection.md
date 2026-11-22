@@ -268,6 +268,30 @@ Desktop Chat/Cowork и Claude Code — разные клиенты, эту на�
 Для чтения нужна `memory:read`, для импорта — `memory:write`. Прочитай знакомую страницу.
 Если прав на запись нет, зафиксируй это до первого импорта.
 
+## ChatGPT Work в браузере
+
+В **Plugins → + → Add custom MCP server** укажи имя и публичный адрес своей памяти
+с путём `/mcp`. Для личного теста выбери **Create as a plugin** и установи плагин
+в своём пространстве. Доступность создания зависит от настроек пространства.
+[Подключение MCP к ChatGPT](https://developers.openai.com/plugins/deploy/connect-chatgpt)
+
+Используй режим заранее зарегистрированного OAuth-клиента, ID `portable-context-desktop`,
+PKCE и метод аутентификации клиента `none`. Области для импорта — `openid offline_access
+memory:read memory:write`. Скопируй только **redirect URI** со страницы управления **своим**
+подключением. В терминале установщика подставь этот URL вместо `REDIRECT_URI`:
+
+```text
+python deploy/setup.py --state PRIVATE_STATE oauth-client --client chatgpt-work --callback-url "REDIRECT_URI"
+```
+
+ChatGPT показывает общий адрес при поддержке идентификации издателя OAuth (RFC 9207)
+либо адрес с идентификатором конкретного подключения. Установщик добавляет только
+показанный адрес и сохраняет остальные регистрации. [Правила OpenAI для redirect URI](https://developers.openai.com/plugins/build/auth)
+
+После входа открой новый чат Work, выбери плагин через `@`, вызови `memory_status`,
+сверь workspace ID и прочитай знакомую страницу. Проверяй право записи отдельным
+согласованным импортом. Подключение MCP само по себе не переносит историю переписки.
+
 ## SSH/stdio или локальная память
 
 Возьми `command` и `args` из PRIVATE_STATE/client-config.json и перенеси в **штатный формат**

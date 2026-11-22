@@ -100,6 +100,27 @@ class DesktopCallbackTests(unittest.TestCase):
         self.assertEqual(self.client, expected)
         self.assertEqual((self.writes, self.backups), (1, 1))
 
+    def test_work_registers_only_selected_connection(self):
+        url = 'https://chatgpt.com/connector/oauth/test-connection'
+        expected = copy.deepcopy(self.client)
+        expected['callbackURLs'].append(url)
+        with patch.object(self.api, 'request', side_effect=self.provider):
+            self.api.enable_desktop(self.receipt, self.backup, 'chatgpt-work', url)
+            self.assertFalse(self.api.enable_desktop(self.receipt, self.backup, 'chatgpt-work', url)['changed'])
+        self.assertEqual(self.client, expected)
+        self.assertEqual((self.writes, self.backups), (1, 1))
+
+    def test_work_requires_an_exact_published_redirect_form(self):
+        stable = 'https://chatgpt.com/connector_platform_oauth_redirect'
+        self.assertEqual(pocketid.client_callbacks('chatgpt-work', stable), (stable,))
+        prefix = 'https://chatgpt.com/connector/oauth/'
+        for url in (None, prefix, prefix+'*', prefix+'..', prefix+'a/b', prefix+'a?code=x',
+                    prefix+'a#anchor', 'https://example.com/connector/oauth/test'):
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                pocketid.client_callbacks('chatgpt-work', url)
+        with self.assertRaises(ValueError):
+            pocketid.client_callbacks('claude-cowork', stable)
+
     def test_failed_checkpoint_or_concurrent_edit_prevents_put(self):
         def failed(): raise RuntimeError('Backup unavailable')
         with patch.object(self.api, 'request', side_effect=self.provider):

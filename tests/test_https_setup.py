@@ -41,13 +41,16 @@ class HTTPSSetupTests(unittest.TestCase):
                 setup.server_action(payload)
             enable.assert_not_called()
             backup.config={'issuer':origin}
-            def migrate(receipt,checkpoint,client):
-                self.assertEqual(client,'claude-code')
+            def migrate(receipt,checkpoint,client,callback_url):
+                self.assertEqual(client,payload['action'])
+                self.assertEqual(callback_url,payload.get('callback_url'))
                 checkpoint(); return {'changed':True,'permissions_changed':False}
             enable.side_effect=migrate
             result=setup.server_action(payload)
             self.assertEqual(result['workspace_id'],'same-memory')
             backup.backup.assert_called_once_with()
+            payload.update(action='chatgpt-work',callback_url='https://chatgpt.com/connector/oauth/fixture')
+            self.assertTrue(setup.server_action(payload)['changed'])
 
     def test_resume_preserves_intent_and_never_marks_failed_stage_complete(self):
         journal=setup.Journal(self.root,{'target':'one'})
@@ -171,7 +174,7 @@ class HTTPSSetupTests(unittest.TestCase):
             receipt=setup.read(self.root/'https-installed.json')
             setup.save(self.root/'https-installed.json',{**receipt,'workspace_id':'workspace'})
             result=setup.desktop_client(self.root,'cursor')
-            remote.assert_called_once_with(self.root,'cursor',origin)
+            remote.assert_called_once_with(self.root,'cursor',origin,callback_url=None)
         entry=setup.read(self.root/'client-cursor.json')['mcpServers']['portable-context']
         self.assertEqual(entry,{'url':origin+'/mcp','auth':{'CLIENT_ID':'portable-context-desktop','scopes':result['scopes']}})
         self.assertNotIn('memory:admin',result['scopes'])
