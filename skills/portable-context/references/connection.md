@@ -84,6 +84,8 @@ callback_url = "http://127.0.0.1:14881/callback"
 
 ### Claude Code: localhost и обновление существующей установки
 
+**Статус для релиза 1.0 — бета.** Владелец проверил вход и чтение проектов по HTTPS и сообщил об импорте двух сообщений с повтором без дублей. Обновление токена, отзыв доступа и повторный вход после отзыва в самом Claude Code ещё предстоит проверить.
+
 Claude Code использует `http://localhost:PORT/callback`; `--callback-port` фиксирует порт,
 но не заменяет hostname на 127.0.0.1. [Официальная инструкция](https://code.claude.com/docs/en/mcp#use-pre-configured-oauth-credentials)
 проверена 11 ноября 2026. На 2.1.321 в пользовательском пилоте зафиксирован именно localhost.
@@ -142,9 +144,9 @@ Desktop Chat/Cowork и Claude Code — разные клиенты, эту на�
 
 **Результат пилота 11 ноября 2026:** владелец подтвердил вход Claude Code 2.1.321 по HTTPS/OAuth
 через VPN без SSH/обходного маршрута; тот же workspace и существующие проекты доступны.
-Выданы openid, offline_access, memory:read и memory:write без memory:admin. Это подтверждение
-входа и чтения; запись, capture с файлами, refresh и отзыв именно в Claude Code ещё требуют
-отдельных проверок. Codex HTTPS/OAuth после изменения callback также ответил memory_status.
+В этом прогоне владелец выдал `openid`, `offline_access`, `memory:read` и `memory:write`.
+После изменения callback Codex также ответил на `memory_status`. Для импорта обычного
+файла через Claude Code ещё нужна сверка скачанных байтов с исходным SHA-256.
 
 Если `claude mcp get` до входа пишет `timed out`, не делай вывод, что память выключена.
 Такое сообщение наблюдалось в пилоте без завершённой авторизации. Проверь URL/transport,

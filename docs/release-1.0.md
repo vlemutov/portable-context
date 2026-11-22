@@ -16,9 +16,14 @@ import. See the [file receipt and both import results](timeweb-clean-test.md#Ñ€Ð
 
 | Before tagging | Evidence to collect or publish |
 | --- | --- |
-| Cloud.ru owner test | Separate-project provisioning and native Codex HTTPS read/write passed from Windows. The owner reports that Cursor on Ubuntu removed the test installation and started a fresh run. Its outcome is pending. Record the new installer path, quota/price review, any SSH recovery, first passkey, Cursor's own OAuth callback without manual edits, original file read-back and backup status using the [Cloud.ru acceptance steps](clean-install-test.md). |
+| Cloud.ru owner test | Separate-project provisioning and native Codex HTTPS read/write passed from Windows. On Ubuntu, the owner reports that Cursor completed the fresh installation, established SSH and received read/write consent. Record the installer SHA, quota and cost review, SSH path and whether the OAuth callback needed a manual edit. Complete the [owner acceptance steps](clean-install-test.md) in that same workspace: import, unchanged repeat, cited wiki page, second-client byte read-back and backup receipts. |
 | Close the supported-client and operations matrix | Use the [update and recovery audit](#update-and-recovery-audit-for-100-rc1) below. Record coverage per provider and client. Timeweb first-order cost/autopay review remains separate from the completed file and upgrade checks. |
 | Prepare the public candidate | Bring the tested changes onto the release branch. Align package, skill and server-recommended versions, update the entry guide, compatibility list, changelog and upgrade/rollback instructions. Run the required Windows, macOS (Intel and ARM) and Linux CI on the final candidate before merging and publishing the 1.0 tag and GitHub Release. |
+
+**Claude Code is beta for this release.** Prior owner pilots covered HTTPS
+sign-in and project reads, and the owner reported a two-message HTTPS import
+with an unchanged repeat. Native token refresh, revocation and reconnect in
+Claude Code remain unverified. The owner deferred that run beyond RC preparation.
 
 ### Windows clean installation on Cloud.ru, 2026-11-22
 
