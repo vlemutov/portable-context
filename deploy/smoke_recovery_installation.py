@@ -64,7 +64,7 @@ class Browser:
         status, value = self.request('/api/one-time-access-token/'+code, {})
         assert status == 200 and value['id'] == owner, 'Fresh owner login failed'
 
-    def authorize(self, redirect_uri='http://127.0.0.1:14881/callback'):
+    def authorize(self, redirect_uri='http://127.0.0.1:14881/callback', *, require_consent=True):
         verifier = secrets.token_urlsafe(48)
         challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip('=')
         params = {'client_id': 'portable-context-desktop', 'response_type': 'code',
@@ -94,7 +94,8 @@ class Browser:
         status, tokens = self.request('/api/oidc/token', {'grant_type': 'authorization_code',
             'client_id': params['client_id'], 'code': query['code'][0], 'code_verifier': verifier,
             'redirect_uri': params['redirect_uri'], 'resource': params['resource']}, form=True)
-        assert status == 200 and tokens.get('refresh_token') and consent
+        assert status == 200 and tokens.get('refresh_token')
+        if require_consent: assert consent, 'Expected a fresh consent step'
         return tokens
 
     def mcp(self, token, tool, arguments, allowed=True):

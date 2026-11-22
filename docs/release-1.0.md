@@ -20,6 +20,33 @@ import. See the [file receipt and both import results](timeweb-clean-test.md#р�
 
 The dated sections below retain the evidence available at each earlier milestone.
 
+### Cursor Cloud Agents OAuth
+
+The public PKCE client `portable-context-desktop` now includes the exact
+`https://www.cursor.com/agents/mcp/oauth/callback` redirect on fresh installations.
+For existing memory run `python deploy/setup.py --state PRIVATE_STATE oauth-client --client cursor`
+from the updated checkout. It appends missing redirects after the identity backup.
+The editor still uses `.cursor/mcp.json` and `http://localhost:8787/callback`.
+
+In the [Cursor plugins dashboard](https://cursor.com/dashboard/plugins), select **Add New MCP server → Edit JSON**,
+replace the entire `my-server` template with this block, and substitute your memory URL.
+Supply the four scopes explicitly: the default identity scopes omit memory access. Leave the client secret empty.
+
+```json
+{
+  "portable-context-cloudru": {
+    "url": "https://EXAMPLE/mcp",
+    "auth": {
+      "CLIENT_ID": "portable-context-desktop",
+      "scopes": ["openid", "offline_access", "memory:read", "memory:write"]
+    }
+  }
+}
+```
+
+Confirm live access by signing in again and reading a known page from the cloud agent.
+See the [connection guide](../skills/portable-context/references/connection.md#cursor-cloud-agents).
+
 ## 1.0-preview.6 — Timeweb lifecycle and independent onboarding
 
 - Timeweb records owner-reviewed costs, expected test duration and autopay status in private state before new paid orders. The same approved automatic search covers continuation on its selected VM. Replacing the app tariff requires a new cost review.

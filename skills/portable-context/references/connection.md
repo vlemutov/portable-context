@@ -21,7 +21,8 @@
 
 Управляемая установка создаёт публичный PKCE-клиент `portable-context-desktop` без client secret.
 Новые установки регистрируют точные адреса возврата для Codex (`http://127.0.0.1:14881/callback`),
-Claude Code (`http://localhost:14881/callback`) и Cursor Desktop (`http://localhost:8787/callback`).
+Claude Code (`http://localhost:14881/callback`), Cursor Desktop (`http://localhost:8787/callback`)
+и Cursor Cloud Agents (`https://www.cursor.com/agents/mcp/oauth/callback`).
 Адрес в запросе входа должен точно совпасть с зарегистрированным.
 Права: `openid`, `offline_access`, `memory:read`, для записи также `memory:write`.
 Обычному агенту не нужны `memory:admin` или ключи облака/S3. Не повышай права из-за ошибки записи.
@@ -219,6 +220,41 @@ Desktop Chat/Cowork и Claude Code — разные клиенты, эту на�
 из Cursor. Если выбран файл, проверь его сохранение. При проверке повторной отправки возьми
 тот же пакет и сверь счётчики добавленных и изменённых записей. При прерывании назови
 оставшийся шаг, сохрани ID пакета/задания и продолжай его.
+
+## Cursor Cloud Agents
+
+Если диалог перенесён в Projects и выполняется облачным агентом, подключи MCP через
+[панель плагинов Cursor](https://cursor.com/dashboard/plugins). Файл `client-cursor.json`
+и запись в `.cursor/mcp.json` выше относятся к редактору с адресом возврата
+`http://localhost:8787/callback`. Облачный агент использует
+`https://www.cursor.com/agents/mcp/oauth/callback` с обязательным `www`.
+
+Для прежней памяти из обновлённого checkout выполни
+`python deploy/setup.py --state PRIVATE_STATE oauth-client --client cursor` с папкой этой установки.
+Команда добавляет недостающие адреса после резервной копии OAuth. В новой установке оба уже зарегистрированы.
+
+В панели выбери **Add New MCP server → Edit JSON**. Замени весь шаблон с `my-server`
+следующим блоком. Подставь свой полный HTTPS-адрес памяти вместо `https://EXAMPLE/mcp`.
+У публичного клиента PKCE нет секрета. В форме нет отдельного поля для областей доступа:
+без явного списка Cursor может запросить только `openid`, `profile`, `email`, `groups`,
+`offline_access`. Для чтения и записи памяти нужны права из блока.
+
+```json
+{
+  "portable-context-cloudru": {
+    "url": "https://EXAMPLE/mcp",
+    "auth": {
+      "CLIENT_ID": "portable-context-desktop",
+      "scopes": ["openid", "offline_access", "memory:read", "memory:write"]
+    }
+  }
+}
+```
+
+Сохрани, запусти новый вход и подтверди запрошенные права. Из облачного агента вызови
+`memory_status`, сверь workspace ID и открой знакомую страницу; в редакторе проверь свой вход отдельно.
+Для каждого другого облачного клиента (например, Claude Cowork или GPT Work) регистрируй отдельный
+точный callback, когда адрес известен из ошибки или документации этого клиента.
 
 ## SSH/stdio или локальная память
 

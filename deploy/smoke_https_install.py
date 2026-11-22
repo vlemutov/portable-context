@@ -84,6 +84,8 @@ def main():
             token=browser.authorize('http://localhost:8787/callback')['access_token']
             record={'source':'https-install-test','instance':'synthetic','conversation_id':'one','message_id':'one','role':'user','text':'Preserve installed memory across interrupted update.'}
             assert browser.mcp(token,'append_messages',{'records':[record]})['inserted']==1
+            cloud_token=browser.authorize('https://www.cursor.com/agents/mcp/oauth/callback', require_consent=False)['access_token']
+            assert browser.mcp(cloud_token,'memory_status',{})['workspace_id']==identifier
             store=__import__('portable_context.core',fromlist=['Store']).Store(root/'memory')
             original=fixture/'original.txt';original.write_text('Original evidence');blob=store.archive(original)
             wiki=root/'memory/vault/manual/test.md';wiki.parent.mkdir(parents=True,exist_ok=True);wiki.write_text('User-owned wiki')

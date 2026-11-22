@@ -688,7 +688,7 @@ def main(argv=None):
     p.add_argument('--file',type=Path,help='Optional non-secret edge options')
     sub.add_parser('owner-login',help='Write a new private one-time owner enrollment code locally')
     sub.add_parser('https-check',help='Check public authentication boundary and server identity')
-    p=sub.add_parser('oauth-client',help='Enable a supported native callback on the existing OAuth client')
+    p=sub.add_parser('oauth-client',help='Register the supported callback URLs on the existing OAuth client')
     p.add_argument('--client',choices=('claude-code','cursor'),required=True)
     p=sub.add_parser('https-reconcile',help='Record an explicitly reviewed resource ID after a lost creation reply')
     p.add_argument('--stage',choices=('registry','container'),required=True)

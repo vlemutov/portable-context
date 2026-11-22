@@ -267,7 +267,7 @@ def owner_login(state):
 
 
 def desktop_client(state, client):
-    """Enable the exact localhost callback on an existing owner installation."""
+    """Register the selected client's exact callbacks on an existing owner installation."""
     state=Path(state);receipt=connection_receipt(state)
     if client not in ('claude-code','cursor'):
         raise ValueError('Unsupported OAuth client')

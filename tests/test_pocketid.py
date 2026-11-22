@@ -75,7 +75,19 @@ class DesktopCallbackTests(unittest.TestCase):
             self.assertTrue(result['changed'])
             self.assertFalse(self.api.enable_desktop(self.receipt, self.backup, 'cursor')['changed'])
         self.assertEqual(result['callback_url'], 'http://localhost:8787/callback')
-        before['callbackURLs'].append(result['callback_url'])
+        expected = ['http://localhost:8787/callback', 'https://www.cursor.com/agents/mcp/oauth/callback']
+        self.assertEqual(result['callback_urls'], expected)
+        before['callbackURLs'].extend(expected)
+        self.assertEqual(self.client, before)
+        self.assertEqual((self.writes, self.backups), (1, 1))
+
+    def test_cursor_migration_from_editor_only(self):
+        self.client['callbackURLs'].append('http://localhost:8787/callback')
+        before = copy.deepcopy(self.client)
+        with patch.object(self.api, 'request', side_effect=self.provider):
+            self.api.enable_desktop(self.receipt, self.backup, 'cursor')
+            self.assertFalse(self.api.enable_desktop(self.receipt, self.backup, 'cursor')['changed'])
+        before['callbackURLs'].append('https://www.cursor.com/agents/mcp/oauth/callback')
         self.assertEqual(self.client, before)
         self.assertEqual((self.writes, self.backups), (1, 1))
 

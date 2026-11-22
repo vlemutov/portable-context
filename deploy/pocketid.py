@@ -14,7 +14,8 @@ OWNER_CODE_TTL = '20m'
 CODEX_CALLBACK = 'http://127.0.0.1:14881/callback'
 CLAUDE_CODE_CALLBACK = 'http://localhost:14881/callback'
 CURSOR_CALLBACK = 'http://localhost:8787/callback'
-DESKTOP_CALLBACKS = {'claude-code': CLAUDE_CODE_CALLBACK, 'cursor': CURSOR_CALLBACK}
+CURSOR_CLOUD_CALLBACK = 'https://www.cursor.com/agents/mcp/oauth/callback'
+DESKTOP_CALLBACKS = {'claude-code': (CLAUDE_CODE_CALLBACK,), 'cursor': (CURSOR_CALLBACK, CURSOR_CLOUD_CALLBACK)}
 PERMISSIONS = {'memory:read': 'Read memory', 'memory:write': 'Import and enrich memory',
                'memory:admin': 'Administer memory and server sources'}
 
@@ -83,14 +84,14 @@ class Bootstrap:
         callbacks = current.get('callbackURLs')
         if not isinstance(callbacks, list) or CODEX_CALLBACK not in callbacks:
             raise ValueError('Desktop callback configuration changed; inspect owner settings')
-        callback = DESKTOP_CALLBACKS[client]
-        changed = callback not in callbacks
-        if changed:
+        required_callbacks = DESKTOP_CALLBACKS[client]
+        missing = [url for url in required_callbacks if url not in callbacks]
+        if missing:
             before_change()
             # Refuse overwriting an owner edit made while the checkpoint ran.
             if self.request(path) != current:
                 raise ValueError('Client changed during backup; retry after reviewing owner settings')
-            candidate = dict(current, callbackURLs=[*callbacks, callback])
+            candidate = dict(current, callbackURLs=[*callbacks, *missing])
             self.request(path, candidate, 'PUT')
             verified = self.request(path)
             for key in ('callbackURLs', 'name', 'description', 'logoutCallbackURLs', 'backchannelLogoutURL',
@@ -99,8 +100,8 @@ class Bootstrap:
                         'accessTokenDurationMinutes', 'refreshTokenDurationMinutes', 'allowedUserGroups'):
                 if verified.get(key) != candidate.get(key):
                     raise RuntimeError('OAuth client verification failed; inspect private identity backup')
-        return {'client_id': client_id, 'callback_url': callback,
-                'changed': changed, 'codex_callback_preserved': True, 'permissions_changed': False}
+        return {'client_id': client_id, 'callback_url': required_callbacks[0], 'callback_urls': list(required_callbacks),
+                'changed': bool(missing), 'codex_callback_preserved': True, 'permissions_changed': False}
 
     def configure(self, origin, receipt_path):
         """Create an owner and explicit grants, retaining IDs for repeatable setup.
@@ -154,7 +155,8 @@ class Bootstrap:
             if client_id not in receipt.get('clients', []):
                 self.request('/api/oidc/clients', {'id': client_id,
                     'name': 'Portable Context '+label,
-                    'callbackURLs': [CODEX_CALLBACK, *DESKTOP_CALLBACKS.values()] if label == 'desktop' else [CODEX_CALLBACK],
+                    'callbackURLs': [CODEX_CALLBACK, *DESKTOP_CALLBACKS['claude-code'], *DESKTOP_CALLBACKS['cursor']]
+                                    if label == 'desktop' else [CODEX_CALLBACK],
                     'isPublic': True, 'pkceEnabled': True, 'skipConsent': False,
                     'accessTokenDurationMinutes': 10, 'refreshTokenDurationMinutes': 43200})
                 receipt.setdefault('clients', []).append(client_id)
