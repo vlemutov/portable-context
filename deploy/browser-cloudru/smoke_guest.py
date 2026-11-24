@@ -22,6 +22,8 @@ set -eu
 diagnose() {
     # This guest has only the constant fixture above, never customer credentials.
     { systemctl show pc-browser-boot pc-browser-console -p Id -p Result -p ExecMainStatus
+      systemctl list-jobs --no-legend --no-pager
+      systemd-cgls --unit pc-browser-boot.service --no-pager || true
       journalctl --no-pager -o cat -n 12 -u pc-browser-boot -u pc-browser-console
       grep -F '(EE)' /var/log/Xorg.0.log | tail -6 || true
     } | tr -d '\\r' | sed 's/^/PC_BOOT_DIAG /' >/dev/ttyS0
@@ -29,12 +31,15 @@ diagnose() {
 }
 trap diagnose ERR
 base=/opt/portable-context-browser
+awaiting_user=0
 for i in $(seq 1 240); do
     if [ "$(systemctl show pc-browser-boot -p NRestarts --value 2>/dev/null || true)" -ge 1 ] 2>/dev/null; then
         diagnose
         exit 1
     fi
     if (( i % 12 == 1 )); then
+        { systemd-cgls --unit pc-browser-boot.service --no-pager || true; } |
+            tail -4 | sed 's/^/PC_BOOT_DIAG /' >/dev/ttyS0
         # Only synthetic test guests run this probe. Avoid logging environment values.
         stage=packages
         if test -d "$base/source/.git"; then stage=checkout; fi
@@ -42,6 +47,10 @@ for i in $(seq 1 240); do
         if test -f "$base/venv/bin/pip"; then stage=dependencies; fi
         if test -f "$base/boot-complete"; then stage=ready; fi
         echo "PC_PHASE boot=$(systemctl is-active pc-browser-boot || true) display=$(systemctl is-active pc-browser-console || true) stage=$stage" >/dev/ttyS0
+        if test "$stage" = user; then
+            (( ++awaiting_user ))
+            if (( awaiting_user >= 4 )); then diagnose; exit 1; fi
+        fi
     fi
     if test -f "$base/boot-complete" && systemctl is-active --quiet pc-browser-console &&
        runuser -u pcowner -- env DISPLAY=:0 XAUTHORITY=/run/pc-browser-console/Xauthority \\
@@ -77,7 +86,7 @@ diagnose
             while True:
                 outcome = guest.expect(["PC_BROWSER_DISPLAY_READY","PC_BROWSER_BOOT_FAILED",
                                         r"PC_PHASE boot=[a-z-]+ display=[a-z-]+ stage=[a-z]+",
-                                        r"PC_BOOT_DIAG [^\r\n]*\r?\n"])
+                                        r"PC_BOOT_DIAG [^\r\n]*[\r\n]"])
                 if outcome == 0:
                     break
                 if outcome == 1:

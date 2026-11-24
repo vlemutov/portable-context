@@ -63,19 +63,26 @@ write_files:
     content: |
       [Unit]
       Description=Prepare private Portable Context console
-      After=network-online.target cloud-final.service
-      Wants=network-online.target
+      After=network-online.target cloud-init.target
+      Wants=network-online.target cloud-init.target
       ConditionPathExists=!/opt/portable-context-browser/boot-complete
       [Service]
       Type=oneshot
       ExecStart=/usr/local/sbin/pc-browser-boot
       Restart=on-failure
       RestartSec=120
+  - path: /etc/systemd/system/pc-browser-boot.timer
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Start the private console when guest initialization is complete
+      [Timer]
+      OnBootSec=10s
       [Install]
-      WantedBy=cloud-init.target
+      WantedBy=timers.target
 runcmd:
   - [systemctl, daemon-reload]
-  - [systemctl, enable, --now, --no-block, pc-browser-boot.service]
+  - [systemctl, enable, --now, --no-block, pc-browser-boot.timer]
 `;
 }
 el("generate").onclick = async () => {
