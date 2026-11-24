@@ -1,6 +1,6 @@
 # Connector coverage and setup
 
-## MCP client coverage for 1.0.0
+## MCP client coverage for 1.0.1
 
 | Client | Observed with Portable Context |
 | --- | --- |
@@ -8,6 +8,7 @@
 | Cursor Desktop on Ubuntu | Cloud.ru installation and registered callback, file import, unchanged repeat and wiki read-back. Timeweb file import and repeat also passed. Token refresh and revocation in Cursor await a separate run. |
 | Claude Code (beta) | Owner-reported HTTPS login, project reads and a two-message import with an unchanged repeat. Native token lifecycle and original-file read-back remain open. |
 | ChatGPT web plugin | Project and wiki reads in the existing Cloud.ru workspace. |
+| GigaAgent (web) | Owner reported OAuth sign-in and `memory_status`. Other reads and imports from its web UI await separate verification. [Setup](../skills/portable-context/references/connection.md#gigaagent) |
 | Cursor Cloud Agents | Separate hosted callback and MCP configuration. The Ubuntu Desktop acceptance applies to the editor. |
 | Claude Cowork | Client acceptance pending. |
 

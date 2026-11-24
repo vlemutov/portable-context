@@ -14,12 +14,13 @@ For assistants on one computer, use a [shared local folder](skills/portable-cont
 
 > Help me set up Portable Context from https://github.com/vlemutov/portable-context. Help me choose where to keep my memory, save my first conversation and check that you can read it back.
 
-An assistant with terminal and file access can run the installer. A web chat can guide you through the steps. The [setup guide](START-HERE.md) covers both a first installation and connecting to a memory you already have. Use the installer and skill from the same release tag, `v1.0.0`.
+An assistant with terminal and file access can run the installer. A web chat can guide you through the steps. The [setup guide](START-HERE.md) covers both a first installation and connecting to a memory you already have. Use the installer and skill from the same release tag, `v1.0.1`.
 
 ## What works with 1.0
 
 - **Codex and Cursor Desktop.** Read and write memory, retrieve original files and use the wiki. **ChatGPT Work in the browser.** Project and wiki reads verified with the web plugin.
 - **Claude.** Import selected conversations from a claude.ai export. Claude Code is in beta. Setup instructions are available for Claude Cowork and Cursor Cloud Agents. [Tested features by client](docs/connectors.md) · [Connection guide](skills/portable-context/references/connection.md)
+- **GigaAgent (web).** Connect an existing HTTPS memory with OAuth. [Setup and tool selection](skills/portable-context/references/connection.md#gigaagent)
 - **Computers.** Windows (x64 and ARM64), macOS (Intel and Apple Silicon), and Linux (x64, with core tests on ARM64). Cloud.ru provisioning from Linux requires x64.
 - **Hosting.** Cloud.ru and Timeweb Cloud charge for resources in your account. The installer asks you to review costs before ordering. On Timeweb, check the account's autopay settings as well. Local storage has no hosting fee. [Timeweb billing guide](docs/timeweb-billing.md)
 

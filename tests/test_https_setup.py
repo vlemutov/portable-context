@@ -49,6 +49,8 @@ class HTTPSSetupTests(unittest.TestCase):
             result=setup.server_action(payload)
             self.assertEqual(result['workspace_id'],'same-memory')
             backup.backup.assert_called_once_with()
+            payload.update(action='gigaagent')
+            self.assertTrue(setup.server_action(payload)['changed'])
             payload.update(action='chatgpt-work',callback_url='https://chatgpt.com/connector/oauth/fixture')
             self.assertTrue(setup.server_action(payload)['changed'])
 

@@ -17,8 +17,10 @@ CLAUDE_CODE_CALLBACK = 'http://localhost:14881/callback'
 CURSOR_CALLBACK = 'http://localhost:8787/callback'
 CURSOR_CLOUD_CALLBACK = 'https://www.cursor.com/agents/mcp/oauth/callback'
 COWORK_CALLBACK = 'https://claude.ai/api/mcp/auth_callback'
+GIGAAGENT_CALLBACK = 'https://gigaagent.ru/bff/api/chat/mcp-oauth/callback'
 DESKTOP_CALLBACKS = {'claude-code': (CLAUDE_CODE_CALLBACK,), 'cursor': (CURSOR_CALLBACK, CURSOR_CLOUD_CALLBACK),
-                     'claude-cowork': (COWORK_CALLBACK,)}
+                     'claude-cowork': (COWORK_CALLBACK,), 'gigaagent': (GIGAAGENT_CALLBACK,)}
+SUPPORTED_DESKTOP_CLIENTS = (*DESKTOP_CALLBACKS, 'chatgpt-work')
 PERMISSIONS = {'memory:read': 'Read memory', 'memory:write': 'Import and enrich memory',
                'memory:admin': 'Administer memory and server sources'}
 

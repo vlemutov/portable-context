@@ -100,6 +100,17 @@ class DesktopCallbackTests(unittest.TestCase):
         self.assertEqual(self.client, expected)
         self.assertEqual((self.writes, self.backups), (1, 1))
 
+    def test_gigaagent_migration_preserves_existing_client_and_is_repeatable(self):
+        expected = copy.deepcopy(self.client)
+        expected['callbackURLs'].append('https://gigaagent.ru/bff/api/chat/mcp-oauth/callback')
+        with patch.object(self.api, 'request', side_effect=self.provider):
+            self.assertTrue(self.api.enable_desktop(self.receipt, self.backup, 'gigaagent')['changed'])
+            self.assertFalse(self.api.enable_desktop(self.receipt, self.backup, 'gigaagent')['changed'])
+        self.assertEqual(self.client, expected)
+        self.assertEqual((self.writes, self.backups), (1, 1))
+        with self.assertRaises(ValueError):
+            pocketid.client_callbacks('gigaagent', 'https://example.org/callback')
+
     def test_work_registers_only_selected_connection(self):
         url = 'https://chatgpt.com/connector/oauth/test-connection'
         expected = copy.deepcopy(self.client)

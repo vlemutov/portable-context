@@ -818,7 +818,8 @@ def main(argv=None):
     group.add_argument('--preview-write', action='store_true', help='Show the retained synthetic test data without connecting')
     group.add_argument('--write-test', action='store_true', help='Import the advertised fixture twice and verify its messages and bytes')
     p=sub.add_parser('oauth-client',help='Register the supported callback URLs on the existing OAuth client')
-    p.add_argument('--client',choices=('claude-code','cursor','claude-cowork','chatgpt-work'),required=True)
+    from pocketid import SUPPORTED_DESKTOP_CLIENTS
+    p.add_argument('--client',choices=SUPPORTED_DESKTOP_CLIENTS,required=True)
     p.add_argument('--callback-url',help='For chatgpt-work: the exact redirect URI shown on your MCP connection')
     p=sub.add_parser('https-reconcile',help='Record an explicitly reviewed resource ID after a lost creation reply')
     p.add_argument('--stage',choices=('registry','container'),required=True)

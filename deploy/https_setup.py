@@ -219,7 +219,8 @@ def server_action(p):
         try:owner_login(manifest['runtime'],output);return {'private_login':read(output)}
         finally:output.unlink(missing_ok=True)
     if p['action']=='check':return {'workspace_id':expected,**metadata(manifest)}
-    if p['action'] in ('claude-code','cursor','claude-cowork','chatgpt-work'):
+    from pocketid import SUPPORTED_DESKTOP_CLIENTS
+    if p['action'] in SUPPORTED_DESKTOP_CLIENTS:
         from oauth_recovery import runtime_info, IdentityBackups
         from pocketid import Bootstrap
         _,env,receipt,config=runtime_info(manifest['runtime'])
