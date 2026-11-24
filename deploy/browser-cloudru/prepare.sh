@@ -28,8 +28,11 @@ key="restrict,from=\"127.0.0.1\" $(cat "$state/id_ed25519.pub")"
 touch "$HOME/.ssh/authorized_keys"
 grep -Fqx -- "$key" "$HOME/.ssh/authorized_keys" || echo "$key" >> "$HOME/.ssh/authorized_keys"
 OWNER
-# Public VM identifier, readable by the non-privileged wizard.
-install -m 0444 /sys/class/dmi/id/product_uuid /etc/pc-browser-vm-id
+# A hypervisor may omit its DMI UUID. The read-only preflight also checks the
+# cloud-init instance ID; it refuses to plan if neither matches the provider.
+if test -r /sys/class/dmi/id/product_uuid; then
+    install -m 0444 /sys/class/dmi/id/product_uuid /etc/pc-browser-vm-id
+fi
 systemctl enable --now cron
 systemctl start ssh.service
 python3 -m venv "$base/venv"

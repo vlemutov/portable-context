@@ -30,6 +30,10 @@ diagnose() {
 trap diagnose ERR
 base=/opt/portable-context-browser
 for i in $(seq 1 240); do
+    if [ "$(systemctl show pc-browser-boot -p NRestarts --value 2>/dev/null || true)" -ge 1 ] 2>/dev/null; then
+        diagnose
+        exit 1
+    fi
     if (( i % 12 == 1 )); then
         # Only synthetic test guests run this probe. Avoid logging environment values.
         stage=packages
