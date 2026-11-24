@@ -1,0 +1,17 @@
+[Unit]
+Description=Portable Context private VM display
+After=systemd-user-sessions.service
+Conflicts=getty@tty7.service
+
+[Service]
+# Xorg needs the virtual terminal. The wizard itself runs as unprivileged pcowner.
+ExecStart=/bin/bash /opt/portable-context-browser/source/deploy/browser-cloudru/display.sh
+TTYPath=/dev/tty7
+StandardInput=tty
+StandardOutput=null
+StandardError=null
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
