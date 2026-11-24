@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; form-action 'none'; base-uri 'none'">
+<title>Комплект восстановления Portable Context</title>
+<style>body{font:1rem system-ui;max-width:38rem;margin:8vh auto;padding:1rem}label,button{display:block;margin:1.2rem 0}input{display:block;margin-top:.4rem;padding:.4rem}</style>
+<h1>Открыть комплект восстановления</h1>
+<p>Выберите файл из своего бакета. Браузер расшифрует его на этом устройстве. Сохраните полученный ZIP в приватной папке: в нём есть ключи S3.</p>
+<label>Зашифрованный комплект <input id="file" type="file" accept=".enc"></label>
+<label>Пароль резервных копий <input id="password" type="password" autocomplete="off"></label>
+<button id="open">Расшифровать и сохранить ZIP</button><p id="status" role="status"></p>
+<script>
+async function decryptKit(text, password) {
+  const [format, payload, ...extra] = text.split("\n");
+  if (format !== "pc-browser-kit-v1" || extra.length || !payload) throw Error();
+  const data = Uint8Array.from(atob(payload), c => c.charCodeAt(0));
+  const encoder = new TextEncoder();
+  const secret = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveKey"]);
+  const key = await crypto.subtle.deriveKey({name:"PBKDF2", salt:data.slice(0,16), iterations:600000, hash:"SHA-256"},
+    secret, {name:"AES-GCM", length:256}, false, ["decrypt"]);
+  return crypto.subtle.decrypt({name:"AES-GCM", iv:data.slice(16,28), additionalData:encoder.encode(format)},
+    key, data.slice(28));
+}
+document.querySelector("#open").onclick = async () => {
+  const status = document.querySelector("#status"), password = document.querySelector("#password");
+  try {
+    const file = document.querySelector("#file").files[0];
+    if (!file || file.size > 1048576) throw Error();
+    const zip = await decryptKit(await file.text(), password.value);
+    const url = URL.createObjectURL(new Blob([zip], {type:"application/zip"}));
+    const link = document.createElement("a");
+    link.href = url; link.download = "portable-context-recovery.zip"; link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+    status.textContent = "Расшифровка завершена.";
+  } catch {
+    status.textContent = "Проверьте файл и пароль. Откройте сохранённую HTML-страницу в современном браузере.";
+  } finally { password.value = ""; }
+};
+</script></html>

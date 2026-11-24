@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; form-action 'none'; base-uri 'none'">
+<title>Portable Context · подготовка cloud-init</title>
+<style>body{font:1rem system-ui;max-width:42rem;margin:5vh auto;padding:1rem}label,button{display:block;margin:.8rem 0}input,textarea{box-sizing:border-box;width:100%;padding:.5rem}code{user-select:all}button{padding:.6rem}textarea{height:12rem}</style>
+<h1>Подготовить установку Cloud.ru</h1>
+<p>Эта страница работает на вашем компьютере. Введите данные отдельного проекта. Шаблон запускает мастер на вашей ВМ. Ресурсы начинают тарифицироваться при их заказе в кабинете Cloud.ru.</p>
+<label>ID проекта <input id="project" autocomplete="off"></label>
+<label>Key ID сервисного аккаунта установщика <input id="key_id" autocomplete="off"></label>
+<label>Key Secret установщика <input id="secret" type="password" autocomplete="off"></label>
+<label>Имя закрытого версионируемого бакета <input id="bucket" autocomplete="off"></label>
+<label>S3 Access Key для этого бакета (tenant_id:key_id) <input id="s3_key" autocomplete="off"></label>
+<label>S3 Secret Key <input id="s3_secret" type="password" autocomplete="off"></label>
+<button id="generate">Создать пароль и зашифровать настройки</button>
+<p id="error" role="status"></p><section id="result" hidden>
+<label>Сохраните этот пароль в менеджере паролей. Он открывает мастер и резервные копии.
+<input readonly id="unlock" autocomplete="off"></label>
+<label>Весь текст для поля «Скрипт cloud_init» в кабинете Cloud.ru
+<textarea readonly id="seed" spellcheck="false"></textarea></label>
+<button id="hide">Скрыть пароль и очистить поля</button></section>
+<script>
+const revision = "2a1f83459eee37e727c14558a2f0f84750c8a6a7";
+const fields = ["project","key_id","secret","bucket","s3_key","s3_secret"];
+const el = id => document.getElementById(id);
+const bytes = size => crypto.getRandomValues(new Uint8Array(size));
+async function encryptSettings(settings, password) {
+  const salt = bytes(16), iv = bytes(12), enc = new TextEncoder();
+  const secret = await crypto.subtle.importKey("raw", enc.encode(password), "PBKDF2", false, ["deriveKey"]);
+  const key = await crypto.subtle.deriveKey({name:"PBKDF2", salt, iterations:600000, hash:"SHA-256"},
+    secret, {name:"AES-GCM", length:256}, false, ["encrypt"]);
+  const cipher = await crypto.subtle.encrypt({name:"AES-GCM", iv, additionalData:enc.encode("pc-browser-input-v1")},
+    key, enc.encode(JSON.stringify(settings)));
+  return btoa(String.fromCharCode(...salt, ...iv, ...new Uint8Array(cipher)));
+}
+function cloudConfig(sealed) {
+  return `#cloud-config
+ssh_pwauth: false
+disable_root: true
+write_files:
+  - path: /etc/pc-browser-input.enc
+    permissions: '0644'
+    content: ${sealed}
+  - path: /usr/local/sbin/pc-browser-boot
+    permissions: '0700'
+    content: |
+      #!/bin/bash
+      set -eu
+      umask 022
+      export DEBIAN_FRONTEND=noninteractive
+      test "$(dpkg --print-architecture)" = amd64
+      apt-get -o DPkg::Lock::Timeout=180 update
+      apt-get -o DPkg::Lock::Timeout=180 install -y --no-install-recommends ca-certificates git python3-venv python3-tk cron openssh-server xserver-xorg xinit xauth xfonts-base fonts-dejavu-core iproute2
+      base=/opt/portable-context-browser
+      install -d -m 0755 "$base/source"
+      git -C "$base/source" init -q
+      git -C "$base/source" fetch --depth=1 https://github.com/vlemutov/portable-context.git ${revision}
+      git -C "$base/source" checkout --detach --quiet FETCH_HEAD
+      test "$(git -C "$base/source" rev-parse HEAD)" = ${revision}
+      bash "$base/source/deploy/browser-cloudru/prepare.sh"
+      touch "$base/boot-complete"
+  - path: /etc/systemd/system/pc-browser-boot.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Prepare private Portable Context console
+      After=network-online.target cloud-final.service
+      Wants=network-online.target
+      ConditionPathExists=!/opt/portable-context-browser/boot-complete
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/pc-browser-boot
+      Restart=on-failure
+      RestartSec=120
+      [Install]
+      WantedBy=multi-user.target
+runcmd:
+  - [systemctl, daemon-reload]
+  - [systemctl, enable, --now, --no-block, pc-browser-boot.service]
+`;
+}
+el("generate").onclick = async () => {
+  if (!el("result").hidden && !confirm("Сформировать другой шаблон и пароль? Для уже созданной ВМ нужен прежний пароль.")) return;
+  const data = Object.fromEntries(fields.map(k => [k,el(k).value]));
+  if (Object.values(data).some(v => !v.trim() || v.length > 512)) {
+    el("error").textContent = "Заполните все поля (до 512 символов каждое)."; return;
+  }
+  try {
+    const password = Array.from(bytes(16), b => b.toString(16).padStart(2,"0")).join("");
+    el("seed").value = cloudConfig(await encryptSettings(data, password));
+    el("unlock").value = password; el("result").hidden = false; el("error").textContent = "";
+  } catch { el("error").textContent = "Скачайте HTML и откройте его в современном браузере с поддержкой Web Crypto."; }
+};
+el("hide").onclick = () => {
+  [...fields,"unlock","seed"].forEach(k => el(k).value = "");
+  el("result").hidden = true;
+};
+</script></html>

@@ -1,0 +1,32 @@
+name: cloud-init browser prototype
+on:
+  push:
+    paths:
+      - 'deploy/browser-cloudru/**'
+      - 'tests/test_browser_cloudru.py'
+      - '.github/workflows/browser-cloudru.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  guest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install disposable guest test tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils cloud-image-utils cloud-init python3-pexpect python3-yaml python3-cryptography
+          if test -e /dev/kvm; then sudo setfacl -m "u:$(id -un):rw" /dev/kvm; fi
+      - name: Verify offline handoffs
+        run: /usr/bin/python3 -m unittest discover -s tests -p test_browser_cloudru.py -v
+      - name: Boot Ubuntu with the generated cloud-init
+        run: |
+          cd "$RUNNER_TEMP"
+          base=https://cloud-images.ubuntu.com/noble/current
+          image=noble-server-cloudimg-amd64.img
+          curl -fsS --retry 3 -O "$base/$image"
+          curl -fsS --retry 3 -O "$base/SHA256SUMS"
+          grep -E " [*]?$image$" SHA256SUMS | sha256sum -c -
+          /usr/bin/python3 "$GITHUB_WORKSPACE/deploy/browser-cloudru/smoke_guest.py" "$RUNNER_TEMP/$image"

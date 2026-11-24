@@ -32,6 +32,8 @@ and [capture controls](skills/portable-context/references/controls.md).
 
 ## Deploy your own memory
 
+**Browser-only Cloud.ru prototype.** With GigaAgent and a Cloud.ru account, you can preview an encrypted cloud-init template entirely offline. The [owner's browser guide](deploy/browser-cloudru/README.md) covers the VM console, HTTPS, S3 backups and passkey enrollment. A live Cloud.ru installation of this prototype still needs verification.
+
 Ask an agent with terminal access: **“Install this skill and deploy my memory in my Cloud.ru
 account”** or **“Set it up on my existing server.”** Follow the
 [agent deployment guide](skills/portable-context/references/deployment.md) (Russian).
