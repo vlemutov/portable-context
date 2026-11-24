@@ -74,6 +74,7 @@ def discover(state, project):
 
 def verify_bucket(backup):
     import boto3
+    from botocore.exceptions import ClientError
     s3 = boto3.client("s3", endpoint_url=backup["endpoint"], region_name=backup["region"],
                       aws_access_key_id=backup["access_key"], aws_secret_access_key=backup["secret_key"])
     bucket = {"Bucket": backup["bucket"]}
@@ -82,6 +83,15 @@ def verify_bucket(backup):
     grants = s3.get_bucket_acl(**bucket)["Grants"]
     if any(g["Grantee"].get("URI", "").endswith(("/AllUsers", "/AuthenticatedUsers")) for g in grants):
         raise InputError("Для копий нужен закрытый бакет.")
+    try:
+        s3.get_bucket_policy(**bucket)
+    except ClientError as error:
+        if error.response.get("Error", {}).get("Code") != "NoSuchBucketPolicy":
+            raise
+    else:
+        policy = s3.get_bucket_policy_status(**bucket).get("PolicyStatus", {})
+        if policy.get("IsPublic") is not False:
+            raise InputError("Публичная или неподтверждённая политика бакета. Проверьте доступ к копиям.")
     s3.list_objects_v2(**bucket, MaxKeys=1)
 
 

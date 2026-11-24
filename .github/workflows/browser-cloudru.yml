@@ -17,7 +17,7 @@ jobs:
       - name: Install disposable guest test tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils cloud-image-utils cloud-init python3-pexpect python3-yaml python3-cryptography
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils cloud-image-utils cloud-init python3-pexpect python3-yaml python3-cryptography python3-boto3
           if test -e /dev/kvm; then sudo setfacl -m "u:$(id -un):rw" /dev/kvm; fi
       - name: Verify offline handoffs
         run: /usr/bin/python3 -m unittest discover -s tests -p test_browser_cloudru.py -v

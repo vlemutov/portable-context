@@ -8,7 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import zipfile
 
 BROWSER = Path(__file__).resolve().parents[1] / "deploy/browser-cloudru"
@@ -29,6 +29,33 @@ def js(page, expression, payload):
 
 
 class BrowserInstall(unittest.TestCase):
+    def test_versioning_acl_and_bucket_policy_must_confirm_private_storage(self):
+        try:
+            import boto3
+            from botocore.exceptions import ClientError
+        except ImportError:
+            self.skipTest("backup extra required")
+        cfg = dict(endpoint="http://127.0.0.1", region="fixture", access_key="fixture",
+                   secret_key="fixture", bucket="fixture")
+        s3 = Mock()
+        s3.get_bucket_versioning.return_value = {"Status":"Enabled"}
+        s3.get_bucket_acl.return_value = {"Grants":[]}
+        with patch.object(boto3, "client", return_value=s3):
+            for status in (True, None):
+                s3.get_bucket_policy_status.return_value = {"PolicyStatus":{"IsPublic":status}}
+                with self.assertRaises(controller.InputError):
+                    controller.verify_bucket(cfg)
+            s3.get_bucket_policy_status.return_value = {"PolicyStatus":{"IsPublic":False}}
+            controller.verify_bucket(cfg)
+            s3.get_bucket_policy.side_effect = ClientError({"Error":{"Code":"AccessDenied"}}, "GetBucketPolicy")
+            with self.assertRaises(ClientError):
+                controller.verify_bucket(cfg)
+            s3.get_bucket_policy.side_effect = ClientError({"Error":{"Code":"NoSuchBucketPolicy"}}, "GetBucketPolicy")
+            controller.verify_bucket(cfg)
+            s3.get_bucket_acl.return_value = {"Grants":[{"Grantee":{"URI":"http://example.test/AllUsers"}}]}
+            with self.assertRaises(controller.InputError):
+                controller.verify_bucket(cfg)
+
     def test_browser_encrypts_cloud_init_and_guest_recovers_exact_input(self):
         if not shutil.which("node"):
             self.skipTest("requires Node with Web Crypto")
