@@ -19,7 +19,15 @@ def run(image):
     # The probe runs outside the app. Never grant the installer cloud credentials.
     seed["write_files"].append({"path":"/usr/local/sbin/pc-browser-ci", "permissions":"0700", "content":'''#!/bin/bash
 set -eu
-trap 'echo PC_BROWSER_BOOT_FAILED >/dev/ttyS0' ERR
+diagnose() {
+    # This guest has only the constant fixture above, never customer credentials.
+    { systemctl show pc-browser-boot pc-browser-console -p Id -p Result -p ExecMainStatus
+      journalctl --no-pager -o cat -n 12 -u pc-browser-boot -u pc-browser-console
+      grep -F '(EE)' /var/log/Xorg.0.log | tail -6 || true
+    } | tr -d '\\r' | sed 's/^/PC_BOOT_DIAG /' >/dev/ttyS0
+    echo PC_BROWSER_BOOT_FAILED >/dev/ttyS0
+}
+trap diagnose ERR
 base=/opt/portable-context-browser
 for i in $(seq 1 240); do
     if (( i % 12 == 1 )); then
@@ -42,7 +50,7 @@ for i in $(seq 1 240); do
     fi
     sleep 5
 done
-echo PC_BROWSER_BOOT_FAILED >/dev/ttyS0
+diagnose
 '''})
     # Use an early independent probe so a stuck package install/cloud-final is visible.
     seed["bootcmd"] = [["systemd-run", "--no-block", "/bin/sh", "-c",
@@ -64,7 +72,8 @@ echo PC_BROWSER_BOOT_FAILED >/dev/ttyS0
             # Report progress, excluding serial command input and unrelated cloud-init output.
             while True:
                 outcome = guest.expect(["PC_BROWSER_DISPLAY_READY","PC_BROWSER_BOOT_FAILED",
-                                        r"PC_PHASE boot=[a-z-]+ display=[a-z-]+ stage=[a-z]+"])
+                                        r"PC_PHASE boot=[a-z-]+ display=[a-z-]+ stage=[a-z]+",
+                                        r"PC_BOOT_DIAG [^\r\n]*\r?\n"])
                 if outcome == 0:
                     break
                 if outcome == 1:

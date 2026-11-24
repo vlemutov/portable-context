@@ -72,7 +72,7 @@ write_files:
       Restart=on-failure
       RestartSec=120
       [Install]
-      WantedBy=multi-user.target
+      WantedBy=cloud-init.target
 runcmd:
   - [systemctl, daemon-reload]
   - [systemctl, enable, --now, --no-block, pc-browser-boot.service]
