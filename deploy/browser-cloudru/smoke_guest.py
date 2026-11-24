@@ -16,6 +16,10 @@ def run(image):
           '\nencryptSettings({secret:"fixture"},"offline-fixture").then(x=>console.log(cloudConfig(x)));')
     seed = yaml.safe_load(subprocess.check_output(["node", "-e", js], text=True))
     seed["packages"] = ["x11-utils"]
+    seed["write_files"].append({
+        "path": "/etc/systemd/system/pc-browser-console.service.d/ci.conf",
+        "content": "[Service]\nStandardOutput=journal\nStandardError=journal\n",
+    })
     # The probe runs outside the app. Never grant the installer cloud credentials.
     seed["write_files"].append({"path":"/usr/local/sbin/pc-browser-ci", "permissions":"0700", "content":'''#!/bin/bash
 set -eu
@@ -24,7 +28,9 @@ diagnose() {
     { systemctl show pc-browser-boot pc-browser-console -p Id -p Result -p ExecMainStatus
       systemctl list-jobs --no-legend --no-pager
       systemd-cgls --unit pc-browser-boot.service --no-pager || true
-      journalctl --no-pager -o cat -n 12 -u pc-browser-boot -u pc-browser-console
+      journalctl --no-pager -o cat -n 35 -u pc-browser-boot -u pc-browser-console
+      systemd-cgls --unit pc-browser-console.service --no-pager || true
+      runuser -u pcowner -- env DISPLAY=:0 XAUTHORITY=/run/pc-browser-console/Xauthority xwininfo -root -tree 2>&1 | head -10 || true
       grep -F '(EE)' /var/log/Xorg.0.log | tail -6 || true
     } | tr -d '\\r' | sed 's/^/PC_BOOT_DIAG /' >/dev/ttyS0
     echo PC_BROWSER_BOOT_FAILED >/dev/ttyS0
@@ -32,6 +38,7 @@ diagnose() {
 trap diagnose ERR
 base=/opt/portable-context-browser
 awaiting_user=0
+awaiting_window=0
 for i in $(seq 1 240); do
     if [ "$(systemctl show pc-browser-boot -p NRestarts --value 2>/dev/null || true)" -ge 1 ] 2>/dev/null; then
         diagnose
@@ -50,6 +57,10 @@ for i in $(seq 1 240); do
         if test "$stage" = user; then
             (( ++awaiting_user ))
             if (( awaiting_user >= 4 )); then diagnose; exit 1; fi
+        fi
+        if test "$stage" = ready; then
+            (( ++awaiting_window ))
+            if (( awaiting_window >= 2 )); then diagnose; exit 1; fi
         fi
     fi
     if test -f "$base/boot-complete" && systemctl is-active --quiet pc-browser-console &&
