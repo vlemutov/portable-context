@@ -49,7 +49,7 @@ write_files:
       export DEBIAN_FRONTEND=noninteractive
       test "$(dpkg --print-architecture)" = amd64
       apt-get -o DPkg::Lock::Timeout=180 update
-      apt-get -o DPkg::Lock::Timeout=180 install -y --no-install-recommends ca-certificates git python3-venv python3-tk cron openssh-server xserver-xorg xinit xauth xfonts-base fonts-dejavu-core iproute2
+      apt-get -o DPkg::Lock::Timeout=180 install -y --no-install-recommends ca-certificates git python3-venv cron openssh-server kbd iproute2
       base=/opt/portable-context-browser
       install -d -m 0755 "$base/source"
       git -C "$base/source" init -q

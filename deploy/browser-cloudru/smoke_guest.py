@@ -2,8 +2,10 @@
 import argparse
 import os
 from pathlib import Path
+import socket
 import subprocess
 import tempfile
+import time
 
 import pexpect
 import yaml
@@ -15,11 +17,6 @@ def run(image):
     js = ('const document={getElementById:()=>({})};\n' + source +
           '\nencryptSettings({secret:"fixture"},"offline-fixture").then(x=>console.log(cloudConfig(x)));')
     seed = yaml.safe_load(subprocess.check_output(["node", "-e", js], text=True))
-    seed["packages"] = ["x11-utils"]
-    seed["write_files"].append({
-        "path": "/etc/systemd/system/pc-browser-console.service.d/ci.conf",
-        "content": "[Service]\nStandardOutput=journal\nStandardError=journal\n",
-    })
     # The probe runs outside the app. Never grant the installer cloud credentials.
     seed["write_files"].append({"path":"/usr/local/sbin/pc-browser-ci", "permissions":"0700", "content":'''#!/bin/bash
 set -eu
@@ -30,8 +27,7 @@ diagnose() {
       systemd-cgls --unit pc-browser-boot.service --no-pager || true
       journalctl --no-pager -o cat -n 35 -u pc-browser-boot -u pc-browser-console
       systemd-cgls --unit pc-browser-console.service --no-pager || true
-      runuser -u pcowner -- env DISPLAY=:0 XAUTHORITY=/run/pc-browser-console/Xauthority xwininfo -root -tree 2>&1 | head -10 || true
-      grep -F '(EE)' /var/log/Xorg.0.log | tail -6 || true
+      cat /sys/class/tty/tty0/active || true
     } | tr -d '\\r' | sed 's/^/PC_BOOT_DIAG /' >/dev/ttyS0
     echo PC_BROWSER_BOOT_FAILED >/dev/ttyS0
 }
@@ -64,13 +60,21 @@ for i in $(seq 1 240); do
         fi
     fi
     if test -f "$base/boot-complete" && systemctl is-active --quiet pc-browser-console &&
-       runuser -u pcowner -- env DISPLAY=:0 XAUTHORITY=/run/pc-browser-console/Xauthority \\
-       xwininfo -root -tree 2>/dev/null | grep -q 'Portable Context'; then
+       grep -Fxq tty1 /sys/class/tty/tty0/active &&
+       grep -aFq 'Unlock settings and prepare plan' /dev/vcs1; then
         test ! -f /home/pcowner/.local/share/pc-browser-state/credentials.json
         runuser -u pcowner -- ssh -T -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \\
             -i /home/pcowner/.local/share/pc-browser-state/id_ed25519 pcowner@127.0.0.1 true
-        echo PC_BROWSER_DISPLAY_READY >/dev/ttyS0
-        exit 0
+        echo PC_BROWSER_MENU_VISIBLE >/dev/ttyS0
+        for n in $(seq 1 30); do
+            if grep -aFq 'Setup password (hidden):' /dev/vcs1; then
+                echo PC_BROWSER_DISPLAY_READY >/dev/ttyS0
+                exit 0
+            fi
+            sleep 1
+        done
+        diagnose
+        exit 1
     fi
     sleep 5
 done
@@ -89,7 +93,7 @@ diagnose
                         "disk.img","12G"],cwd=tmp,check=True)
         accel = ["-accel","kvm","-cpu","host"] if os.access("/dev/kvm",os.W_OK) else ["-accel","tcg","-cpu","max"]
         guest = pexpect.spawn("qemu-system-x86_64", [*accel,"-m","2048","-smp","2","-vga","std",
-            "-display","none","-monitor","none","-serial","stdio","-drive","file=disk.img,if=virtio,format=qcow2",
+            "-display","none","-monitor","unix:monitor.sock,server=on,wait=off","-serial","stdio","-drive","file=disk.img,if=virtio,format=qcow2",
             "-drive","file=seed.img,if=virtio,format=raw,readonly=on","-nic","user,model=virtio-net-pci"],
             cwd=tmp, encoding="utf-8", codec_errors="replace", timeout=1800)
         try:
@@ -97,13 +101,20 @@ diagnose
             while True:
                 outcome = guest.expect(["PC_BROWSER_DISPLAY_READY","PC_BROWSER_BOOT_FAILED",
                                         r"PC_PHASE boot=[a-z-]+ display=[a-z-]+ stage=[a-z]+",
-                                        r"PC_BOOT_DIAG [^\r\n]*[\r\n]"])
+                                        r"PC_BOOT_DIAG [^\r\n]*[\r\n]", "PC_BROWSER_MENU_VISIBLE"])
                 if outcome == 0:
                     break
                 if outcome == 1:
                     raise RuntimeError("Browser console or private SSH did not become ready")
+                if outcome == 4:
+                    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as monitor:
+                        monitor.connect(str(folder/"monitor.sock"))
+                        for command in (b"sendkey 1\n", b"sendkey ret\n"):
+                            monitor.sendall(command)
+                            time.sleep(0.3)
+                    continue
                 print(guest.after, flush=True)
-            print("Verified Ubuntu first boot, actual X11 wizard window and private loopback install transport.")
+            print("Verified Ubuntu first boot, readable owner menu on the active VM screen and private loopback SSH.")
         finally:
             guest.close(force=True)
 

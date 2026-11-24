@@ -37,9 +37,11 @@ systemctl enable --now cron
 systemctl start ssh.service
 python3 -m venv "$base/venv"
 "$base/venv/bin/pip" install "$src[deployment,backup]"
-# Only the graphical wizard and its interpreter need to be visible to pcowner.
+# The unprivileged console user needs to be able to execute the interpreter.
 chmod 0755 "$base"
 chmod -R a+rX "$base/venv"
 install -m 0644 "$src/deploy/browser-cloudru/console.service" /etc/systemd/system/pc-browser-console.service
 systemctl daemon-reload
+# Reserve the graphical console's first text terminal for the owner menu on every boot.
+systemctl mask --now getty@tty1.service
 systemctl enable --now pc-browser-console.service

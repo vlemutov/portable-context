@@ -1,17 +1,21 @@
 [Unit]
-Description=Portable Context private VM display
-After=systemd-user-sessions.service
-Conflicts=getty@tty7.service
+Description=Portable Context private setup menu
+After=systemd-user-sessions.service getty@tty1.service
+Conflicts=getty@tty1.service
 
 [Service]
-# Xorg needs the virtual terminal. The wizard itself runs as unprivileged pcowner.
-ExecStart=/bin/bash /opt/portable-context-browser/source/deploy/browser-cloudru/display.sh
-TTYPath=/dev/tty7
-StandardInput=tty
-StandardOutput=null
+User=pcowner
+Environment=HOME=/home/pcowner LANG=C.UTF-8 TERM=linux
+ExecStartPre=+/usr/bin/chvt 1
+ExecStart=/opt/portable-context-browser/venv/bin/python /opt/portable-context-browser/source/deploy/browser-cloudru/menu.py
+TTYPath=/dev/tty1
+StandardInput=tty-force
+StandardOutput=tty
 StandardError=null
+TTYReset=yes
+TTYVHangup=yes
 Restart=always
-RestartSec=5
+RestartSec=3
 
 [Install]
 WantedBy=multi-user.target
